@@ -26,7 +26,7 @@ class MessagingConfig:
         Initialize messaging configuration.
 
         Args:
-            backend: Messaging backend ("nats" or "mqtt")
+            backend: Messaging backend ("zenoh", "nats", or "mqtt")
             servers: List of broker URLs
             credentials: Authentication credentials
             tls_config: TLS configuration
@@ -50,7 +50,7 @@ class MessagingConfig:
         if os.getenv("ZENOH_CONNECT"):
             return "zenoh"
 
-        return "nats"
+        return "zenoh"
 
     @staticmethod
     def _get_servers_from_env() -> List[str]:
@@ -62,7 +62,7 @@ class MessagingConfig:
         2. ZENOH_CONNECT (comma-separated Zenoh endpoints)
         3. NATS_URLS (comma-separated, legacy)
         4. NATS_URL (single server, legacy)
-        5. Default: ["nats://localhost:4222"]
+        5. Default: ["tcp/localhost:7447"]
         """
         # Check new env var
         urls = os.getenv("MESSAGING_URLS")
@@ -84,7 +84,7 @@ class MessagingConfig:
             return [url.strip()]
 
         # Default
-        return ["nats://localhost:4222"]
+        return ["tcp/localhost:7447"]
 
     @staticmethod
     def _get_credentials_from_env() -> Optional[Dict[str, Any]]:

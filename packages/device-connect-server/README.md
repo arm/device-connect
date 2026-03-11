@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" alt="Device Connect" width="400">
+  <img src="../../logo.svg" alt="Device Connect" width="400">
 </p>
 
 # device-connect-server
@@ -44,7 +44,6 @@ This pulls in `device-connect-sdk` automatically. Optional extras:
 
 | Extra | Adds |
 |-------|------|
-| `[zenoh]` | eclipse-zenoh (Zenoh messaging backend — P2P, streaming) |
 | `[security]` | bcrypt, aiohttp, zeroconf, qrcode (commissioning + ACLs) |
 | `[telemetry]` | OpenTelemetry SDK + OTLP exporters |
 | `[state]` | etcd3gw (distributed state store) |
@@ -52,23 +51,18 @@ This pulls in `device-connect-sdk` automatically. Optional extras:
 | `[mqtt]` | aiomqtt (MQTT messaging backend) |
 | `[all]` | All of the above + dev tools |
 
+> **Note:** Zenoh is now a core dependency of `device-connect-sdk` and is included automatically.
+
 ## Quick Start
 
 > **Prerequisites:** Complete the [Install](#install) steps first (venv active, packages installed). You also need Docker. For JWT auth you additionally need [nsc](https://github.com/nats-io/nsc) (`brew install nsc`).
 
 ### 1. Start infrastructure
 
-The registry service Docker image builds from both `device-connect-server` and `device-connect-sdk`, so clone the device SDK as a sibling directory first:
-
-```bash
-cd ..
-# SDK is a sibling package in the monorepo
-```
-
 Choose a deployment mode:
 
 <details open>
-<summary><b>Insecure — Zenoh (no auth)</b></summary>
+<summary><b>Zenoh (dev mode, no auth)</b></summary>
 
 ```bash
 docker compose -f infra/docker-compose-dev.yml up -d
@@ -93,7 +87,7 @@ docker compose -f infra/docker-compose.yml up -d
 </details>
 
 <details>
-<summary><b>Insecure — NATS (no auth)</b></summary>
+<summary><b>NATS (dev mode, no auth)</b></summary>
 
 ```bash
 docker compose -f infra/docker-compose-nats-dev.yml up -d
@@ -133,9 +127,9 @@ docker compose -f infra/docker-compose-nats.yml up -d
 The number generator simulator connects to the messaging backend, registers itself with the device registry, and emits `number_generated` events every 5 seconds.
 
 ```bash
-cd ../device-connect-sdk
+cd ../device-connect-sdk  # sibling package in the monorepo
 
-# Insecure — Zenoh (no auth)
+# Zenoh (dev mode, no auth)
 DEVICE_CONNECT_ALLOW_INSECURE=true ZENOH_CONNECT=tcp/localhost:7447 \
   python examples/number_generator/device_simulator.py
 
@@ -159,7 +153,7 @@ DEVICE_CONNECT_ALLOW_INSECURE=true ZENOH_CONNECT=tcp/localhost:7447 \
 `devctl list` queries the registry service and returns all connected devices with their capabilities, identity, and status. `statectl` reads the same data directly from etcd.
 
 ```bash
-# Insecure — Zenoh (no auth)
+# Zenoh (dev mode, no auth)
 ZENOH_CONNECT=tcp/localhost:7447 devctl list
 statectl --raw list /device-connect/default/devices/
 
@@ -188,11 +182,11 @@ cd strands-device-connect-example
 pip install -r requirements.txt
 
 # Insecure — Zenoh (no auth)
-MESSAGING_BACKEND=zenoh ZENOH_CONNECT=tcp/localhost:7447 \
+ZENOH_CONNECT=tcp/localhost:7447 \
   ANTHROPIC_API_KEY="sk-ant-..." python strands_agent.py
 
 # Secure — Zenoh (TLS)
-# MESSAGING_BACKEND=zenoh ZENOH_CONNECT=tls/localhost:7447 \
+# ZENOH_CONNECT=tls/localhost:7447 \
 #   MESSAGING_TLS_CA_FILE=../device-connect-server/security_infra/ca.pem \
 #   MESSAGING_TLS_CERT_FILE=../device-connect-server/security_infra/my-agent-cert.pem \
 #   MESSAGING_TLS_KEY_FILE=../device-connect-server/security_infra/my-agent-key.pem \
@@ -228,12 +222,10 @@ docker compose -f infra/docker-compose-dev.yml down
 To clean up everything:
 
 ```bash
-cd ..
-rm -rf device-connect-sdk strands-device-connect-example
-rm -rf device-connect-server/.venv
+rm -rf .venv
 rm -rf ~/.device-connect/credentials
-rm -rf device-connect-server/security_infra/.nsc device-connect-server/security_infra/nats-jwt-generated.conf
-rm -f device-connect-server/security_infra/*.pem device-connect-server/security_infra/*.srl
+rm -rf security_infra/.nsc security_infra/nats-jwt-generated.conf
+rm -f security_infra/*.pem security_infra/*.srl
 ```
 
 See [device-connect-sdk — Credentials](../device-connect-sdk/README.md#credentials) for the credentials file format.

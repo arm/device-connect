@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" alt="Device Connect" width="400">
+  <img src="../../logo.svg" alt="Device Connect" width="400">
 </p>
 
 # device-connect-agent-tools
@@ -85,7 +85,7 @@ pip install -e ".[strands]"
                     │                                  │
                     │  discover_devices()              │
                     │  invoke_device()                 │  JSON-RPC over
-                    │  get_device_status()             │  NATS / Zenoh
+                    │  get_device_status()             │  Zenoh / NATS
                     │  invoke_device_with_fallback()   │──────────┐
                     │                                  │          │
                     │  connect() / disconnect()        │          │
@@ -168,7 +168,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
             "command": "python",
             "args": ["-m", "device_connect_agent_tools.mcp"],
             "env": {
-                "NATS_URL": "nats://localhost:4222",
+                "ZENOH_CONNECT": "tcp/localhost:7447",
                 "DEVICE_CONNECT_ALLOW_INSECURE": "true"
             }
         }
@@ -187,7 +187,7 @@ Each device function appears as a tool in Claude Desktop. Claude can discover de
 ```python
 from device_connect_agent_tools import connect
 
-connect()  # auto-discovers NATS URL, credentials, and TLS certs
+connect()  # auto-discovers broker URL, credentials, and TLS certs
 ```
 
 It searches upward from the current directory for `security_infra/credentials/` and `security_infra/certs/`.
@@ -212,7 +212,7 @@ Or pass credentials explicitly:
 
 ```python
 connect(
-    nats_url="nats://localhost:4222",
+    messaging_urls=["nats://localhost:4222"],
     credentials={"jwt": "...", "nkey_seed": "..."},
 )
 ```
@@ -221,7 +221,7 @@ connect(
 
 ```python
 connect(
-    nats_url="tls://nats.example.com:4222",
+    messaging_urls=["tls://nats.example.com:4222"],
     zone="production",
     credentials={"jwt": "...", "nkey_seed": "..."},
     tls_config={"ca_file": "/path/to/ca.pem"},
@@ -232,25 +232,25 @@ connect(
 
 | Variable | Description |
 |---|---|
-| `NATS_URL` | NATS broker URL |
+| `ZENOH_CONNECT` | Zenoh endpoint (e.g., `tcp/localhost:7447`) |
+| `MESSAGING_BACKEND` | `zenoh` (default), `nats`, or `mqtt` |
+| `MESSAGING_URLS` | Broker URLs, comma-separated (generic) |
+| `NATS_URL` | NATS broker URL (when using NATS backend) |
 | `NATS_CREDENTIALS_FILE` | Path to `.creds.json` file |
 | `NATS_JWT` + `NATS_NKEY_SEED` | Direct JWT auth |
 | `NATS_TLS_CA_FILE` | CA certificate for TLS |
 | `TENANT` | Device Connect zone/namespace (default: `"default"`) |
-| `MESSAGING_BACKEND` | `nats`, `zenoh`, or `mqtt` (auto-detected from URL) |
-| `ZENOH_CONNECT` | Zenoh endpoint (e.g., `tcp/localhost:7447`) |
 | `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `p2p` to skip registry and discover via presence |
 
 Resolution order: explicit parameter > environment variable > auto-discovery.
 
 ### Peer-to-Peer Mode (No Infrastructure)
 
-When using Zenoh without endpoint URLs, `discover_devices()` automatically uses P2P presence-based discovery instead of querying the registry service. No Docker infrastructure needed:
+With no endpoint URLs configured, `discover_devices()` automatically uses P2P presence-based discovery (Zenoh multicast scouting) instead of querying the registry service. No Docker infrastructure needed:
 
 ```bash
-export MESSAGING_BACKEND=zenoh
 export DEVICE_CONNECT_ALLOW_INSECURE=true
-# No ZENOH_CONNECT → Zenoh multicast scouting on LAN
+# No ZENOH_CONNECT → Zenoh multicast scouting on LAN (default)
 python my_agent.py
 ```
 
@@ -348,7 +348,7 @@ get_device_status = wrap_tool(_get_device_status)
 
 | Function | Description |
 |---|---|
-| `connect(nats_url, zone, credentials, tls_config)` | Initialize messaging connection |
+| `connect(messaging_urls, zone, credentials, tls_config)` | Initialize messaging connection |
 | `disconnect()` | Close connection and release resources |
 | `get_connection()` | Get current connection (auto-connects if needed) |
 

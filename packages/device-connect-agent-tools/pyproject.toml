@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Framework-agnostic tools for Device Connect — discover and invoke IoT devices over NATS/Zenoh"
 requires-python = ">=3.11"
 dependencies = [
-    "device-connect-sdk[zenoh]>=0.1.0",
+    "device-connect-sdk>=0.1.0",
 ]
 
 [project.optional-dependencies]

@@ -1,6 +1,6 @@
 """Device Connect SDK — lightweight runtime for edge devices.
 
-Build IoT devices with Python. Connect them over NATS. Communicate
+Build IoT devices with Python. Connect them over Zenoh or NATS. Communicate
 device-to-device using RPC and events. This is the only package a
 Raspberry Pi (or any edge device) needs to install.
 
@@ -22,7 +22,7 @@ Example:
     device = DeviceRuntime(
         driver=Sensor(),
         device_id="sensor-001",
-        messaging_urls=["nats://localhost:4222"],
+        messaging_urls=["tcp/localhost:7447"],
     )
     await device.run()
 """

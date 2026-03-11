@@ -37,12 +37,12 @@ def register_backend(name: str, factory_fn: Callable[[], MessagingClient]) -> No
     _BACKEND_REGISTRY[name.lower()] = factory_fn
 
 
-def create_client(backend: str = "nats") -> MessagingClient:
+def create_client(backend: str = "zenoh") -> MessagingClient:
     """
     Factory function to create a messaging client for the specified backend.
 
     Args:
-        backend: The messaging backend to use ("nats", "mqtt", "zenoh", or any registered backend)
+        backend: The messaging backend to use ("zenoh", "nats", "mqtt", or any registered backend)
 
     Returns:
         MessagingClient instance for the specified backend
@@ -51,8 +51,8 @@ def create_client(backend: str = "nats") -> MessagingClient:
         ValueError: If backend is not supported
 
     Example:
-        >>> client = create_client("nats")
-        >>> await client.connect(servers=["nats://localhost:4222"])
+        >>> client = create_client("zenoh")
+        >>> await client.connect(servers=["tcp/localhost:7447"])
     """
     backend = backend.lower()
 

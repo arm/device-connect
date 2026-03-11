@@ -42,6 +42,7 @@ Tests run against Docker Compose services in **dev mode** (no TLS, no JWT):
 
 | Service           | Image                        | Port  |
 |-------------------|------------------------------|-------|
+| Zenoh router      | `eclipse/zenoh:latest`       | 7447  |
 | NATS + JetStream  | `nats:2.10-alpine`           | 4222  |
 | etcd              | `quay.io/coreos/etcd:v3.5.9` | 2379  |
 | Device Registry   | Built from device-connect-server | 8000  |

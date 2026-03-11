@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "device-connect-server"
 version = "0.1.0"
-description = "Device Connect — edge device runtime with NATS messaging, D2D communication, and IoT orchestration"
+description = "Device Connect — edge device runtime with Zenoh/NATS messaging, D2D communication, and IoT orchestration"
 requires-python = ">=3.11"
 dependencies = [
     "device-connect-sdk>=0.1.0",
@@ -28,14 +28,13 @@ telemetry = [
 state = ["etcd3gw>=2.4.0,<3"]
 logging = ["pymongo"]
 mqtt = ["aiomqtt"]
-zenoh = ["eclipse-zenoh>=1.0.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.0",
 ]
 all = [
-    "device-connect-server[security,telemetry,state,logging,mqtt,zenoh,dev]",
+    "device-connect-server[security,telemetry,state,logging,mqtt,dev]",
 ]
 
 [project.scripts]

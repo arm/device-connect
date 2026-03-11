@@ -29,13 +29,13 @@ class BridgeConfig:
 
         # Direct
         config = BridgeConfig(
-            messaging_urls=["nats://localhost:4222"],
+            messaging_urls=["tcp/localhost:7447"],
             tenant="default",
         )
     """
 
     # Messaging configuration
-    messaging_urls: List[str] = field(default_factory=lambda: ["nats://localhost:4222"])
+    messaging_urls: List[str] = field(default_factory=lambda: ["tcp/localhost:7447"])
     messaging_auth: Optional[Dict[str, Any]] = None
     messaging_tls: Optional[Dict[str, Any]] = None
 
@@ -51,7 +51,9 @@ class BridgeConfig:
         """Load configuration from environment variables.
 
         Environment variables:
-            NATS_URL: NATS server URL (comma-separated for multiple)
+            MESSAGING_URLS: Broker URLs (comma-separated)
+            ZENOH_CONNECT: Zenoh endpoints (comma-separated)
+            NATS_URL: NATS server URL (when using NATS backend)
             NATS_CREDENTIALS_FILE: Path to .creds.json file
             NATS_TLS_CA_FILE: Path to CA certificate
             TENANT: Device Connect tenant (default: "default")
@@ -66,8 +68,13 @@ class BridgeConfig:
         if creds_file and creds_file.endswith(".creds.json"):
             return cls.from_credentials_file(creds_file)
 
-        # Build from individual env vars
-        urls_str = os.getenv("NATS_URL", "nats://localhost:4222")
+        # Build from individual env vars (check generic, then Zenoh, then NATS)
+        urls_str = (
+            os.getenv("MESSAGING_URLS")
+            or os.getenv("ZENOH_CONNECT")
+            or os.getenv("NATS_URL")
+            or "tcp/localhost:7447"
+        )
         urls = [u.strip() for u in urls_str.split(",")]
 
         # TLS configuration
@@ -118,7 +125,7 @@ class BridgeConfig:
         nats_config = data.get("nats", {})
 
         # Extract URLs
-        urls = nats_config.get("urls", ["nats://localhost:4222"])
+        urls = nats_config.get("urls", ["tcp/localhost:7447"])
         if isinstance(urls, str):
             urls = [urls]
 
