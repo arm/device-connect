@@ -64,7 +64,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e packages/device-connect-sdk
-          pip install -e "packages/device-connect-agent-tools[strands]"
+          pip install -e "packages/device-connect-agent-tools[strands,dev]"
       - name: Run unit tests
         run: pytest packages/device-connect-agent-tools/tests/test_connection_unit.py packages/device-connect-agent-tools/tests/test_tools_unit.py packages/device-connect-agent-tools/tests/test_langchain_adapter.py packages/device-connect-agent-tools/tests/test_strands_adapter.py -v --timeout=30 --tb=short
 
