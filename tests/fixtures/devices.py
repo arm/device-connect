@@ -105,8 +105,14 @@ class DeviceFactory:
     async def _wait_for_registration(self, device: DeviceRuntime, timeout: float) -> None:
         start = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start < timeout:
-            if device._registration_id is not None:
-                return
+            if getattr(device, '_p2p_mode', False):
+                # P2P mode: wait for announcer to start
+                if getattr(device, '_p2p_announcer', None) is not None:
+                    return
+            else:
+                # Registry mode: wait for registration ID
+                if device._registration_id is not None:
+                    return
             await asyncio.sleep(0.1)
         raise TimeoutError(f"Device {device.device_id} did not register within {timeout}s")
 

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.svg" alt="Device Connect" width="400">
+  <img src="../../logo.svg" alt="Device Connect" width="400">
 </p>
 
 # device-connect-sdk
@@ -104,9 +104,9 @@ async def main():
     device = DeviceRuntime(
         driver=SensorDriver(),
         device_id="sensor-001",
-        messaging_urls=["nats://localhost:4222"],
-        # Or use Zenoh:
-        # messaging_urls=["tcp/localhost:7447"],
+        messaging_urls=["tcp/localhost:7447"],
+        # Or use NATS:
+        # messaging_urls=["nats://localhost:4222"],
     )
     await device.run()
 
@@ -118,11 +118,11 @@ asyncio.run(main())
 Save the code above to `my_sensor.py` and run it:
 
 ```bash
-# NATS (default)
+# Zenoh (default) — or omit messaging_urls entirely for P2P mode
 DEVICE_CONNECT_ALLOW_INSECURE=true python my_sensor.py
 
-# Or Zenoh
-DEVICE_CONNECT_ALLOW_INSECURE=true ZENOH_CONNECT=tcp/localhost:7447 python my_sensor.py
+# Or NATS
+# DEVICE_CONNECT_ALLOW_INSECURE=true NATS_URL=nats://localhost:4222 python my_sensor.py
 ```
 
 ### 4. More examples
@@ -142,15 +142,14 @@ NATS_CREDENTIALS_FILE=~/.device-connect/credentials/dht22-001.creds.json python 
 
 ## Device-to-Device Mode (No Infrastructure)
 
-Devices can discover each other directly on the LAN without any infrastructure (no NATS/Zenoh broker, no etcd, no device registry). This uses Zenoh's built-in multicast scouting.
+Devices can discover each other directly on the LAN without any infrastructure (no broker, no etcd, no device registry). This uses Zenoh's built-in multicast scouting.
 
-**D2D mode is auto-detected** when no broker endpoint URLs are configured:
+**P2P mode is the default** when no broker endpoint URLs are configured:
 
 ```python
 device = DeviceRuntime(
     driver=SensorDriver(),
     device_id="sensor-001",
-    messaging_backend="zenoh",
     allow_insecure=True,
     # No messaging_urls → Zenoh peer mode with multicast discovery
 )
@@ -160,7 +159,7 @@ await device.run()
 Or via environment variables:
 
 ```bash
-MESSAGING_BACKEND=zenoh DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
+DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
 ```
 
 To force D2D mode even when a router URL is set (e.g., router available but no registry):

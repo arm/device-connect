@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-import nats
+from device_connect_sdk.messaging import create_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +47,14 @@ class RoutingRule:
 class MockOrchestrator:
     """Rule-based orchestrator (no LLM) for fast integration tests.
 
-    Dev mode: connects to NATS without TLS or JWT.
+    Supports NATS and Zenoh backends via the SDK MessagingClient abstraction.
     """
 
-    def __init__(self, nats_url: str, tenant: str = "default"):
-        self.nats_url = nats_url
+    def __init__(self, backend: str, url: str, tenant: str = "default"):
+        self.backend = backend
+        self.url = url
         self.tenant = tenant
-        self._messaging: Optional[nats.NATS] = None
+        self._messaging = None
         self._rules: List[RoutingRule] = []
         self._subscriptions: list = []
 
@@ -72,9 +73,10 @@ class MockOrchestrator:
         self._rules.clear()
 
     async def start(self) -> None:
-        self._messaging = await nats.connect(servers=[self.nats_url])
+        self._messaging = create_client(self.backend)
+        await self._messaging.connect(servers=[self.url])
         subject = f"device-connect.{self.tenant}.*.event.>"
-        sub = await self._messaging.subscribe(subject, cb=self._handle_event)
+        sub = await self._messaging.subscribe_with_subject(subject, self._handle_event)
         self._subscriptions.append(sub)
         logger.info(f"MockOrchestrator started, subscribed to: {subject}")
 
@@ -85,11 +87,13 @@ class MockOrchestrator:
         if self._messaging:
             await self._messaging.close()
 
-    async def _handle_event(self, msg) -> None:
+    async def _handle_event(self, data: bytes, subject: str, reply: Optional[str]) -> None:
         try:
-            payload = json.loads(msg.data)
+            # Normalize Zenoh slash-separated subjects to dot-separated
+            normalized = subject.replace("/", ".")
+            payload = json.loads(data)
             event_data = payload.get("params", payload)
-            parts = msg.subject.split(".")
+            parts = normalized.split(".")
             if len(parts) < 5:
                 return
             event_name = ".".join(parts[4:])
@@ -125,7 +129,7 @@ class MockOrchestrator:
             response = await self._messaging.request(
                 f"device-connect.{self.tenant}.discovery", json.dumps(request).encode(), timeout=5.0,
             )
-            data = json.loads(response.data)
+            data = json.loads(response)
             if "result" in data:
                 return {d["device_id"]: d for d in data["result"].get("devices", [])}
         except Exception as e:
@@ -139,7 +143,7 @@ class MockOrchestrator:
             response = await self._messaging.request(
                 f"device-connect.{self.tenant}.{device_id}.cmd", json.dumps(request).encode(), timeout=30.0,
             )
-            return json.loads(response.data)
+            return json.loads(response)
         except Exception as e:
             logger.error(f"Error calling function: {e}")
             return None

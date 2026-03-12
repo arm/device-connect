@@ -54,9 +54,10 @@ services:
   device-registry-service:
     build:
       context: ..
-      dockerfile: device-connect-server/device_connect_server/registry/service/Dockerfile
+      dockerfile: packages/device-connect-server/device_connect_server/registry/service/Dockerfile
     container_name: itest-registry
     environment:
+      - MESSAGING_BACKEND=nats
       - NATS_URL=nats://nats:4222
       - ETCD_HOST=etcd
       - ETCD_PORT=2379

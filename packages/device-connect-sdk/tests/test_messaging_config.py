@@ -10,12 +10,12 @@ class TestMessagingConfigDefaults:
     def test_default_backend(self):
         with patch.dict(os.environ, {}, clear=True):
             config = MessagingConfig()
-            assert config.backend == "nats"
+            assert config.backend == "zenoh"
 
     def test_default_servers(self):
         with patch.dict(os.environ, {}, clear=True):
             config = MessagingConfig()
-            assert config.servers == ["nats://localhost:4222"]
+            assert config.servers == ["tcp/localhost:7447"]
 
     def test_default_credentials_none(self):
         with patch.dict(os.environ, {}, clear=True):

@@ -410,7 +410,7 @@ class DeviceRuntime:
         if credentials_file:
             creds = self._load_credentials(credentials_file, messaging_urls)
             # Try backend-specific key, fall back to "nats" for backward compat
-            backend_key = self._messaging_backend or "nats"
+            backend_key = self._messaging_backend or "zenoh"
             backend_creds = creds.get(backend_key, creds.get("nats", {}))
             creds_urls = backend_creds.get("urls")
             creds_device_id = creds.get("device_id")
@@ -455,15 +455,11 @@ class DeviceRuntime:
             self._messaging_backend = "zenoh"
         elif creds_urls:
             self.messaging_urls = creds_urls
-        elif self._p2p_mode or (self._messaging_backend or "").lower() == "zenoh":
-            # P2P mode: Zenoh peer-to-peer with no broker URLs (multicast scouting)
-            self.messaging_urls = []
-            self._messaging_backend = "zenoh"
-            self._p2p_mode = True
         else:
-            raise ValueError(
-                "messaging_urls must be provided either as argument, env var, or in credentials file"
-            )
+            # Default: P2P mode with Zenoh multicast scouting (no broker needed)
+            self.messaging_urls = []
+            self._messaging_backend = self._messaging_backend or "zenoh"
+            self._p2p_mode = True
 
         # Auto-detect backend from URLs if not explicitly specified
         if not self._messaging_backend:
@@ -475,9 +471,9 @@ class DeviceRuntime:
             elif first_url.startswith("zenoh://") or first_url.startswith("tcp/") or first_url.startswith("tls/"):
                 self._messaging_backend = "zenoh"
             else:
-                self._messaging_backend = "nats"
+                self._messaging_backend = "zenoh"
                 self._logger.info(
-                    f"Could not auto-detect backend from URL {first_url}, defaulting to NATS"
+                    f"Could not auto-detect backend from URL {first_url}, defaulting to Zenoh"
                 )
 
         # Build authentication credentials
@@ -647,7 +643,7 @@ class DeviceRuntime:
         elif messaging_urls:
             urls = messaging_urls
         else:
-            urls = ["nats://localhost:4222"]
+            urls = ["tcp/localhost:7447"]
 
         # Build return structure
         result = {
@@ -1191,7 +1187,7 @@ class DeviceRuntime:
                 startup_attempts += 1
 
                 # Provide helpful error messages for common issues
-                backend_name = (self._messaging_backend or "nats").upper()
+                backend_name = (self._messaging_backend or "zenoh").upper()
                 if "Authorization Violation" in error_str or "authorization violation" in error_str.lower():
                     self._logger.error(
                         f"\n{'='*70}\n"
@@ -1513,7 +1509,7 @@ class DeviceRuntime:
                     from fabric.registry.client import RegistryClient
                 from device_connect_sdk.messaging.config import MessagingConfig
                 config = MessagingConfig(
-                    backend=self._messaging_backend or "nats",
+                    backend=self._messaging_backend or "zenoh",
                     servers=self.messaging_urls,
                 )
                 registry = RegistryClient(self.messaging, config, tenant=self.tenant)

@@ -1,13 +1,13 @@
-# device-connect-tests
+# device-connect integration tests
 
-Cross-repo integration tests for the Device Connect split repos (`device-connect-server`, `device-connect-sdk`, `device-connect-agent-tools`).
+Cross-package integration tests for the Device Connect monorepo (`packages/device-connect-sdk`, `packages/device-connect-server`, `packages/device-connect-agent-tools`).
 
 ## Prerequisites
 
 Docker and Docker Compose for infrastructure (NATS, etcd, device-registry).
 
 ```bash
-pip install -e ../device-connect-sdk -e "../device-connect-server[all]" -e "../device-connect-agent-tools[strands]" -r requirements.txt
+pip install -e ../packages/device-connect-sdk -e "../packages/device-connect-server[all]" -e "../packages/device-connect-agent-tools[strands]" -r requirements.txt
 ```
 
 ## Running tests
@@ -18,17 +18,17 @@ Start infrastructure first:
 docker compose -f docker-compose-itest.yml up -d
 ```
 
-### Unit tests (per-repo, no Docker needed)
+### Unit tests (per-package, no Docker needed)
 
 ```bash
 # device-connect-sdk
-cd ../device-connect-sdk && pytest tests/ -v
+cd ../packages/device-connect-sdk && pytest tests/ -v
 
 # device-connect-agent-tools
-cd ../device-connect-agent-tools && pytest tests/test_connection_unit.py tests/test_tools_unit.py -v
+cd ../packages/device-connect-agent-tools && pytest tests/test_connection_unit.py tests/test_tools_unit.py -v
 
 # device-connect-server
-cd ../device-connect-server && pytest tests/ -v
+cd ../packages/device-connect-server && pytest tests/ -v
 ```
 
 ### Integration tests (Tier 1 — no LLM, fast)

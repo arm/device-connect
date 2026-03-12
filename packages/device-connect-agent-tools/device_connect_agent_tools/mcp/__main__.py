@@ -7,7 +7,9 @@ This starts the MCP Bridge Server which connects Claude Desktop to
 Device Connect devices. Configuration is loaded from environment variables.
 
 Environment Variables:
-    NATS_URL: NATS server URL (default: nats://localhost:4222)
+    ZENOH_CONNECT: Zenoh endpoint (default: tcp/localhost:7447)
+    MESSAGING_URLS: Broker URLs, comma-separated (alternative to ZENOH_CONNECT)
+    NATS_URL: NATS server URL (when using NATS backend)
     NATS_CREDENTIALS_FILE: Path to credentials file
     NATS_TLS_CA_FILE: Path to TLS CA certificate
     TENANT: Device Connect tenant (default: default)
@@ -22,8 +24,8 @@ Claude Desktop Configuration:
                 "command": "python",
                 "args": ["-m", "device_connect_agent_tools.mcp"],
                 "env": {
-                    "NATS_URL": "nats://your-server:4222",
-                    "NATS_CREDENTIALS_FILE": "/path/to/credentials.creds.json"
+                    "ZENOH_CONNECT": "tcp/your-server:7447",
+                    "DEVICE_CONNECT_ALLOW_INSECURE": "true"
                 }
             }
         }

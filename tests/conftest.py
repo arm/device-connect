@@ -1,14 +1,19 @@
 """Root conftest for cross-repo integration tests.
 
 Infrastructure:
-    - Session-scoped Docker Compose (NATS + etcd + registry)
+    - Session-scoped Docker Compose (NATS + Zenoh + etcd + registry)
     - Dev mode: no TLS, no JWT (DEVICE_CONNECT_ALLOW_INSECURE=true)
 
 Fixtures:
     - device_spawner: DeviceFactory using device_connect_sdk package
-    - event_capture: EventCollector for NATS event capture
+    - event_capture: EventCollector for messaging event capture
     - event_injector: EventInjector for simulating device events
     - mock_orchestrator: Rule-based orchestrator (no LLM)
+    - messaging_client: Connected SDK MessagingClient for direct RPC calls
+
+Backend parameterization:
+    All fixtures are parameterized over NATS and Zenoh via messaging_backend.
+    Use --backend=nats or --backend=zenoh to run a single backend.
 
 """
 
@@ -33,7 +38,32 @@ from fixtures.infrastructure import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
+BACKEND_URLS = {
+    "nats": os.getenv("NATS_URL", "nats://localhost:4222"),
+    "zenoh": os.getenv("ZENOH_CONNECT", "tcp/localhost:7447"),
+}
+
+
+# ── Pytest hooks ──────────────────────────────────────────────────
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--backend", action="store", default=None,
+        help="Run only this messaging backend (nats or zenoh)",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "integration: requires Docker infrastructure")
+    config.addinivalue_line("markers", "llm: requires real LLM API key")
+    config.addinivalue_line("markers", "slow: takes > 30 seconds")
+    config.addinivalue_line("markers", "conformance: messaging backend conformance test")
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if "tests" in str(item.fspath):
+            item.add_marker(pytest.mark.integration)
 
 
 # ── Session-scoped infrastructure ──────────────────────────────────
@@ -56,19 +86,65 @@ async def infrastructure():
                 logger.info("Keeping infrastructure running (ITEST_KEEP_INFRA=1)")
 
 
+# ── Backend parameterization ──────────────────────────────────────
+
+@pytest.fixture(params=["nats", "zenoh"])
+def messaging_backend(request):
+    """Parameterized messaging backend — tests run once per backend."""
+    selected = request.config.getoption("--backend")
+    if selected and request.param != selected:
+        pytest.skip(f"Skipping {request.param} (--backend={selected})")
+    return request.param
+
+
 @pytest.fixture
-def nats_url(infrastructure) -> str:
-    return DEFAULT_NATS_URL
+def messaging_url(messaging_backend):
+    """Messaging broker URL for the current backend."""
+    return BACKEND_URLS[messaging_backend]
+
+
+@pytest.fixture(autouse=True)
+def _set_backend_env(messaging_backend):
+    """Set env vars so SDK/agent-tools auto-detect the correct backend."""
+    os.environ["MESSAGING_BACKEND"] = messaging_backend
+    if messaging_backend == "zenoh":
+        os.environ["DEVICE_CONNECT_DISCOVERY_MODE"] = "p2p"
+        os.environ["ZENOH_CONNECT"] = BACKEND_URLS["zenoh"]
+    yield
+    os.environ.pop("MESSAGING_BACKEND", None)
+    os.environ.pop("DEVICE_CONNECT_DISCOVERY_MODE", None)
+    os.environ.pop("ZENOH_CONNECT", None)
+
+
+# Keep nats_url as alias for backward compatibility
+@pytest.fixture
+def nats_url(messaging_url) -> str:
+    return messaging_url
+
+
+# ── Messaging client (for direct RPC calls in tests) ─────────────
+
+@pytest_asyncio.fixture
+async def messaging_client(infrastructure, messaging_backend, messaging_url):
+    """Connected SDK MessagingClient for direct RPC calls in tests."""
+    from device_connect_sdk.messaging import create_client
+
+    client = create_client(messaging_backend)
+    await client.connect(servers=[messaging_url])
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 # ── Device spawner (uses device_connect_sdk) ────────────────────────────
 
-@pytest.fixture
-async def device_spawner(infrastructure, nats_url):
+@pytest_asyncio.fixture
+async def device_spawner(infrastructure, messaging_url):
     """Factory for spawning simulated devices via device_connect_sdk."""
     from fixtures.devices import DeviceFactory
 
-    factory = DeviceFactory(messaging_url=nats_url)
+    factory = DeviceFactory(messaging_url=messaging_url)
     try:
         yield factory
     finally:
@@ -77,60 +153,45 @@ async def device_spawner(infrastructure, nats_url):
 
 # ── Event capture ──────────────────────────────────────────────────
 
-@pytest.fixture
-async def event_capture(infrastructure, nats_url):
-    """NATS event capture utility."""
+@pytest_asyncio.fixture
+async def event_capture(infrastructure, messaging_backend, messaging_url):
+    """Messaging event capture utility."""
     from fixtures.events import EventCollector
 
-    collector = EventCollector(nats_url=nats_url)
+    collector = EventCollector(backend=messaging_backend, url=messaging_url)
     async with collector:
         yield collector
 
 
 # ── Event injector ─────────────────────────────────────────────────
 
-@pytest.fixture
-async def event_injector(infrastructure, nats_url):
-    """NATS event injection utility."""
+@pytest_asyncio.fixture
+async def event_injector(infrastructure, messaging_backend, messaging_url):
+    """Messaging event injection utility."""
     from fixtures.inject import EventInjector
 
-    injector = EventInjector(nats_url=nats_url)
+    injector = EventInjector(backend=messaging_backend, url=messaging_url)
     async with injector:
         yield injector
 
 
 # ── Mock orchestrator (no LLM) ────────────────────────────────────
 
-@pytest.fixture
-async def mock_orchestrator(infrastructure, nats_url):
+@pytest_asyncio.fixture
+async def mock_orchestrator(infrastructure, messaging_backend, messaging_url):
     """Rule-based orchestrator for fast tests (no LLM)."""
     from fixtures.orchestrator import MockOrchestrator
 
-    orchestrator = MockOrchestrator(nats_url=nats_url)
+    orchestrator = MockOrchestrator(backend=messaging_backend, url=messaging_url)
     async with orchestrator:
         yield orchestrator
 
 
 # ── Registry cleanup ──────────────────────────────────────────────
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def clear_registry(infrastructure):
     """Clear all devices from registry before test."""
     count = await clear_device_registry()
     logger.info(f"Registry cleared: {count} devices removed")
     yield count
-
-
-# ── Pytest hooks ──────────────────────────────────────────────────
-
-def pytest_configure(config):
-    config.addinivalue_line("markers", "integration: requires Docker infrastructure")
-    config.addinivalue_line("markers", "llm: requires real LLM API key")
-    config.addinivalue_line("markers", "slow: takes > 30 seconds")
-    config.addinivalue_line("markers", "conformance: messaging backend conformance test")
-
-
-def pytest_collection_modifyitems(config, items):
-    for item in items:
-        if "tests" in str(item.fspath):
-            item.add_marker(pytest.mark.integration)

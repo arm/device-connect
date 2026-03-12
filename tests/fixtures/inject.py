@@ -1,6 +1,6 @@
 """Event injection utilities for cross-repo integration tests.
 
-Uses raw nats-py — no dependency on device-connect-server or device-connect-sdk.
+Uses the SDK MessagingClient abstraction — supports NATS, Zenoh, and MQTT backends.
 """
 
 import asyncio
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-import nats
+from device_connect_sdk.messaging import create_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,22 +25,24 @@ class InjectedEvent:
 
 
 class EventInjector:
-    """Inject events into NATS as if they came from a device.
+    """Inject events as if they came from a device.
 
     Usage:
-        async with EventInjector(nats_url) as injector:
+        async with EventInjector(backend="nats", url="nats://localhost:4222") as injector:
             await injector.inject_event("camera-001", "mess_detected", {"zone": "A"})
     """
 
-    def __init__(self, nats_url: str, tenant: str = "default", auto_simulate: bool = True):
-        self.nats_url = nats_url
+    def __init__(self, backend: str, url: str, tenant: str = "default", auto_simulate: bool = True):
+        self.backend = backend
+        self.url = url
         self.tenant = tenant
         self.auto_simulate = auto_simulate
-        self._messaging: Optional[nats.NATS] = None
+        self._messaging = None
         self._injected: list[InjectedEvent] = []
 
     async def __aenter__(self) -> "EventInjector":
-        self._messaging = await nats.connect(servers=[self.nats_url])
+        self._messaging = create_client(self.backend)
+        await self._messaging.connect(servers=[self.url])
         return self
 
     async def __aexit__(self, *args) -> None:

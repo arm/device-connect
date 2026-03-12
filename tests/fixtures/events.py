@@ -1,6 +1,6 @@
 """Event capture and assertion utilities for cross-repo integration tests.
 
-Uses raw nats-py — no dependency on device-connect-server or device-connect-sdk.
+Uses the SDK MessagingClient abstraction — supports NATS, Zenoh, and MQTT backends.
 """
 
 import asyncio
@@ -11,14 +11,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, List, Optional
 
-import nats
+from device_connect_sdk.messaging import create_client
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class CapturedEvent:
-    """A captured NATS event."""
+    """A captured messaging event."""
 
     subject: str
     data: dict
@@ -119,20 +119,22 @@ class EventStream:
 
 
 class EventCollector:
-    """Collects events from NATS for testing.
+    """Collects events from messaging backend for testing.
 
     Usage:
-        async with EventCollector(nats_url) as collector:
+        async with EventCollector(backend="nats", url="nats://localhost:4222") as collector:
             async with collector.subscribe("device-connect.*.*.event.*") as events:
                 event = await events.wait_for("state_change_detected")
     """
 
-    def __init__(self, nats_url: str):
-        self.nats_url = nats_url
-        self._messaging: Optional[nats.NATS] = None
+    def __init__(self, backend: str, url: str):
+        self.backend = backend
+        self.url = url
+        self._messaging = None
 
     async def __aenter__(self) -> "EventCollector":
-        self._messaging = await nats.connect(servers=[self.nats_url])
+        self._messaging = create_client(self.backend)
+        await self._messaging.connect(servers=[self.url])
         return self
 
     async def __aexit__(self, *args) -> None:
@@ -146,11 +148,13 @@ class EventCollector:
 
         stream = EventStream()
 
-        async def handler(msg):
-            event = CapturedEvent.from_message(msg.subject, msg.data)
+        async def handler(data: bytes, subject: str, reply: Optional[str]) -> None:
+            # Normalize Zenoh slash-separated subjects to dot-separated
+            normalized = subject.replace("/", ".")
+            event = CapturedEvent.from_message(normalized, data)
             await stream.add(event)
 
-        sub = await self._messaging.subscribe(subject, cb=handler)
+        sub = await self._messaging.subscribe_with_subject(subject, handler)
         try:
             yield stream
         finally:

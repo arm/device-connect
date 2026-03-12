@@ -251,10 +251,12 @@ class TestDeviceRuntimeInit:
                 rt = DeviceRuntime(device_id="d")
                 assert rt.messaging_urls == ["nats://nats-env:4222"]
 
-    def test_no_urls_raises(self):
+    def test_no_urls_enters_p2p_mode(self):
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="messaging_urls must be provided"):
-                DeviceRuntime(device_id="d")
+            rt = DeviceRuntime(device_id="d")
+            assert rt._p2p_mode is True
+            assert rt._messaging_backend == "zenoh"
+            assert rt.messaging_urls == []
 
     def test_auto_detect_nats_backend(self):
         rt = DeviceRuntime(device_id="d", messaging_urls=["nats://localhost:4222"])
