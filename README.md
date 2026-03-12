@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="logo.svg" alt="Device Connect" width="400">
-</p>
-
 # Device Connect
 
 An open-source Python framework by Arm for connecting IoT devices, robots, and AI agents over [Zenoh](https://zenoh.io). Works peer-to-peer with zero infrastructure, or scales to thousands of devices with a Zenoh router. NATS and MQTT backends are also supported.
