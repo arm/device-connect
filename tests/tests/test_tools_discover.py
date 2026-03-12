@@ -12,14 +12,14 @@ SETTLE_TIME = 0.3
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_discover_returns_list(device_spawner):
+async def test_discover_returns_list(device_spawner, messaging_url):
     """discover_devices() should return a list."""
     await device_spawner.spawn_camera("itest-tools-disc-cam")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(discover_devices)
         assert isinstance(result, list)
@@ -30,14 +30,14 @@ async def test_discover_returns_list(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_discover_includes_capabilities(device_spawner):
+async def test_discover_includes_capabilities(device_spawner, messaging_url):
     """Discovered devices should include capabilities (functions, events)."""
     await device_spawner.spawn_sensor("itest-tools-caps-sensor")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         devices = await asyncio.to_thread(discover_devices)
         sensor = next((d for d in devices if d["device_id"] == "itest-tools-caps-sensor"), None)
@@ -52,11 +52,11 @@ async def test_discover_includes_capabilities(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_discover_refresh(device_spawner):
+async def test_discover_refresh(device_spawner, messaging_url):
     """discover_devices(refresh=True) should pick up newly registered devices."""
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         # First call — may or may not include our device
         await asyncio.to_thread(discover_devices)

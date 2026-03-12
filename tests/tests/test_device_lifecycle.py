@@ -13,38 +13,47 @@ SETTLE_TIME = 0.3
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_camera_registers(device_spawner):
+async def test_camera_registers(device_spawner, messaging_backend):
     """A device_connect_sdk camera should register and get a registration ID."""
     device, driver = await device_spawner.spawn_camera("itest-cam-lifecycle")
-    assert device._registration_id is not None
+    if messaging_backend == "zenoh":
+        assert device._p2p_announcer is not None
+    else:
+        assert device._registration_id is not None
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_robot_registers(device_spawner):
+async def test_robot_registers(device_spawner, messaging_backend):
     """A device_connect_sdk robot should register and get a registration ID."""
     device, driver = await device_spawner.spawn_robot("itest-robot-lifecycle")
-    assert device._registration_id is not None
+    if messaging_backend == "zenoh":
+        assert device._p2p_announcer is not None
+    else:
+        assert device._registration_id is not None
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_registers(device_spawner):
+async def test_sensor_registers(device_spawner, messaging_backend):
     """A device_connect_sdk sensor should register and get a registration ID."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-lifecycle")
-    assert device._registration_id is not None
+    if messaging_backend == "zenoh":
+        assert device._p2p_announcer is not None
+    else:
+        assert device._registration_id is not None
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_device_discoverable_via_tools(device_spawner):
+async def test_device_discoverable_via_tools(device_spawner, messaging_url):
     """Devices registered via device_connect_sdk should be discoverable via device-connect-agent-tools."""
     device, driver = await device_spawner.spawn_camera("itest-cam-discover")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         devices = await asyncio.to_thread(discover_devices)
         device_ids = [d["device_id"] for d in devices]
@@ -55,7 +64,7 @@ async def test_device_discoverable_via_tools(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_multiple_devices_discoverable(device_spawner):
+async def test_multiple_devices_discoverable(device_spawner, messaging_url):
     """Multiple device_connect_sdk drivers should all appear in discovery."""
     await device_spawner.spawn_camera("itest-multi-cam")
     await device_spawner.spawn_robot("itest-multi-robot")
@@ -64,7 +73,7 @@ async def test_multiple_devices_discoverable(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         devices = await asyncio.to_thread(discover_devices)
         device_ids = [d["device_id"] for d in devices]
@@ -77,7 +86,7 @@ async def test_multiple_devices_discoverable(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_device_type_filter(device_spawner):
+async def test_device_type_filter(device_spawner, messaging_url):
     """discover_devices(device_type=...) should filter by type."""
     await device_spawner.spawn_camera("itest-filter-cam")
     await device_spawner.spawn_robot("itest-filter-robot")
@@ -85,7 +94,7 @@ async def test_device_type_filter(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         cameras = await asyncio.to_thread(discover_devices, device_type="camera")
         camera_ids = [d["device_id"] for d in cameras]

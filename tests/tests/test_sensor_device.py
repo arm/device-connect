@@ -13,22 +13,25 @@ SETTLE_TIME = 0.3
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_registers(device_spawner):
+async def test_sensor_registers(device_spawner, messaging_backend):
     """A sensor device should register and get a registration ID."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-reg")
-    assert device._registration_id is not None
+    if messaging_backend == "zenoh":
+        assert device._p2p_announcer is not None
+    else:
+        assert device._registration_id is not None
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_discoverable_via_tools(device_spawner):
+async def test_sensor_discoverable_via_tools(device_spawner, messaging_url):
     """A registered sensor should appear in device-connect-agent-tools discover results."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-disc")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         devices = await asyncio.to_thread(discover_devices)
         ids = [d["device_id"] for d in devices]
@@ -39,14 +42,14 @@ async def test_sensor_discoverable_via_tools(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_get_reading(device_spawner):
+async def test_sensor_get_reading(device_spawner, messaging_url):
     """Invoke the sensor's get_reading RPC and verify payload structure."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-read")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, invoke_device
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
             invoke_device,
@@ -66,7 +69,7 @@ async def test_sensor_get_reading(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_get_reading_fahrenheit(device_spawner):
+async def test_sensor_get_reading_fahrenheit(device_spawner, messaging_url):
     """Invoke get_reading with fahrenheit unit."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-fahr")
     driver.set_values(temp=100.0, humidity=50.0)
@@ -74,7 +77,7 @@ async def test_sensor_get_reading_fahrenheit(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, invoke_device
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
             invoke_device,
@@ -94,14 +97,14 @@ async def test_sensor_get_reading_fahrenheit(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_set_location(device_spawner):
+async def test_sensor_set_location(device_spawner, messaging_url):
     """Invoke the sensor's set_location RPC."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-loc")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, invoke_device
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
             invoke_device,
@@ -119,14 +122,14 @@ async def test_sensor_set_location(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_sensor_capabilities(device_spawner):
+async def test_sensor_capabilities(device_spawner, messaging_url):
     """Sensor should report its functions and events."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-caps")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         devices = await asyncio.to_thread(discover_devices)
         sensor = next(d for d in devices if d["device_id"] == "itest-sensor-caps")
@@ -143,7 +146,7 @@ async def test_sensor_capabilities(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_multiple_sensors(device_spawner):
+async def test_multiple_sensors(device_spawner, messaging_url):
     """Multiple sensors should coexist."""
     _, _ = await device_spawner.spawn_sensor("itest-sensor-a")
     _, _ = await device_spawner.spawn_sensor("itest-sensor-b")
@@ -151,7 +154,7 @@ async def test_multiple_sensors(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         devices = await asyncio.to_thread(discover_devices)
         ids = [d["device_id"] for d in devices]

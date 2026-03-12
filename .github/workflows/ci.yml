@@ -93,6 +93,7 @@ jobs:
     env:
       DEVICE_CONNECT_ALLOW_INSECURE: 'true'
       NATS_URL: 'nats://localhost:4222'
+      ZENOH_CONNECT: 'tcp/localhost:7447'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -110,7 +111,7 @@ jobs:
         working-directory: tests
         run: |
           docker compose -f docker-compose-itest.yml up -d
-          for c in itest-nats itest-etcd; do
+          for c in itest-nats itest-etcd itest-zenoh; do
             echo "Waiting for $c..."
             for i in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = "healthy" ] && break; sleep 1; done
           done
@@ -150,6 +151,7 @@ jobs:
     env:
       DEVICE_CONNECT_ALLOW_INSECURE: 'true'
       NATS_URL: 'nats://localhost:4222'
+      ZENOH_CONNECT: 'tcp/localhost:7447'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -167,7 +169,7 @@ jobs:
         working-directory: tests
         run: |
           docker compose -f docker-compose-itest.yml up -d
-          for c in itest-nats itest-etcd; do
+          for c in itest-nats itest-etcd itest-zenoh; do
             echo "Waiting for $c..."
             for i in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = "healthy" ] && break; sleep 1; done
           done

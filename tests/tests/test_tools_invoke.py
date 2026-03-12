@@ -1,6 +1,6 @@
 """Integration tests for device-connect-agent-tools invoke_device().
 
-Tests that the agent SDK can invoke device RPCs via NATS.
+Tests that the agent SDK can invoke device RPCs via the messaging backend.
 """
 
 import asyncio
@@ -12,7 +12,7 @@ SETTLE_TIME = 0.3
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_sensor_reading(device_spawner):
+async def test_invoke_sensor_reading(device_spawner, messaging_url):
     """invoke_device() should call sensor's get_reading and return result."""
     await device_spawner.spawn_sensor(
         "itest-tools-invoke-sensor", initial_temp=23.5, initial_humidity=50.0,
@@ -21,7 +21,7 @@ async def test_invoke_sensor_reading(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, invoke_device
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
             invoke_device,
@@ -38,7 +38,7 @@ async def test_invoke_sensor_reading(device_spawner):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_robot_dispatch(device_spawner, event_capture):
+async def test_invoke_robot_dispatch(device_spawner, event_capture, messaging_url):
     """invoke_device() should dispatch robot and trigger cleaning."""
     await device_spawner.spawn_robot(
         "itest-tools-invoke-robot", clean_duration=0.3,
@@ -48,7 +48,7 @@ async def test_invoke_robot_dispatch(device_spawner, event_capture):
     async with event_capture.subscribe("device-connect.*.itest-tools-invoke-robot.event.*") as events:
         from device_connect_agent_tools import connect, disconnect, invoke_device
 
-        await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+        await asyncio.to_thread(connect, nats_url=messaging_url)
         try:
             result = await asyncio.to_thread(
                 invoke_device,
@@ -67,11 +67,11 @@ async def test_invoke_robot_dispatch(device_spawner, event_capture):
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_unknown_device():
+async def test_invoke_unknown_device(messaging_url):
     """invoke_device() on non-existent device should return error."""
     from device_connect_agent_tools import connect, disconnect, invoke_device
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
             invoke_device,
@@ -87,14 +87,14 @@ async def test_invoke_unknown_device():
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_camera_capture(device_spawner):
+async def test_invoke_camera_capture(device_spawner, messaging_url):
     """invoke_device() should capture image from camera."""
     await device_spawner.spawn_camera("itest-tools-invoke-cam")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, invoke_device
 
-    await asyncio.to_thread(connect, nats_url="nats://localhost:4222")
+    await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
             invoke_device,
