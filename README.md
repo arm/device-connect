@@ -1,12 +1,12 @@
 # Device Connect
 
-A device-aware runtime by Arm for connecting IoT devices, robots, and AI agents over Zenoh or NATS.
+An open-source Python framework by Arm for connecting AI agents to physical devices (such as robots, vehicles, edge/IoT devices, and more). It supports device-to-device (D2D) communication with zero infrastructure or scales to thousands of devices. Zenoh, NATS, and MQTT backends are supported.
 
 ## Packages
 
 | Package | Description | PyPI |
 |---------|-------------|------|
-| [`device-connect-sdk`](packages/device-connect-sdk/) | Python SDK for building Device Connect edge devices | `pip install device-connect-sdk` |
+| [`device-connect-sdk`](packages/device-connect-sdk/) | Python SDK for enabling physical devices to work with Device Connect | `pip install device-connect-sdk` |
 | [`device-connect-server`](packages/device-connect-server/) | Registry service, devctl CLI, and Docker infrastructure | `pip install device-connect-server` |
 | [`device-connect-agent-tools`](packages/device-connect-agent-tools/) | Framework-agnostic tools for AI agents to discover and invoke devices | `pip install device-connect-agent-tools` |
 

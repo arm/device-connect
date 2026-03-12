@@ -4,7 +4,7 @@
 
 # device-connect-agent-tools
 
-Framework-agnostic tools for Device Connect — discover and invoke IoT devices from any AI agent. Plain Python functions at the core, with adapters for [Strands](https://strandsagents.com), [LangChain](https://python.langchain.com), and [MCP](https://modelcontextprotocol.io) (Claude Desktop).
+Framework-agnostic tools for Device Connect — discover and invoke devices from any AI agent. Plain Python functions at the core, with adapters for [Strands](#strands-agent), [LangChain](#langchain--langgraph), and [MCP](#mcp-bridge).
 
 ## Contents
 
@@ -16,13 +16,13 @@ Framework-agnostic tools for Device Connect — discover and invoke IoT devices 
   - [Plain Python](#plain-python-no-framework)
   - [Strands Agent](#strands-agent)
   - [LangChain / LangGraph](#langchain--langgraph)
-  - [MCP Bridge (Claude Desktop)](#mcp-bridge-claude-desktop)
+  - [MCP Bridge](#mcp-bridge)
 - [Connection](#connection)
   - [Auto-Discovery](#auto-discovery)
   - [JWT Credentials](#jwt-credentials)
   - [Explicit Configuration](#explicit-configuration)
   - [Environment Variables](#environment-variables)
-  - [Peer-to-Peer Mode](#peer-to-peer-mode-no-infrastructure)
+  - [Device-to-Device Mode](#device-to-device-mode-no-infrastructure)
 - [Tools](#tools)
 - [Event Subscription](#event-subscription)
 - [DeviceConnectMCP — Build Devices with Decorators](#deviceconnectmcp--build-devices-with-decorators)
@@ -34,14 +34,14 @@ Framework-agnostic tools for Device Connect — discover and invoke IoT devices 
 
 ```
   device-connect-sdk          device-connect-server           device-connect-agent-tools
-  (edge SDK)                (server runtime)          (agent SDK — this)
+  (Device Connect SDK)    (server runtime)          (agent SDK — this)
         │                         │                         │
         └──────────── Device Connect Mesh ─────────────────────────┘
 ```
 
-- **[device-connect-sdk](../device-connect-sdk/)** — runs on edge hardware (Raspberry Pi, robots, cameras, sensors)
+- **[device-connect-sdk](../device-connect-sdk/)** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
 - **[device-connect-server](../device-connect-server/)** — runs on servers. Adds registry, security, state, and CLIs
-- **device-connect-agent-tools** — connects AI agents (Strands, LangChain, Claude Desktop) to the device mesh
+- **device-connect-agent-tools** — connects AI agents (Strands, LangChain, MCP) to the device mesh
 
 ## Install
 
@@ -59,7 +59,7 @@ Optional extras:
 |-------|------|
 | `[strands]` | [Strands Agents](https://strandsagents.com) adapter |
 | `[langchain]` | [LangChain](https://python.langchain.com) adapter |
-| `[mcp]` | [FastMCP](https://github.com/jlowin/fastmcp) for Claude Desktop bridge |
+| `[mcp]` | [FastMCP](https://github.com/jlowin/fastmcp) for MCP bridge |
 | `[dev]` | pytest + dev tools |
 
 ```bash
@@ -77,7 +77,7 @@ pip install -e ".[strands]"
                     ┌──────────────────────────┐
                     │      Your AI Agent       │
                     │  (Strands / LangChain /  │
-                    │   Claude Desktop / MCP)  │
+                    │         MCP)             │
                     └────────┬─────────────────┘
                              │  imports adapter
                     ┌────────▼─────────────────────────┐
@@ -132,7 +132,7 @@ connect()
 agent = Agent(
     model=AnthropicModel(model_id="claude-sonnet-4-20250514"),
     tools=[discover_devices, invoke_device],
-    system_prompt="You manage IoT devices on a Device Connect network.",
+    system_prompt="You manage devices on a Device Connect network.",
 )
 
 agent("What devices are online? Get the status of each one.")
@@ -155,11 +155,11 @@ result = agent.invoke({"messages": [{"role": "user", "content": "What devices ar
 print(result["messages"][-1].content)
 ```
 
-### MCP Bridge (Claude Desktop)
+### MCP Bridge
 
-The MCP bridge discovers devices on the Device Connect mesh and exposes them as MCP tools for Claude Desktop.
+The MCP bridge discovers devices on the Device Connect mesh and exposes them as MCP tools.
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Add to your MCP client config (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
@@ -176,7 +176,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
 }
 ```
 
-Each device function appears as a tool in Claude Desktop. Claude can discover devices, invoke functions, and read status — all routed through the Device Connect mesh.
+Each device function appears as a tool in the MCP client. The agent can discover devices, invoke functions, and read status — all routed through the Device Connect mesh.
 
 ## Connection
 
@@ -239,13 +239,13 @@ connect(
 | `TENANT` | Device Connect zone/namespace (default: `"default"`) |
 | `MESSAGING_BACKEND` | `nats`, `zenoh`, or `mqtt` (auto-detected from URL) |
 | `ZENOH_CONNECT` | Zenoh endpoint (e.g., `tcp/localhost:7447`) |
-| `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `p2p` to skip registry and discover via presence |
+| `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `d2d` to skip registry and discover via presence |
 
 Resolution order: explicit parameter > environment variable > auto-discovery.
 
-### Peer-to-Peer Mode (No Infrastructure)
+### Device-to-Device Mode (No Infrastructure)
 
-When using Zenoh without endpoint URLs, `discover_devices()` automatically uses P2P presence-based discovery instead of querying the registry service. No Docker infrastructure needed:
+When using Zenoh without endpoint URLs, `discover_devices()` automatically uses D2D presence-based discovery instead of querying the registry service. No Docker infrastructure needed:
 
 ```bash
 export MESSAGING_BACKEND=zenoh
@@ -254,7 +254,7 @@ export DEVICE_CONNECT_ALLOW_INSECURE=true
 python my_agent.py
 ```
 
-Devices on the same LAN that are also running in P2P mode will be discovered automatically. See [device-connect-sdk](../device-connect-sdk/README.md#peer-to-peer-mode-no-infrastructure) for details.
+Devices on the same LAN that are also running in D2D mode will be discovered automatically. See [device-connect-sdk](../device-connect-sdk/README.md#device-to-device-mode-no-infrastructure) for details.
 
 ## Tools
 

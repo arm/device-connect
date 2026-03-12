@@ -4,7 +4,7 @@
 
 # device-connect-sdk
 
-Lightweight Python SDK for building Device Connect edge devices. You write the device logic; the runtime handles registration, heartbeats, and command routing.
+Lightweight Python SDK for enabling physical devices to work with Device Connect. You write the device logic; the runtime handles registration, heartbeats, and command routing.
 
 ## Contents
 
@@ -12,7 +12,7 @@ Lightweight Python SDK for building Device Connect edge devices. You write the d
 - [Install](#install)
 - [Decorators](#decorators)
 - [Quick Start](#quick-start)
-- [Peer-to-Peer Mode](#peer-to-peer-mode-no-infrastructure)
+- [Device-to-Device Mode](#device-to-device-mode-no-infrastructure)
 - [Credentials](#credentials)
 - [Testing](#testing)
 - [Contributing](#contributing)
@@ -21,14 +21,14 @@ Lightweight Python SDK for building Device Connect edge devices. You write the d
 
 ```
   device-connect-sdk        device-connect-server         device-connect-agent-tools
-  (edge SDK — this)       (server runtime)        (agent SDK)
+  (Device Connect SDK — this) (server runtime)    (agent SDK)
         │                       │                       │
         └──────────── Device Connect Mesh ──────────────────────┘
 ```
 
-- **device-connect-sdk** — runs on edge hardware (Raspberry Pi, robots, cameras, sensors)
+- **device-connect-sdk** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
 - **device-connect-server** — runs on servers. Adds registry, security, state, and CLIs
-- **device-connect-agent-tools** — connects AI agents (Strands, LangChain) to the device mesh
+- **device-connect-agent-tools** — connects AI agents (Strands, LangChain, MCP) to the device mesh
 
 ## Install
 
@@ -52,7 +52,7 @@ pip install "device-connect-sdk @ git+https://github.com/arm/device-connect.git#
 
 ## Quick Start
 
-After installing the Edge SDK, write a driver and run it.
+After installing the Device Connect SDK, write a driver and run it.
 
 ### 1. Write a driver
 
@@ -140,11 +140,11 @@ DEVICE_CONNECT_ALLOW_INSECURE=true ZENOH_CONNECT=tcp/localhost:7447 python my_se
 NATS_CREDENTIALS_FILE=~/.device-connect/credentials/dht22-001.creds.json python examples/dht22_sensor/device_driver.py
 ```
 
-## Peer-to-Peer Mode (No Infrastructure)
+## Device-to-Device Mode (No Infrastructure)
 
 Devices can discover each other directly on the LAN without any infrastructure (no NATS/Zenoh broker, no etcd, no device registry). This uses Zenoh's built-in multicast scouting.
 
-**P2P mode is auto-detected** when no broker endpoint URLs are configured:
+**D2D mode is auto-detected** when no broker endpoint URLs are configured:
 
 ```python
 device = DeviceRuntime(
@@ -163,17 +163,17 @@ Or via environment variables:
 MESSAGING_BACKEND=zenoh DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
 ```
 
-To force P2P mode even when a router URL is set (e.g., router available but no registry):
+To force D2D mode even when a router URL is set (e.g., router available but no registry):
 
 ```bash
-DEVICE_CONNECT_DISCOVERY_MODE=p2p ZENOH_CONNECT=tcp/localhost:7447 DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
+DEVICE_CONNECT_DISCOVERY_MODE=d2d ZENOH_CONNECT=tcp/localhost:7447 DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
 ```
 
 **How it works:** Each device announces its presence (capabilities, identity, status) via `device-connect.{tenant}.{device_id}.presence` messages. Other devices subscribe to a wildcard and maintain an in-memory peer table. Device-to-device RPC works identically to infrastructure mode.
 
 **Trade-offs vs full infrastructure:**
 
-| | Full Infrastructure | P2P Mode |
+| | Full Infrastructure | D2D Mode |
 |---|---|---|
 | Device state | Persistent (etcd) | Ephemeral (in-memory) |
 | Offline tracking | Registry remembers devices | Gone when device stops |
