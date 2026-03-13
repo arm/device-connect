@@ -1,13 +1,13 @@
 """
 Zenoh implementation of the messaging abstraction layer.
 
-Provides peer-to-peer and routed messaging with zero-config local discovery,
+Provides device-to-device and routed messaging with zero-config local discovery,
 in-transit TLS encryption, and high-frequency streaming support.
 
 Key characteristics:
 - Synchronous Zenoh SDK bridged to asyncio via run_in_executor
 - Slash-based key expressions (dots converted from NATS style)
-- Peer-to-peer mode with multicast scouting (no router needed)
+- Device-to-device mode with multicast scouting (no router needed)
 - Router mode for infrastructure deployments
 - Native queryable-based request/reply (hybrid approach)
 - TLS via Zenoh transport config
@@ -92,7 +92,7 @@ class ZenohAdapter(MessagingClient):
     Zenoh implementation of the MessagingClient interface.
 
     Provides full access to Zenoh features including:
-    - Peer-to-peer mode with multicast scouting (no router needed)
+    - Device-to-device mode with multicast scouting (no router needed)
     - Router mode for infrastructure deployments
     - TLS encryption (including mTLS)
     - Wildcard subscriptions (* and **)

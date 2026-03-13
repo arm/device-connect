@@ -17,7 +17,7 @@ async def test_sensor_registers(device_spawner, messaging_backend):
     """A sensor device should register and get a registration ID."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-reg")
     if messaging_backend == "zenoh":
-        assert device._p2p_announcer is not None
+        assert device._d2d_announcer is not None
     else:
         assert device._registration_id is not None
 

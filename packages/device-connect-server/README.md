@@ -4,7 +4,7 @@
 
 # device-connect-server
 
-Server-side runtime for the Device Connect IoT framework. Extends [device-connect-sdk](../device-connect-sdk/) with device registry, security (commissioning, ACLs), distributed state, audit logging, and CLI tools.
+Server-side runtime for the Device Connect framework. Extends [device-connect-sdk](../device-connect-sdk/) with device registry, security (commissioning, ACLs), distributed state, audit logging, and CLI tools.
 
 ## Contents
 
@@ -20,14 +20,14 @@ Server-side runtime for the Device Connect IoT framework. Extends [device-connec
 
 ```
   device-connect-sdk          device-connect-server           device-connect-agent-tools
-  (edge SDK)                (server runtime — this)   (agent SDK)
+  (Device Connect SDK)    (server runtime — this)   (agent SDK)
         │                         │                         │
         └──────────────── Mesh ─────────────────────────────┘
 ```
 
-- **device-connect-sdk** — runs on edge hardware (Raspberry Pi, robots, cameras, sensors)
+- **device-connect-sdk** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
 - **device-connect-server** — runs on servers. Adds registry, security, state, and CLIs
-- **device-connect-agent-tools** — connects AI agents (Strands, LangChain) to the device mesh
+- **device-connect-agent-tools** — connects AI agents (Strands, LangChain, MCP) to the device mesh
 
 ## Install
 

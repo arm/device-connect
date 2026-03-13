@@ -251,10 +251,10 @@ class TestDeviceRuntimeInit:
                 rt = DeviceRuntime(device_id="d")
                 assert rt.messaging_urls == ["nats://nats-env:4222"]
 
-    def test_no_urls_enters_p2p_mode(self):
+    def test_no_urls_enters_d2d_mode(self):
         with patch.dict(os.environ, {}, clear=True):
             rt = DeviceRuntime(device_id="d")
-            assert rt._p2p_mode is True
+            assert rt._d2d_mode is True
             assert rt._messaging_backend == "zenoh"
             assert rt.messaging_urls == []
 
