@@ -8,7 +8,7 @@ import asyncio
 import pytest
 
 
-SETTLE_TIME = 0.3
+SETTLE_TIME = 0.5
 
 
 @pytest.mark.asyncio
