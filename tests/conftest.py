@@ -108,7 +108,7 @@ def _set_backend_env(messaging_backend):
     """Set env vars so SDK/agent-tools auto-detect the correct backend."""
     os.environ["MESSAGING_BACKEND"] = messaging_backend
     if messaging_backend == "zenoh":
-        os.environ["DEVICE_CONNECT_DISCOVERY_MODE"] = "p2p"
+        os.environ["DEVICE_CONNECT_DISCOVERY_MODE"] = "d2d"
         os.environ["ZENOH_CONNECT"] = BACKEND_URLS["zenoh"]
     yield
     os.environ.pop("MESSAGING_BACKEND", None)

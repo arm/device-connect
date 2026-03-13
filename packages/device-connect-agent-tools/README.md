@@ -240,13 +240,13 @@ connect(
 | `NATS_JWT` + `NATS_NKEY_SEED` | Direct JWT auth |
 | `NATS_TLS_CA_FILE` | CA certificate for TLS |
 | `TENANT` | Device Connect zone/namespace (default: `"default"`) |
-| `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `p2p` to skip registry and discover via presence |
+| `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `d2d` to skip registry and discover via presence |
 
 Resolution order: explicit parameter > environment variable > auto-discovery.
 
 ### Device-to-Device Mode (No Infrastructure)
 
-With no endpoint URLs configured, `discover_devices()` automatically uses P2P presence-based discovery (Zenoh multicast scouting) instead of querying the registry service. No Docker infrastructure needed:
+With no endpoint URLs configured, `discover_devices()` automatically uses D2D presence-based discovery (Zenoh multicast scouting) instead of querying the registry service. No Docker infrastructure needed:
 
 ```bash
 export DEVICE_CONNECT_ALLOW_INSECURE=true

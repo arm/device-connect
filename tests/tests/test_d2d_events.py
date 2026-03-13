@@ -94,16 +94,16 @@ async def test_d2d_on_decorator_receives_events(device_spawner, event_capture, n
     robot_task = asyncio.create_task(robot_device.run())
 
     try:
-        # Wait for robot to be ready (registration in NATS mode, announcer in P2P mode)
+        # Wait for robot to be ready (registration in NATS mode, announcer in D2D mode)
         for _ in range(100):
-            if getattr(robot_device, '_p2p_mode', False):
-                if getattr(robot_device, '_p2p_announcer', None) is not None:
+            if getattr(robot_device, '_d2d_mode', False):
+                if getattr(robot_device, '_d2d_announcer', None) is not None:
                     break
             elif robot_device._registration_id is not None:
                 break
             await asyncio.sleep(0.1)
-        if getattr(robot_device, '_p2p_mode', False):
-            assert robot_device._p2p_announcer is not None
+        if getattr(robot_device, '_d2d_mode', False):
+            assert robot_device._d2d_announcer is not None
         else:
             assert robot_device._registration_id is not None
 
@@ -120,14 +120,14 @@ async def test_d2d_on_decorator_receives_events(device_spawner, event_capture, n
             event = await events.wait_for("cleaning_started", timeout=10)
             assert event.data["zone_id"] == "zone-D2D"
             # In Zenoh, the SDK's @on handler may not correctly parse source device_id
-            if not getattr(robot_device, '_p2p_mode', False):
+            if not getattr(robot_device, '_d2d_mode', False):
                 assert event.data["triggered_by"] == "itest-d2d-cam"
 
         # Verify the robot's internal state
         assert len(robot_driver.received_events) >= 1
         # In Zenoh, the SDK's @on handler may not correctly parse source device_id
         # from slash-separated subjects (known SDK limitation)
-        if not getattr(robot_device, '_p2p_mode', False):
+        if not getattr(robot_device, '_d2d_mode', False):
             assert robot_driver.received_events[0]["source_device"] == "itest-d2d-cam"
 
     finally:

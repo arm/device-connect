@@ -18,7 +18,7 @@ tests/
 │   ├── test_d2o_rpc.py                # Device-to-orchestrator RPC
 │   ├── test_sensor_device.py          # Sensor device patterns
 │   ├── test_multi_device_scenario.py  # Multi-device scenarios
-│   ├── test_p2p_discovery.py          # P2P device discovery
+│   ├── test_d2d_discovery.py          # D2D device discovery
 │   ├── test_tools_discover.py         # Agent tools: device discovery
 │   ├── test_tools_invoke.py           # Agent tools: function invocation
 │   ├── test_strands_agent.py          # Strands agent integration (LLM)

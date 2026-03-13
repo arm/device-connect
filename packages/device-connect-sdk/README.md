@@ -118,7 +118,7 @@ asyncio.run(main())
 Save the code above to `my_sensor.py` and run it:
 
 ```bash
-# Zenoh (default) — or omit messaging_urls entirely for P2P mode
+# Zenoh (default) — or omit messaging_urls entirely for D2D mode
 DEVICE_CONNECT_ALLOW_INSECURE=true python my_sensor.py
 
 # Or NATS
@@ -144,7 +144,7 @@ NATS_CREDENTIALS_FILE=~/.device-connect/credentials/dht22-001.creds.json python 
 
 Devices can discover each other directly on the LAN without any infrastructure (no broker, no etcd, no device registry). This uses Zenoh's built-in multicast scouting.
 
-**P2P mode is the default** when no broker endpoint URLs are configured:
+**D2D mode is the default** when no broker endpoint URLs are configured:
 
 ```python
 device = DeviceRuntime(

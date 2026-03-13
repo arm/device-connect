@@ -17,7 +17,7 @@ async def test_camera_registers(device_spawner, messaging_backend):
     """A device_connect_sdk camera should register and get a registration ID."""
     device, driver = await device_spawner.spawn_camera("itest-cam-lifecycle")
     if messaging_backend == "zenoh":
-        assert device._p2p_announcer is not None
+        assert device._d2d_announcer is not None
     else:
         assert device._registration_id is not None
 
@@ -28,7 +28,7 @@ async def test_robot_registers(device_spawner, messaging_backend):
     """A device_connect_sdk robot should register and get a registration ID."""
     device, driver = await device_spawner.spawn_robot("itest-robot-lifecycle")
     if messaging_backend == "zenoh":
-        assert device._p2p_announcer is not None
+        assert device._d2d_announcer is not None
     else:
         assert device._registration_id is not None
 
@@ -39,7 +39,7 @@ async def test_sensor_registers(device_spawner, messaging_backend):
     """A device_connect_sdk sensor should register and get a registration ID."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-lifecycle")
     if messaging_backend == "zenoh":
-        assert device._p2p_announcer is not None
+        assert device._d2d_announcer is not None
     else:
         assert device._registration_id is not None
 

@@ -1,6 +1,6 @@
 """Unit tests for device_connect_sdk.discovery module.
 
-Tests PresenceAnnouncer, PresenceCollector, and P2PRegistry
+Tests PresenceAnnouncer, PresenceCollector, and D2DRegistry
 with mocked messaging (no real Zenoh/NATS connection).
 """
 
@@ -18,7 +18,7 @@ from device_connect_sdk.discovery import (
     PEER_TIMEOUT,
     PresenceAnnouncer,
     PresenceCollector,
-    P2PRegistry,
+    D2DRegistry,
 )
 
 
@@ -40,7 +40,7 @@ def _make_presence_payload(device_id="camera-001", device_type="camera"):
         "identity": {"device_type": device_type, "manufacturer": "Test"},
         "status": {"location": "lab", "ts": "2025-01-01T00:00:00Z"},
         "ts": time.time(),
-        "p2p": True,
+        "d2d": True,
     }).encode()
 
 
@@ -76,7 +76,7 @@ class TestPresenceAnnouncer:
         # Verify payload is valid JSON with expected fields
         payload = json.loads(first_call[0][1])
         assert payload["device_id"] == "cam-01"
-        assert payload["p2p"] is True
+        assert payload["d2d"] is True
 
     @pytest.mark.asyncio
     async def test_burst_then_steady(self):
@@ -334,9 +334,9 @@ class TestPresenceCollector:
         await collector.stop()
 
 
-# ── P2PRegistry ──────────────────────────────────────────────────
+# ── D2DRegistry ──────────────────────────────────────────────────
 
-class TestP2PRegistry:
+class TestD2DRegistry:
     @pytest.mark.asyncio
     async def test_list_devices_delegates_to_collector(self):
         messaging = _make_messaging()
@@ -344,7 +344,7 @@ class TestP2PRegistry:
         await collector.start()
         await collector._on_presence(_make_presence_payload("cam-01", "camera"))
 
-        registry = P2PRegistry(collector)
+        registry = D2DRegistry(collector)
         devices = await registry.list_devices()
         assert len(devices) == 1
         assert devices[0]["device_id"] == "cam-01"
@@ -358,7 +358,7 @@ class TestP2PRegistry:
         await collector._on_presence(_make_presence_payload("cam-01", "camera"))
         await collector._on_presence(_make_presence_payload("robot-01", "robot"))
 
-        registry = P2PRegistry(collector)
+        registry = D2DRegistry(collector)
         cameras = await registry.list_devices(device_type="camera")
         assert len(cameras) == 1
         assert cameras[0]["device_id"] == "cam-01"
@@ -371,7 +371,7 @@ class TestP2PRegistry:
         await collector.start()
         await collector._on_presence(_make_presence_payload("cam-01"))
 
-        registry = P2PRegistry(collector)
+        registry = D2DRegistry(collector)
         device = await registry.get_device("cam-01")
         assert device is not None
 
@@ -381,13 +381,13 @@ class TestP2PRegistry:
 
     @pytest.mark.asyncio
     async def test_accepts_extra_kwargs(self):
-        """P2PRegistry.list_devices should accept location/capabilities/timeout
+        """D2DRegistry.list_devices should accept location/capabilities/timeout
         for API compatibility with RegistryClient, even if it ignores them."""
         messaging = _make_messaging()
         collector = PresenceCollector(messaging, "default")
         await collector.start()
 
-        registry = P2PRegistry(collector)
+        registry = D2DRegistry(collector)
         # Should not raise
         devices = await registry.list_devices(
             device_type="camera", location="lab",

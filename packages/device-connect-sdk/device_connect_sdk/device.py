@@ -8,7 +8,7 @@ Device logic is encapsulated in a DeviceDriver subclass with @rpc
 and @emit decorators.
 
 Messaging Backends:
-    - Zenoh: P2P mesh with mTLS, multicast scouting, streaming
+    - Zenoh: D2D mesh with mTLS, multicast scouting, streaming
     - NATS: Enterprise pub/sub with JWT auth, multi-server clustering, native RPC
     - MQTT: IoT-focused with QoS levels, shared subscriptions, TLS
 
@@ -438,10 +438,10 @@ class DeviceRuntime:
 
         # ===== Messaging Configuration =====
 
-        # P2P mode: no infrastructure needed (Zenoh multicast scouting)
+        # D2D mode: no infrastructure needed (Zenoh multicast scouting)
         # Auto-detected when no broker URLs are available + backend is zenoh,
-        # or forced via DEVICE_CONNECT_DISCOVERY_MODE=p2p
-        self._p2p_mode = os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() == "p2p"
+        # or forced via DEVICE_CONNECT_DISCOVERY_MODE=d2d
+        self._d2d_mode = os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() in ("d2d", "p2p")
 
         # Determine broker URLs
         if messaging_urls:
@@ -456,10 +456,10 @@ class DeviceRuntime:
         elif creds_urls:
             self.messaging_urls = creds_urls
         else:
-            # Default: P2P mode with Zenoh multicast scouting (no broker needed)
+            # Default: D2D mode with Zenoh multicast scouting (no broker needed)
             self.messaging_urls = []
             self._messaging_backend = self._messaging_backend or "zenoh"
-            self._p2p_mode = True
+            self._d2d_mode = True
 
         # Auto-detect backend from URLs if not explicitly specified
         if not self._messaging_backend:
@@ -1009,7 +1009,7 @@ class DeviceRuntime:
                     await self._connect_messaging()
                 while not self.messaging.is_connected:
                     await asyncio.sleep(1)
-                if not self._p2p_mode:
+                if not self._d2d_mode:
                     try:
                         await self._register(force=True)
                     except Exception as e:
@@ -1024,7 +1024,7 @@ class DeviceRuntime:
                 self._registration_expires_at = last_ok + self.ttl
             except Exception as e:
                 self._logger.warning("Heartbeat send failed: %s", e)
-                if time.time() - last_ok > self.ttl and not self._p2p_mode:
+                if time.time() - last_ok > self.ttl and not self._d2d_mode:
                     # Re-register if no successful heartbeat within TTL
                     try:
                         await self._register(force=True)
@@ -1153,7 +1153,7 @@ class DeviceRuntime:
 
         async def on_reconnect():
             self._logger.info(f"{self._messaging_backend.upper()} reconnected")
-            if not self._p2p_mode:
+            if not self._d2d_mode:
                 asyncio.create_task(self._register(force=True))
             await self._notify_conn_state(True)
 
@@ -1331,8 +1331,8 @@ class DeviceRuntime:
             # Start device routines (@periodic decorated methods)
             await self._driver._start_routines()
 
-        if self._p2p_mode:
-            self._logger.info("P2P mode: skipping registry registration, using presence announcements")
+        if self._d2d_mode:
+            self._logger.info("D2D mode: skipping registry registration, using presence announcements")
         else:
             await self._register(force=True)
 
@@ -1344,14 +1344,14 @@ class DeviceRuntime:
         if hasattr(self._driver, 'start_capability_routines'):
             await self._driver.start_capability_routines()
 
-        # Start P2P presence announcer and collector if in P2P mode
-        self._p2p_announcer = None
-        self._p2p_collector = None
-        if self._p2p_mode:
+        # Start D2D presence announcer and collector if in D2D mode
+        self._d2d_announcer = None
+        self._d2d_collector = None
+        if self._d2d_mode:
             from device_connect_sdk.discovery import PresenceAnnouncer, PresenceCollector
             caps = self._driver.capabilities if self._driver else self.capabilities
-            self._p2p_collector = PresenceCollector(self.messaging, self.tenant)
-            self._p2p_announcer = PresenceAnnouncer(
+            self._d2d_collector = PresenceCollector(self.messaging, self.tenant)
+            self._d2d_announcer = PresenceAnnouncer(
                 self.messaging,
                 device_id=self.device_id,
                 tenant=self.tenant,
@@ -1360,9 +1360,9 @@ class DeviceRuntime:
                 status=self.status,
             )
             # Wire up: new peer triggers announcer burst
-            self._p2p_collector._on_new_peer = lambda _pid: self._p2p_announcer.trigger_burst()
-            await self._p2p_collector.start()
-            await self._p2p_announcer.start()
+            self._d2d_collector._on_new_peer = lambda _pid: self._d2d_announcer.trigger_burst()
+            await self._d2d_collector.start()
+            await self._d2d_announcer.start()
 
         # Track background tasks so we can cancel them on shutdown
         self._background_tasks = [
@@ -1387,11 +1387,11 @@ class DeviceRuntime:
             if self._background_tasks:
                 await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
-            # Stop P2P presence components
-            if self._p2p_announcer:
-                await self._p2p_announcer.stop()
-            if self._p2p_collector:
-                await self._p2p_collector.stop()
+            # Stop D2D presence components
+            if self._d2d_announcer:
+                await self._d2d_announcer.stop()
+            if self._d2d_collector:
+                await self._d2d_collector.stop()
 
             # Cleanup driver on shutdown
             if self._driver is not None:
@@ -1490,17 +1490,17 @@ class DeviceRuntime:
         self._driver._device_id = self.device_id
         self._driver._nats_url = self.messaging_urls[0] if self.messaging_urls else None
 
-        # Create and set registry (RegistryClient or P2PRegistry)
-        if self._p2p_mode:
-            from device_connect_sdk.discovery import P2PRegistry, PresenceCollector
+        # Create and set registry (RegistryClient or D2DRegistry)
+        if self._d2d_mode:
+            from device_connect_sdk.discovery import D2DRegistry, PresenceCollector
             # Reuse the collector from run() if available, otherwise create one
-            collector = getattr(self, '_p2p_collector', None)
+            collector = getattr(self, '_d2d_collector', None)
             if collector is None:
                 collector = PresenceCollector(self.messaging, self.tenant)
                 await collector.start()
-                self._p2p_collector = collector
-            self._driver.registry = P2PRegistry(collector)
-            self._logger.debug("P2PRegistry configured for DeviceDriver (no infrastructure)")
+                self._d2d_collector = collector
+            self._driver.registry = D2DRegistry(collector)
+            self._logger.debug("D2DRegistry configured for DeviceDriver (no infrastructure)")
         else:
             try:
                 try:

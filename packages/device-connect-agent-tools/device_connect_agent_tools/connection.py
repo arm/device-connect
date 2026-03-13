@@ -207,7 +207,7 @@ class _DeviceConnectConnection:
 
         self._client: Optional[MessagingClient] = None
 
-        # P2P mode: discover devices via presence instead of registry
+        # D2D mode: discover devices via presence instead of registry
         no_explicit_urls = (
             not nats_url
             and not os.getenv("ZENOH_CONNECT")
@@ -215,16 +215,16 @@ class _DeviceConnectConnection:
             and not os.getenv("NATS_URL")
             and not os.getenv("NATS_URLS")
         )
-        self._p2p_mode = (
-            os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() == "p2p"
+        self._d2d_mode = (
+            os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() in ("d2d", "p2p")
             or (self._backend == "zenoh" and no_explicit_urls)
         )
-        self._p2p_collector = None  # lazy-initialized PresenceCollector
+        self._d2d_collector = None  # lazy-initialized PresenceCollector
 
-        # In P2P mode with Zenoh and no explicit URLs, use empty servers (multicast scouting).
-        # When DEVICE_CONNECT_DISCOVERY_MODE=p2p is forced alongside a router URL (ZENOH_CONNECT),
+        # In D2D mode with Zenoh and no explicit URLs, use empty servers (multicast scouting).
+        # When DEVICE_CONNECT_DISCOVERY_MODE=d2d is forced alongside a router URL (ZENOH_CONNECT),
         # keep the router URL so we can still communicate with devices connected to it.
-        if self._p2p_mode and self._backend == "zenoh" and no_explicit_urls:
+        if self._d2d_mode and self._backend == "zenoh" and no_explicit_urls:
             self._servers = []
 
         # Dedicated event loop for sync-to-async bridging
@@ -278,12 +278,12 @@ class _DeviceConnectConnection:
             self._loop = None
 
     async def _async_close(self) -> None:
-        if self._p2p_collector:
+        if self._d2d_collector:
             try:
-                await self._p2p_collector.stop()
+                await self._d2d_collector.stop()
             except Exception:
                 pass
-            self._p2p_collector = None
+            self._d2d_collector = None
         if self._client:
             try:
                 await asyncio.wait_for(self._client.close(), timeout=2.0)
@@ -303,8 +303,8 @@ class _DeviceConnectConnection:
     async def _async_list_devices(
         self, device_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        if self._p2p_mode:
-            return await self._p2p_list_devices(device_type)
+        if self._d2d_mode:
+            return await self._d2d_list_devices(device_type)
 
         subject = f"device-connect.{self.zone}.discovery"
         params: Dict[str, Any] = {}
@@ -318,19 +318,19 @@ class _DeviceConnectConnection:
         )
         return [_flatten_device(d) for d in result.get("devices", [])]
 
-    async def _p2p_list_devices(
+    async def _d2d_list_devices(
         self, device_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Discover devices via P2P presence (no registry needed)."""
+        """Discover devices via D2D presence (no registry needed)."""
         from device_connect_sdk.discovery import PresenceCollector
 
-        if self._p2p_collector is None:
-            self._p2p_collector = PresenceCollector(self._client, self.zone)
-            await self._p2p_collector.start()
+        if self._d2d_collector is None:
+            self._d2d_collector = PresenceCollector(self._client, self.zone)
+            await self._d2d_collector.start()
             # Wait for initial presence messages to arrive
-            await self._p2p_collector.wait_for_peers(timeout=3.0)
+            await self._d2d_collector.wait_for_peers(timeout=3.0)
 
-        devices = await self._p2p_collector.list_devices(device_type=device_type)
+        devices = await self._d2d_collector.list_devices(device_type=device_type)
         return [_flatten_device(d) for d in devices]
 
     def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:

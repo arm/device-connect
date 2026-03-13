@@ -1,9 +1,9 @@
-"""Peer-to-peer device discovery via presence announcements.
+"""Device-to-device discovery via presence announcements.
 
 When no infrastructure (registry, etcd, router) is available, devices can
 discover each other directly using presence messages over the messaging layer.
 
-Zenoh supports peer-to-peer multicast scouting out of the box — devices on
+Zenoh supports device-to-device multicast scouting out of the box — devices on
 the same LAN find each other without any broker.  This module adds structured
 presence on top of that raw connectivity so that ``discover_devices()`` and
 ``DeviceDriver.list_devices()`` work without a registry service.
@@ -12,10 +12,10 @@ Three classes:
 
 * ``PresenceAnnouncer`` — publishes device metadata periodically
 * ``PresenceCollector`` — subscribes to presence and maintains a peer table
-* ``P2PRegistry`` — drop-in replacement for ``RegistryClient`` backed by
+* ``D2DRegistry`` — drop-in replacement for ``RegistryClient`` backed by
   the collector
 
-Usage from DeviceRuntime (automatic when P2P mode is detected)::
+Usage from DeviceRuntime (automatic when D2D mode is detected)::
 
     announcer = PresenceAnnouncer(messaging, device_id, tenant, caps, identity, status)
     collector = PresenceCollector(messaging, tenant)
@@ -23,7 +23,7 @@ Usage from DeviceRuntime (automatic when P2P mode is detected)::
     await collector.start()
 
     # Same interface as RegistryClient
-    registry = P2PRegistry(collector)
+    registry = D2DRegistry(collector)
     devices = await registry.list_devices()
 """
 
@@ -94,7 +94,7 @@ class PresenceAnnouncer:
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             },
             "ts": time.time(),
-            "p2p": True,
+            "d2d": True,
         }
         return json.dumps(payload).encode()
 
@@ -114,7 +114,7 @@ class PresenceAnnouncer:
             self.probe_subject, self._on_probe,
         )
         self._task = asyncio.create_task(self._loop())
-        logger.info("P2P presence announcer started for %s", self._device_id)
+        logger.info("D2D presence announcer started for %s", self._device_id)
 
     async def _on_probe(self, data: bytes, reply_subject: Optional[str] = None) -> None:
         """Respond to a discovery probe with an immediate presence publish."""
@@ -187,7 +187,7 @@ class PresenceCollector:
         self._sub = await self._messaging.subscribe(subject, self._on_presence)
         self._prune_task = asyncio.create_task(self._prune_loop())
         self._started = True
-        logger.info("P2P presence collector listening on %s", subject)
+        logger.info("D2D presence collector listening on %s", subject)
 
     async def stop(self) -> None:
         if self._sub is not None:
@@ -222,7 +222,7 @@ class PresenceCollector:
             self._peers[device_id] = payload
 
         if is_new:
-            logger.info("P2P: discovered peer %s", device_id)
+            logger.info("D2D: discovered peer %s", device_id)
             if self._on_new_peer:
                 try:
                     self._on_new_peer(device_id)
@@ -241,7 +241,7 @@ class PresenceCollector:
                     ]
                     for did in stale:
                         del self._peers[did]
-                        logger.info("P2P: peer %s timed out", did)
+                        logger.info("D2D: peer %s timed out", did)
         except asyncio.CancelledError:
             raise
 
@@ -290,11 +290,11 @@ class PresenceCollector:
             return list(self._peers.values())
 
 
-class P2PRegistry:
+class D2DRegistry:
     """Drop-in replacement for ``RegistryClient`` backed by a ``PresenceCollector``.
 
     Exposes the same ``list_devices`` / ``get_device`` interface so that
-    ``DeviceDriver.list_devices()`` works transparently in P2P mode.
+    ``DeviceDriver.list_devices()`` works transparently in D2D mode.
     """
 
     def __init__(self, collector: PresenceCollector):
