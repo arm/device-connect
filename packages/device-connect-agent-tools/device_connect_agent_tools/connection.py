@@ -206,6 +206,8 @@ class _DeviceConnectConnection:
                 self._servers = ["tls://localhost:4222"]
 
         self._client: Optional[MessagingClient] = None
+        self._inbox: Dict[str, List[Dict[str, Any]]] = {}
+        self._sync_subs: Dict[str, Any] = {}
 
         # D2D mode: discover devices via presence instead of registry
         no_explicit_urls = (
@@ -375,6 +377,88 @@ class _DeviceConnectConnection:
             subject, json.dumps(rpc_payload).encode(), timeout=timeout,
         )
         return json.loads(response_data)
+
+    # ── Broadcast ────────────────────────────────────────────────────
+
+    def broadcast(
+        self,
+        function: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: float = 5.0,
+    ) -> List[Dict[str, Any]]:
+        """Invoke a function on all discovered devices and collect results."""
+        devices = self.list_devices()
+        results = []
+        for d in devices:
+            device_id = d["device_id"]
+            try:
+                r = self.invoke(device_id, function, params, timeout=timeout)
+                results.append({"device_id": device_id, "result": r})
+            except Exception as e:
+                results.append({"device_id": device_id, "error": str(e)})
+        return results
+
+    # ── Sync subscription + inbox ────────────────────────────────────
+
+    def subscribe_buffered(
+        self,
+        subject: str,
+        name: Optional[str] = None,
+    ) -> str:
+        """Subscribe to a messaging subject, buffering messages in the inbox.
+
+        Args:
+            subject: Subject pattern (supports ``*`` and ``>`` wildcards).
+            name: Inbox key for buffered messages (defaults to subject).
+
+        Returns:
+            The inbox name.
+        """
+        name = name or subject
+        self._inbox[name] = []
+
+        async def _do_subscribe():
+            async def _on_msg(data: bytes, msg_subject: str, reply: str = ""):
+                try:
+                    payload = json.loads(data.decode())
+                except Exception:
+                    payload = {"raw": data.decode()[:500]}
+                # Store as (subject, data) tuple
+                self._inbox[name].append((msg_subject, payload))
+                # Trim to prevent unbounded growth
+                if len(self._inbox[name]) > 1000:
+                    self._inbox[name] = self._inbox[name][-500:]
+
+            return await self._client.subscribe_with_subject(subject, callback=_on_msg)
+
+        self._sync_subs[name] = self._run(_do_subscribe())
+        logger.debug("Sync subscription created: %s -> inbox[%s]", subject, name)
+        return name
+
+    def unsubscribe_buffered(self, name: str) -> None:
+        """Unsubscribe a buffered subscription by inbox name."""
+        sub = self._sync_subs.pop(name, None)
+        if sub is not None:
+            try:
+                self._run(sub.unsubscribe())
+            except Exception:
+                pass
+        self._inbox.pop(name, None)
+
+    def get_inbox(
+        self, name: Optional[str] = None,
+    ) -> Dict[str, list]:
+        """Get buffered messages from sync subscriptions.
+
+        Args:
+            name: Specific inbox key, or None for all inboxes.
+
+        Returns:
+            Dict mapping inbox names to lists of ``(subject, data)`` tuples.
+        """
+        if name is not None:
+            return {name: list(self._inbox.get(name, []))}
+        return {k: list(v) for k, v in self._inbox.items()}
 
     # ── Async subscription ──────────────────────────────────────────
 
