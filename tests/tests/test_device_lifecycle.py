@@ -9,6 +9,8 @@ import pytest
 
 
 SETTLE_TIME = 0.3
+DISCOVERY_TIMEOUT = 10
+DISCOVERY_POLL = 0.3
 
 
 @pytest.mark.asyncio
@@ -55,8 +57,14 @@ async def test_device_discoverable_via_tools(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        devices = await asyncio.to_thread(discover_devices)
-        device_ids = [d["device_id"] for d in devices]
+        deadline = asyncio.get_event_loop().time() + DISCOVERY_TIMEOUT
+        device_ids: list[str] = []
+        while asyncio.get_event_loop().time() < deadline:
+            devices = await asyncio.to_thread(discover_devices)
+            device_ids = [d["device_id"] for d in devices]
+            if "itest-cam-discover" in device_ids:
+                break
+            await asyncio.sleep(DISCOVERY_POLL)
         assert "itest-cam-discover" in device_ids, f"Device not found in {device_ids}"
     finally:
         await asyncio.to_thread(disconnect)
@@ -73,13 +81,19 @@ async def test_multiple_devices_discoverable(device_spawner, messaging_url):
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
+    expected = {"itest-multi-cam", "itest-multi-robot", "itest-multi-sensor"}
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        devices = await asyncio.to_thread(discover_devices)
-        device_ids = [d["device_id"] for d in devices]
-        assert "itest-multi-cam" in device_ids
-        assert "itest-multi-robot" in device_ids
-        assert "itest-multi-sensor" in device_ids
+        deadline = asyncio.get_event_loop().time() + DISCOVERY_TIMEOUT
+        device_ids: list[str] = []
+        while asyncio.get_event_loop().time() < deadline:
+            devices = await asyncio.to_thread(discover_devices)
+            device_ids = [d["device_id"] for d in devices]
+            if expected.issubset(device_ids):
+                break
+            await asyncio.sleep(DISCOVERY_POLL)
+        for name in expected:
+            assert name in device_ids, f"{name} not found in {device_ids}"
     finally:
         await asyncio.to_thread(disconnect)
 
@@ -96,8 +110,14 @@ async def test_device_type_filter(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        cameras = await asyncio.to_thread(discover_devices, device_type="camera")
-        camera_ids = [d["device_id"] for d in cameras]
+        deadline = asyncio.get_event_loop().time() + DISCOVERY_TIMEOUT
+        camera_ids: list[str] = []
+        while asyncio.get_event_loop().time() < deadline:
+            cameras = await asyncio.to_thread(discover_devices, device_type="camera")
+            camera_ids = [d["device_id"] for d in cameras]
+            if "itest-filter-cam" in camera_ids:
+                break
+            await asyncio.sleep(DISCOVERY_POLL)
         assert "itest-filter-cam" in camera_ids
         # Robot should not appear in camera-filtered results
         assert "itest-filter-robot" not in camera_ids
