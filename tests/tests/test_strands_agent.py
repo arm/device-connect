@@ -29,7 +29,7 @@ def _get_api_key():
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_strands_agent_discovers_devices(device_spawner):
+async def test_strands_agent_discovers_devices(device_spawner, messaging_url):
     """Strands Agent should use discover_devices() tool to find registered devices."""
     api_key, env_var = _get_api_key()
     if not api_key:
@@ -41,7 +41,7 @@ async def test_strands_agent_discovers_devices(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
-    connect(nats_url="nats://localhost:4222")
+    connect(nats_url=messaging_url)
     try:
         from strands import Agent
 
@@ -67,7 +67,7 @@ async def test_strands_agent_discovers_devices(device_spawner):
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_strands_agent_invokes_device(device_spawner):
+async def test_strands_agent_invokes_device(device_spawner, messaging_url):
     """Strands Agent should use invoke_device() to call sensor get_reading."""
     api_key, env_var = _get_api_key()
     if not api_key:
@@ -80,7 +80,7 @@ async def test_strands_agent_invokes_device(device_spawner):
 
     from device_connect_agent_tools import connect, disconnect, discover_devices, invoke_device
 
-    connect(nats_url="nats://localhost:4222")
+    connect(nats_url=messaging_url)
     try:
         from strands import Agent
 
