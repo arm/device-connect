@@ -30,7 +30,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e "packages/device-connect-sdk[dev]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-sdk[dev]"
       - name: Run unit tests
         run: pytest packages/device-connect-sdk/tests/ -v --timeout=30 --tb=short
 
@@ -46,8 +46,8 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/device-connect-sdk
-          pip install -e "packages/device-connect-server[all]"
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
       - name: Run unit tests
         run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short
 
@@ -63,8 +63,8 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/device-connect-sdk
-          pip install -e "packages/device-connect-agent-tools[strands,dev]"
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands,dev]"
       - name: Run unit tests
         run: pytest packages/device-connect-agent-tools/tests/test_connection_unit.py packages/device-connect-agent-tools/tests/test_tools_unit.py packages/device-connect-agent-tools/tests/test_langchain_adapter.py packages/device-connect-agent-tools/tests/test_strands_adapter.py -v --timeout=30 --tb=short
 
@@ -103,9 +103,9 @@ jobs:
       - name: Install all packages
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/device-connect-sdk
-          pip install -e "packages/device-connect-server[all]"
-          pip install -e "packages/device-connect-agent-tools[strands]"
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands]"
           pip install -r tests/requirements.txt
       - name: Start infrastructure
         working-directory: tests
@@ -161,9 +161,9 @@ jobs:
       - name: Install all packages
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/device-connect-sdk
-          pip install -e "packages/device-connect-server[all]"
-          pip install -e "packages/device-connect-agent-tools[strands]"
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands]"
           pip install -r tests/requirements.txt
       - name: Start infrastructure
         working-directory: tests
@@ -206,7 +206,7 @@ jobs:
       - name: Install packages
         run: |
           python -m pip install --upgrade pip
-          pip install -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
           pip install -r tests/requirements.txt
       - name: Start infrastructure
         working-directory: tests

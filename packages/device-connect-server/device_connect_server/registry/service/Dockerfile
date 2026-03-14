@@ -5,7 +5,7 @@ WORKDIR /app
 # Copy only the registry service requirements
 COPY packages/device-connect-server/device_connect_server/registry/service/requirements.txt .
 RUN pip install --upgrade pip setuptools
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --only-binary eclipse-zenoh -r requirements.txt
 
 # Install device-connect-sdk from sibling package
 COPY packages/device-connect-sdk/ /tmp/device-connect-sdk/
