@@ -2,15 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Build tools needed to compile native extensions (e.g. eclipse-zenoh via maturin)
-RUN apt-get update \
- && apt-get install -y --no-install-recommends gcc libc6-dev \
- && rm -rf /var/lib/apt/lists/*
-
 # Copy only the registry service requirements
 COPY packages/device-connect-server/device_connect_server/registry/service/requirements.txt .
 RUN pip install --upgrade pip setuptools
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --only-binary eclipse-zenoh -r requirements.txt
 
 # Install device-connect-sdk from sibling package
 COPY packages/device-connect-sdk/ /tmp/device-connect-sdk/
