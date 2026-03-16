@@ -6,7 +6,24 @@ build-backend = "setuptools.build_meta"
 name = "device-connect-agent-tools"
 version = "0.1.0"
 description = "Framework-agnostic tools for Device Connect — discover and invoke IoT devices over NATS/Zenoh"
+readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Arm", email = "opensource@arm.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "device-connect-sdk>=0.1.0",
 ]
@@ -20,3 +37,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/arm/device-connect"
+Repository = "https://github.com/arm/device-connect.git"
+Issues = "https://github.com/arm/device-connect/issues"
+License = "https://github.com/arm/device-connect?tab=Apache-2.0-1-ov-file"
+"Code of Conduct" = "https://github.com/arm/device-connect?tab=coc-ov-file"
+Contributing = "https://github.com/arm/device-connect?tab=contributing-ov-file"
+Security = "https://github.com/arm/device-connect?tab=security-ov-file"
