@@ -1,6 +1,6 @@
 # Roadmap
 
-## P0 — Required before production use
+## P0
 
 1. **Default-deny ACL** — switch the ACL framework from its current permissive defaults (`visible_to: ["*"]`) to deny-by-default, so every device and caller must be explicitly allowed. Enforce RPC parameter validation against type-hint schemas at the dispatch boundary before a handler ever executes.
 
@@ -10,7 +10,7 @@
 
 4. **PyPI publishing** — add CI/CD steps to build and publish `device-connect-sdk`, `device-connect-server`, and `device-connect-agent-tools` to PyPI on tagged releases. Include dependency lock files for reproducible installs across all three packages.
 
-## P1 — Production hardening and operability
+## P1
 
 5. **Kubernetes manifests** — provide production-ready Helm charts for the Zenoh router, etcd, and registry stack. Include horizontal scaling, readiness/liveness probes, and high-availability deployment documentation to move beyond the current Docker Compose setup.
 
