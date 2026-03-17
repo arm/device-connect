@@ -134,8 +134,7 @@ devctl list
 from strands_robots import Robot
 
 robot = Robot("so100")
-# Device Connect auto-initializes — the robot is immediately
-# discoverable and invocable by AI agents on the network.
+robot.run()  # discoverable and invocable by AI agents and devices on the network
 ```
 
 See [`strands_robots/device_connect/`](https://github.com/cagataycali/strands-gtc-nvidia/tree/main/strands_robots/device_connect) for the full integration.
