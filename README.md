@@ -17,12 +17,12 @@ This is a monorepo containing three packages and a cross-package integration tes
 
 ```
 ┌──────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
-│   Edge Device    │     │   Zenoh Mesh     │     │     AI Agent        │
+│   Device         │     │   Pub Sub Mesh   │     │     AI Agent        │
 │  (SDK)           │     │                  │     │  (agent-tools)      │
-│                  │     │  P2P multicast   │     │                     │
-│  DeviceDriver    │◄───►│    — or —        │◄───►│  discover_devices() │
-│  @rpc  @emit     │     │  Zenoh router    │     │  invoke_device()    │
-│  @periodic  @on  │     │  (:7447)         │     │  Strands / LC / MCP │
+│                  │     │                  │     │                     │
+│  DeviceDriver    │◄───►│                  │◄───►│  discover_devices() │
+│  @rpc  @emit     │     │  Pub Sub router  │     │  invoke_device()    │
+│  @periodic  @on  │     │                  │     │  Strands / LC / MCP │
 └──────────────────┘     └────────┬─────────┘     └─────────────────────┘
                                   │
                          ┌────────┴─────────┐
@@ -32,7 +32,7 @@ This is a monorepo containing three packages and a cross-package integration tes
                          └──────────────────┘
 ```
 
-## Quick Start: P2P Mode (Zero Infrastructure)
+## Quick Start: D2D Mode (Zero Infrastructure)
 
 The fastest way to get started — no Docker, no broker, no configuration. Zenoh discovers peers on the local network via multicast scouting.
 
@@ -78,7 +78,7 @@ asyncio.run(main())
 DEVICE_CONNECT_ALLOW_INSECURE=true python my_sensor.py
 ```
 
-The device starts in P2P mode automatically — no URLs needed. Any other Device Connect device on the same network discovers it instantly.
+The device starts in D2D mode automatically — no URLs needed. Any other Device Connect device on the same network discovers it instantly.
 
 ### 4. Discover and invoke from an agent
 
