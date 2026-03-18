@@ -64,7 +64,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from device_connect_sdk.types import (
@@ -280,7 +280,7 @@ class DeviceDriver(ABC):
         Returns:
             DeviceIdentity with manufacturer, model, etc.
         """
-        return DeviceIdentity()
+        return DeviceIdentity(device_type=self.device_type)
 
     @property
     def status(self) -> DeviceStatus:
@@ -295,27 +295,23 @@ class DeviceDriver(ABC):
         """
         return DeviceStatus()
 
-    @abstractmethod
     async def connect(self) -> None:
         """Initialize connection to hardware.
 
         Called by DeviceRuntime before starting the main run loop.
-        Implement to establish connections to cameras, sensors,
+        Override to establish connections to cameras, sensors,
         actuators, or other hardware.
 
         Raises:
             ConnectionError: If connection fails
         """
-        pass
 
-    @abstractmethod
     async def disconnect(self) -> None:
         """Cleanup connection to hardware.
 
-        Called by DeviceRuntime during shutdown. Implement to
+        Called by DeviceRuntime during shutdown. Override to
         gracefully close connections and release resources.
         """
-        pass
 
     async def invoke(self, function_name: str, **params: Any) -> Any:
         """Invoke a device function by name.

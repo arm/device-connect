@@ -38,16 +38,17 @@ The fastest way to get started — no Docker, no broker, no configuration. Zenoh
 ### 1. Install the SDK
 
 ```bash
-pip install device-connect-sdk
+curl -LsSf https://astral.sh/uv/install.sh | sh  # skip if uv already installed
+uv venv && source .venv/bin/activate && uv pip install device-connect-sdk
 ```
 
 ### 2. Write a device driver
 
 ```python
-# my_sensor.py
+# sensor.py
 import asyncio
 from device_connect_sdk import DeviceRuntime
-from device_connect_sdk.drivers import DeviceDriver, rpc, emit
+from device_connect_sdk.drivers import DeviceDriver, rpc
 
 class SensorDriver(DeviceDriver):
     device_type = "sensor"
@@ -57,88 +58,43 @@ class SensorDriver(DeviceDriver):
         """Return the current sensor reading."""
         return {"temperature": 22.5, "humidity": 45}
 
-    @emit()
-    async def alert(self, level: str, message: str):
-        pass
-
-async def main():
-    device = DeviceRuntime(
-        driver=SensorDriver(),
-        device_id="sensor-001",
-    )
-    await device.run()
-
-asyncio.run(main())
+asyncio.run(DeviceRuntime(driver=SensorDriver(), device_id="sensor-001").run())
 ```
 
 ### 3. Run it
 
 ```bash
-DEVICE_CONNECT_ALLOW_INSECURE=true python my_sensor.py
+TERM=xterm screen -S sensor
+source .venv/bin/activate
+DEVICE_CONNECT_ALLOW_INSECURE=true python sensor.py
+# Ctrl+a d to detach, screen -r sensor to reattach
 ```
 
 The device starts in D2D mode automatically — no URLs needed. Any other Device Connect device on the same network discovers it instantly.
 
-> **Note:** `DEVICE_CONNECT_ALLOW_INSECURE=true` skips TLS verification and is intended for local development only. Production deployments should use proper certificates.
+> **Note:** `DEVICE_CONNECT_ALLOW_INSECURE=true` skips TLS and is intended for local development only.
 
 ### 4. Discover and invoke from an agent
 
-In a second terminal:
-
 ```bash
-pip install device-connect-agent-tools
+source .venv/bin/activate
+uv pip install device-connect-agent-tools
 ```
 
-```python
-import asyncio
+```bash
+DEVICE_CONNECT_ALLOW_INSECURE=true python -c "
 from device_connect_agent_tools import connect, discover_devices, invoke_device
-
-async def main():
-    await connect()
-    devices = await discover_devices(device_type="sensor")
-    print(devices)
-
-    result = await invoke_device("sensor-001", "get_reading")
-    print(result)  # {"temperature": 22.5, "humidity": 45}
-
-asyncio.run(main())
+connect()
+devices = discover_devices(device_type='sensor')
+print(devices)
+result = invoke_device('sensor-001', 'get_reading')
+print(result)  # {'temperature': 22.5, 'humidity': 45}
+"
 ```
 
 ## Quick Start: With Infrastructure
 
-For production deployments with a Zenoh router, device registry, and distributed state. Infrastructure gives you distributed state and locks, cross-network routing, and a device registry with commissioning and lease management.
-
-```bash
-# Start Zenoh router + etcd + registry
-cd packages/device-connect-server
-docker compose -f infra/docker-compose-dev.yml up -d
-
-# Connect your device to the router
-DEVICE_CONNECT_ALLOW_INSECURE=true \
-ZENOH_CONNECT=tcp/localhost:7447 \
-python my_sensor.py
-
-# Verify with devctl
-pip install device-connect-server
-devctl list
-```
-
-## Companion: Strands Robots
-
-[**Strands Robots**](https://github.com/cagataycali/strands-gtc-nvidia) provides production-ready Device Connect drivers for robotics:
-
-- **`RobotDeviceDriver`** — wraps any Strands robot (SO-100, Koch, etc.) as a Device Connect device with `execute`, `stop`, `getStatus` RPCs and `taskStarted`/`taskComplete` events
-- **`SimulationDeviceDriver`** — wraps MuJoCo/Newton/Isaac Sim simulations as devices
-- **`ReachyMiniDriver`** — specialized driver for Pollen Reachy Mini robots
-
-```python
-from strands_robots import Robot
-
-robot = Robot("so100")
-robot.run()  # discoverable and invocable by AI agents and devices on the network
-```
-
-See [`strands_robots/device_connect/`](https://github.com/cagataycali/strands-gtc-nvidia/tree/main/strands_robots/device_connect) for the full integration.
+For quick start with a router, device registry, and distributed state — see [`packages/device-connect-server`](packages/device-connect-server/README.md).
 
 ## Development
 
@@ -168,6 +124,10 @@ DEVICE_CONNECT_ALLOW_INSECURE=true python3 -m pytest tests/ -v -m "not llm"
 ```
 
 See [tests/README.md](tests/README.md) for the full test matrix.
+
+## Security
+
+Device Connect supports encryption in transit (TLS/mTLS), JWT/NKey authentication for NATS, device commissioning with PIN validation, and per-device ACLs. This is an area of active development to be further expanded in upcoming releases.
 
 ## License
 
