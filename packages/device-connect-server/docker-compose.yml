@@ -1,0 +1,45 @@
+services:
+  nats-jwt:
+    image: nats:2.10
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - ./security_infra/nats-jwt-generated.conf:/etc/nats/nats-jwt.conf:ro
+    command: ["-c", "/etc/nats/nats-jwt.conf"]
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  device-registry-service:
+    build:
+      context: .
+      dockerfile: device_connect_server/registry/service/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      TENANT: default
+      NATS_URL: nats://nats-jwt:4222
+      NATS_CREDENTIALS_FILE: /app/credentials/registry.creds.json
+      ETCD_HOST: etcd
+      ETCD_PORT: "2379"
+    volumes:
+      - ./security_infra/credentials:/app/credentials:ro
+    depends_on:
+      nats-jwt:
+        condition: service_started
+      etcd:
+        condition: service_healthy

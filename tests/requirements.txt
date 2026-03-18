@@ -1,0 +1,22 @@
+# Cross-repo integration test dependencies.
+#
+# Install all packages in editable mode:
+#   pip install -e ../device-connect-sdk \
+#               -e ../device-connect-server[all] \
+#               -e ../device-connect-agent-tools[strands] \
+#               -r requirements.txt
+
+# Test framework
+pytest>=8.0
+pytest-asyncio>=0.23
+pytest-timeout>=2.0
+
+# Direct NATS access for test fixtures (no device-connect-server dependency)
+nats-py>=2.5.0,<3
+nkeys>=0.2.0
+
+# HTTP client for health checks
+aiohttp>=3.9.0
+
+# LLM integration (for Tier 2 tests)
+strands-agents[openai,anthropic]>=1.1.0,<2

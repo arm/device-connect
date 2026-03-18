@@ -1,0 +1,23 @@
+Copyright 2024-2026 Arm Limited
+PROPRIETARY AND CONFIDENTIAL
+All Rights Reserved.
+
+This software and associated documentation files (the "Software") are the
+proprietary and confidential property of Arm Limited. The Software is
+provided under a separate Non-Disclosure Agreement (NDA) and may not be
+used, copied, modified, merged, published, distributed, sublicensed, or
+sold except as expressly permitted by that agreement.
+
+Unauthorized copying, distribution, or use of this Software is strictly
+prohibited and may result in civil and criminal penalties.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL ARM
+LIMITED BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM
+THE USE OF THE SOFTWARE.
+
+---
+
+NOTE: This software is intended for future release under the Apache License,
+Version 2.0. The open-source license will become effective upon public release.

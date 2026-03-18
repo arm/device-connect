@@ -1,0 +1,225 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1-5'  # Weekdays at 6 AM UTC
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  # ── Unit tests (parallel, no Docker) ──────────────────────────
+  unit-tests-sdk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-sdk[dev]"
+      - name: Run unit tests
+        run: pytest packages/device-connect-sdk/tests/ -v --timeout=30 --tb=short
+
+  unit-tests-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
+      - name: Run unit tests
+        run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short
+
+  unit-tests-agent-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands,dev]"
+      - name: Run unit tests
+        run: pytest packages/device-connect-agent-tools/tests/test_connection_unit.py packages/device-connect-agent-tools/tests/test_tools_unit.py packages/device-connect-agent-tools/tests/test_langchain_adapter.py packages/device-connect-agent-tools/tests/test_strands_adapter.py -v --timeout=30 --tb=short
+
+  # ── Lint ───────────────────────────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint all packages
+        run: |
+          ruff check packages/device-connect-sdk/device_connect_sdk/
+          ruff check packages/device-connect-server/device_connect_server/
+          ruff check packages/device-connect-agent-tools/device_connect_agent_tools/
+
+  # ── Tier 1: Integration tests (no LLM) ────────────────────────
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [unit-tests-sdk, unit-tests-server, unit-tests-agent-tools]
+    env:
+      DEVICE_CONNECT_ALLOW_INSECURE: 'true'
+      NATS_URL: 'nats://localhost:4222'
+      ZENOH_CONNECT: 'tcp/localhost:7447'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install all packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands]"
+          pip install -r tests/requirements.txt
+      - name: Start infrastructure
+        working-directory: tests
+        run: |
+          docker compose -f docker-compose-itest.yml up -d
+          for c in itest-nats itest-etcd itest-zenoh; do
+            echo "Waiting for $c..."
+            for i in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = "healthy" ] && break; sleep 1; done
+          done
+          sleep 3
+      - name: Run Tier 1 integration tests
+        working-directory: tests
+        run: pytest tests/ -v --timeout=120 -m "not llm" --tb=short
+      - name: Collect logs on failure
+        if: failure()
+        working-directory: tests
+        run: |
+          echo "=== NATS ===" > itest-logs.txt
+          docker logs itest-nats >> itest-logs.txt 2>&1
+          echo "=== Zenoh ===" >> itest-logs.txt
+          docker logs itest-zenoh >> itest-logs.txt 2>&1
+          echo "=== etcd ===" >> itest-logs.txt
+          docker logs itest-etcd >> itest-logs.txt 2>&1
+          echo "=== Registry ===" >> itest-logs.txt
+          docker logs itest-registry >> itest-logs.txt 2>&1
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: itest-logs-tier1
+          path: tests/itest-logs.txt
+          retention-days: 7
+      - name: Stop infrastructure
+        if: always()
+        working-directory: tests
+        run: docker compose -f docker-compose-itest.yml down -v --remove-orphans
+
+  # ── Tier 2: LLM tests ─────────────────────────────────────────
+  llm-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: integration-tests
+    env:
+      DEVICE_CONNECT_ALLOW_INSECURE: 'true'
+      NATS_URL: 'nats://localhost:4222'
+      ZENOH_CONNECT: 'tcp/localhost:7447'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install all packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands]"
+          pip install -r tests/requirements.txt
+      - name: Start infrastructure
+        working-directory: tests
+        run: |
+          docker compose -f docker-compose-itest.yml up -d
+          for c in itest-nats itest-etcd itest-zenoh; do
+            echo "Waiting for $c..."
+            for i in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = "healthy" ] && break; sleep 1; done
+          done
+          sleep 3
+      - name: Run LLM integration tests
+        working-directory: tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY not set, skipping LLM tests"
+            exit 0
+          fi
+          pytest tests/ -v --timeout=120 -m "llm" --tb=short
+        continue-on-error: true
+      - name: Stop infrastructure
+        if: always()
+        working-directory: tests
+        run: docker compose -f docker-compose-itest.yml down -v --remove-orphans
+
+  # ── Messaging conformance ──────────────────────────────────────
+  conformance-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: integration-tests
+    env:
+      DEVICE_CONNECT_ALLOW_INSECURE: 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install -r tests/requirements.txt
+      - name: Start infrastructure
+        working-directory: tests
+        run: |
+          docker compose -f docker-compose-itest.yml up -d
+          for c in itest-nats itest-etcd itest-zenoh; do
+            echo "Waiting for $c..."
+            for i in $(seq 1 60); do [ "$(docker inspect -f '{{.State.Health.Status}}' "$c" 2>/dev/null)" = "healthy" ] && break; sleep 1; done
+          done
+      - name: Run messaging conformance tests
+        working-directory: tests
+        run: pytest tests/test_messaging_conformance.py -v --timeout=60 -m conformance --tb=short
+      - name: Stop infrastructure
+        if: always()
+        working-directory: tests
+        run: docker compose -f docker-compose-itest.yml down -v --remove-orphans

@@ -1,0 +1,99 @@
+# Docker Compose for cross-repo integration tests.
+# Dev mode: no TLS, no JWT auth. Matches DEVICE_CONNECT_ALLOW_INSECURE=true.
+#
+# Usage:
+#   docker compose -f docker-compose-itest.yml up -d
+#   pytest tests/ -v -m "not llm" --timeout=60
+
+services:
+  # NATS broker with JetStream (no auth)
+  nats:
+    image: nats:2.10-alpine
+    container_name: itest-nats
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - itest-net
+
+  # etcd — service registry backend
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: itest-etcd
+    environment:
+      - ETCD_NAME=etcd0
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd:2379
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_INITIAL_CLUSTER=etcd0=http://etcd:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+      - ETCD_INITIAL_CLUSTER_TOKEN=itest-cluster
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd-data:/etcd-data
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - itest-net
+
+  # Device registry service (dev mode, built from device-connect-server)
+  device-registry-service:
+    build:
+      context: ..
+      dockerfile: packages/device-connect-server/device_connect_server/registry/service/Dockerfile
+    container_name: itest-registry
+    environment:
+      - MESSAGING_BACKEND=nats
+      - NATS_URL=nats://nats:4222
+      - ETCD_HOST=etcd
+      - ETCD_PORT=2379
+      - DEVICE_TTL=15
+    depends_on:
+      nats:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    networks:
+      - itest-net
+    restart: unless-stopped
+
+  # Zenoh router (no auth, no multicast scouting — use router mode for tests)
+  zenoh:
+    image: eclipse/zenoh:latest
+    container_name: itest-zenoh
+    command: ["--no-multicast-scouting", "--rest-http-port", "8000"]
+    ports:
+      - "7447:7447"
+      - "8001:8000"     # REST plugin (8000 taken by registry)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/@/local/sessions || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - itest-net
+
+networks:
+  itest-net:
+    driver: bridge
+
+volumes:
+  nats-data:
+  etcd-data:
