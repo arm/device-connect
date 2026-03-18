@@ -17,17 +17,16 @@ This is a monorepo containing three packages and a cross-package integration tes
 
 ```
 ┌──────────────────┐     ┌──────────────────┐     ┌─────────────────────┐
-│   Device         │     │   Pub Sub Mesh   │     │     AI Agent        │
+│  Devices         │     │                  │     │  AI Agents          │
 │  (SDK)           │     │                  │     │  (agent-tools)      │
-│                  │     │                  │     │                     │
-│  DeviceDriver    │◄───►│                  │◄───►│  discover_devices() │
-│  @rpc  @emit     │     │  Pub Sub router  │     │  invoke_device()    │
+│  DeviceDriver    │◄───►│     Pub Sub      │◄───►│  discover_devices() │
+│  @rpc  @emit     │     │                  │     │  invoke_device()    │
 │  @periodic  @on  │     │                  │     │  Strands / LC / MCP │
 └──────────────────┘     └────────┬─────────┘     └─────────────────────┘
                                   │
                          ┌────────┴─────────┐
                          │  Server (opt.)   │
-                         │  Registry, etcd  │
+                         │  Registry, KV    │
                          │  Security, CLIs  │
                          └──────────────────┘
 ```
@@ -80,6 +79,8 @@ DEVICE_CONNECT_ALLOW_INSECURE=true python my_sensor.py
 
 The device starts in D2D mode automatically — no URLs needed. Any other Device Connect device on the same network discovers it instantly.
 
+> **Note:** `DEVICE_CONNECT_ALLOW_INSECURE=true` skips TLS verification and is intended for local development only. Production deployments should use proper certificates.
+
 ### 4. Discover and invoke from an agent
 
 In a second terminal:
@@ -105,7 +106,7 @@ asyncio.run(main())
 
 ## Quick Start: With Infrastructure
 
-For production deployments with a Zenoh router, device registry, and distributed state:
+For production deployments with a Zenoh router, device registry, and distributed state. Infrastructure gives you distributed state and locks, cross-network routing, and a device registry with commissioning and lease management.
 
 ```bash
 # Start Zenoh router + etcd + registry
