@@ -1,0 +1,55 @@
+# Zenoh-based development infrastructure (default).
+# No TLS, no auth. Use with DEVICE_CONNECT_ALLOW_INSECURE=true.
+#
+# Usage:
+#   docker compose -f infra/docker-compose-dev.yml up -d
+#   MESSAGING_BACKEND=zenoh ZENOH_CONNECT=tcp/localhost:7447 \
+#     DEVICE_CONNECT_ALLOW_INSECURE=true python examples/device_example.py
+
+services:
+  zenoh:
+    image: eclipse/zenoh:latest
+    container_name: aif-zenoh
+    command: ["--no-multicast-scouting"]
+    ports:
+      - "7447:7447"
+    healthcheck:
+      test: ["CMD-SHELL", "echo | nc -w1 localhost 7447"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  device-registry-service:
+    build:
+      context: ../..
+      dockerfile: device-connect-server/device_connect_server/registry/service/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      TENANT: default
+      MESSAGING_BACKEND: zenoh
+      ZENOH_CONNECT: tcp/zenoh:7447
+      ETCD_HOST: etcd
+      ETCD_PORT: "2379"
+      DEVICE_CONNECT_ALLOW_INSECURE: "true"
+    depends_on:
+      zenoh:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy

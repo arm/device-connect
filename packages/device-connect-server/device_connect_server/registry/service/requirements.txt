@@ -1,0 +1,6 @@
+# Minimal requirements for device_registry_service
+nats-py==2.5.0
+nkeys>=0.2.0  # NATS NKeys for JWT authentication
+etcd3gw>=2.4.0,<3
+pydantic==2.7.1
+eclipse-zenoh>=1.0.0  # Zenoh messaging backend
