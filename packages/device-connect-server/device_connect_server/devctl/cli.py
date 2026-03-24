@@ -96,6 +96,7 @@ async def list_devices(
             servers=config.servers,
             credentials=config.credentials,
             tls_config=config.tls_config,
+            mode=os.getenv("ZENOH_MODE"),
         )
 
         resp = await messaging.request(
@@ -138,6 +139,7 @@ async def heartbeat_loop(
         servers=config.servers,
         credentials=config.credentials,
         tls_config=config.tls_config,
+        mode=os.getenv("ZENOH_MODE"),
     )
 
     subj = f"device-connect.{TENANT}.{device_id}.heartbeat"
@@ -181,6 +183,7 @@ async def register_device(
         servers=config.servers,
         credentials=config.credentials,
         tls_config=config.tls_config,
+        mode=os.getenv("ZENOH_MODE"),
     )
 
     try:
@@ -463,6 +466,7 @@ async def invoke_device_function(
         servers=config.servers,
         credentials=config.credentials,
         tls_config=config.tls_config,
+        mode=os.getenv("ZENOH_MODE"),
     )
 
     try:

@@ -20,7 +20,8 @@ class MessagingConfig:
         backend: Optional[str] = None,
         servers: Optional[List[str]] = None,
         credentials: Optional[Dict[str, Any]] = None,
-        tls_config: Optional[Dict[str, Any]] = None
+        tls_config: Optional[Dict[str, Any]] = None,
+        zenoh_mode: Optional[str] = None,
     ):
         """
         Initialize messaging configuration.
@@ -30,11 +31,15 @@ class MessagingConfig:
             servers: List of broker URLs
             credentials: Authentication credentials
             tls_config: TLS configuration
+            zenoh_mode: Zenoh session mode ("client" or "peer"). Reads ZENOH_MODE
+                env var when not provided. Defaults to "client" when a router
+                endpoint is set (prevents direct P2P attempts across networks).
         """
         self.backend = backend or self._get_backend_from_env()
         self.servers = servers or self._get_servers_from_env()
         self.credentials = credentials or self._get_credentials_from_env()
         self.tls_config = tls_config or self._get_tls_config_from_env()
+        self.zenoh_mode = zenoh_mode or os.getenv("ZENOH_MODE")
 
     @staticmethod
     def _get_backend_from_env() -> str:
@@ -225,6 +230,7 @@ class MessagingConfig:
             "servers": self.servers,
             "credentials": self.credentials,
             "tls_config": self.tls_config,
+            "zenoh_mode": self.zenoh_mode,
         }
 
     def __repr__(self) -> str:

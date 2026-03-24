@@ -182,6 +182,15 @@ class ZenohAdapter(MessagingClient):
             if listen_endpoints:
                 config_dict["listen"] = {"endpoints": listen_endpoints}
 
+            # Zenoh session mode: explicit kwarg > ZENOH_MODE env var > "client" when
+            # connecting to a router (prevents the router from attempting direct P2P
+            # connections back to devices outside the VPC / on different networks).
+            zenoh_mode = kwargs.get("mode") or os.getenv("ZENOH_MODE")
+            if not zenoh_mode and endpoints:
+                zenoh_mode = "client"
+            if zenoh_mode:
+                config_dict["mode"] = zenoh_mode
+
             # Scouting config — enable multicast in peer mode
             config_dict["scouting"] = {
                 "multicast": {"enabled": peer_mode},

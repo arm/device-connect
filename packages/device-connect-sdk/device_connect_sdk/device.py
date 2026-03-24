@@ -1175,7 +1175,8 @@ class DeviceRuntime:
                     reconnect_cb=on_reconnect,
                     disconnect_cb=on_disconnect,
                     reconnect_time_wait=2,
-                    max_reconnect_attempts=-1
+                    max_reconnect_attempts=-1,
+                    mode=os.getenv("ZENOH_MODE"),
                 )
                 await self._notify_conn_state(True)
                 self._logger.info(

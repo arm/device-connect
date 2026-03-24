@@ -253,6 +253,7 @@ class _DeviceConnectConnection:
             servers=self._servers,
             credentials=self._credentials,
             tls_config=self._tls_config,
+            mode=os.getenv("ZENOH_MODE"),
         )
         logger.info("Connected to %s at %s", self._backend, self._servers)
 
