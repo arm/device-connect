@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="../../logo.svg" alt="Device Connect" width="400">
-</p>
-
 # device-connect-sdk
 
 Lightweight Python SDK for enabling physical devices to work with Device Connect. You write the device logic; the runtime handles registration, heartbeats, and command routing.

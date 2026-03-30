@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="../../logo.svg" alt="Device Connect" width="400">
-</p>
-
 # device-connect-agent-tools
 
 Framework-agnostic tools for Device Connect — discover and invoke devices from any AI agent. Plain Python functions at the core, with adapters for [Strands](#strands-agent), [LangChain](#langchain--langgraph), and [MCP](#mcp-bridge).
