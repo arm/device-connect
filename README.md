@@ -1,6 +1,6 @@
 # Device Connect
 
-An open-source Python framework by Arm for connecting IoT devices, robots, and AI agents. Works device-to-device with zero infrastructure, or scales to thousands of devices with a pub/sub router. Supports Zenoh, NATS, and MQTT backends.
+An open-source Python framework by Arm for connecting physical devices and AI agents. Works device-to-device with zero infrastructure, or scales to thousands of devices with a pub/sub router. Supports Zenoh, NATS, and MQTT backends.
 
 ## Packages
 

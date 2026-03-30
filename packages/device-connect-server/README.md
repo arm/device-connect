@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="../../logo.svg" alt="Device Connect" width="400">
-</p>
-
 # device-connect-server
 
 Server-side runtime for the Device Connect framework. Extends [device-connect-sdk](../device-connect-sdk/) with device registry, security (commissioning, ACLs), distributed state, audit logging, and CLI tools.
