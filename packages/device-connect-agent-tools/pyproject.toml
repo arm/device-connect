@@ -38,6 +38,12 @@ dev = [
     "pytest-timeout>=2.0",
 ]
 
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+markers = [
+    "integration: requires live Device Connect infrastructure (NATS/Zenoh + registry)",
+]
+
 [project.urls]
 Homepage = "https://github.com/arm/device-connect"
 Repository = "https://github.com/arm/device-connect.git"

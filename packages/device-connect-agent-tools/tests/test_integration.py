@@ -128,6 +128,7 @@ class TestDeviceConnectAgent:
 # 4. DeviceConnectAgent — event reception
 # ═══════════════════════════════════════════════════════════════════
 
+@pytest.mark.integration
 class TestDeviceConnectAgentEvents:
     """Test that DeviceConnectAgent receives NATS events."""
 
@@ -234,6 +235,7 @@ class TestStandaloneToolsLLM:
 #    event emission (all against real Device Connect stack).
 # ═══════════════════════════════════════════════════════════════════
 
+@pytest.mark.integration
 class TestSimulatedDevice:
     """Test simulated devices against the real Device Connect registry + NATS."""
 
