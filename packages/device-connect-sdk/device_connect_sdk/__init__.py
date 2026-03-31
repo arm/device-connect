@@ -42,6 +42,7 @@ from device_connect_sdk.types import (
 from device_connect_sdk.errors import (
     DeviceConnectError,
     DeviceError,
+    DeviceDependencyError,
     RegistrationError,
     FunctionInvocationError,
     ValidationError,
@@ -60,6 +61,7 @@ __all__ = [
     "EventDef",
     "DeviceConnectError",
     "DeviceError",
+    "DeviceDependencyError",
     "RegistrationError",
     "FunctionInvocationError",
     "ValidationError",

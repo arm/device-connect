@@ -300,7 +300,8 @@ class MQTTAdapter(MessagingClient):
         self,
         subject: str,
         callback: Callable[[bytes, Optional[str]], Awaitable[None]],
-        queue: Optional[str] = None
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe to MQTT topic with callback.

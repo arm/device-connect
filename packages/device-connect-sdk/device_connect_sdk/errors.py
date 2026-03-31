@@ -104,3 +104,17 @@ class CommissioningError(DeviceConnectError):
     rate limiting, or credential generation failures.
     """
     pass
+
+
+class DeviceDependencyError(DeviceConnectError):
+    """Raised when a required peer device is not available within the timeout.
+
+    Attributes:
+        device_type: The device type that was not found.
+        timeout: The timeout that expired.
+    """
+
+    def __init__(self, message: str, device_type: str = "", timeout: float = 0.0):
+        super().__init__(message)
+        self.device_type = device_type
+        self.timeout = timeout

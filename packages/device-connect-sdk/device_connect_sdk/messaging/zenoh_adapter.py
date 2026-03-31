@@ -44,6 +44,10 @@ from device_connect_sdk.telemetry.metrics import get_metrics
 # Internal prefix for queryable reply routing
 _QUERY_REPLY_PREFIX = "_zenoh_query/"
 
+# Seconds for routing-table updates to propagate through D2D mesh
+# after undeclaring queryables during graceful shutdown.
+_D2D_QUERYABLE_PROPAGATION_DELAY = 0.5
+
 
 class ZenohSubscriptionWrapper(Subscription):
     """Wraps a Zenoh subscriber + optional queryable for unsubscribe."""
@@ -116,6 +120,9 @@ class ZenohAdapter(MessagingClient):
         self._pending_queries: Dict[str, Any] = {}  # reply_id -> Query object
         self._reconnect_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._disconnect_cb: Optional[Callable[[], Awaitable[None]]] = None
+        self._d2d_mode = False
+        self._d2d_retry_count = 3
+        self._d2d_retry_delay = 0.3  # seconds between retries
 
     # ── Connection ──────────────────────────────────────────────
 
@@ -182,9 +189,17 @@ class ZenohAdapter(MessagingClient):
             if listen_endpoints:
                 config_dict["listen"] = {"endpoints": listen_endpoints}
 
-            # Scouting config — enable multicast in peer mode
+            # Scouting config — enable multicast + gossip in peer mode
             config_dict["scouting"] = {
-                "multicast": {"enabled": peer_mode},
+                "multicast": {
+                    "enabled": peer_mode,
+                    "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
+                },
+                "gossip": {
+                    "enabled": True,
+                    "multihop": os.getenv("ZENOH_GOSSIP_MULTIHOP", "").lower() in ("true", "1", "yes"),
+                    "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
+                },
             }
 
             # TLS configuration
@@ -210,6 +225,7 @@ class ZenohAdapter(MessagingClient):
             )
             self._connected = True
             self._closed = False
+            self._d2d_mode = peer_mode
 
             mode = "peer" if peer_mode else "router"
             self._logger.debug(
@@ -219,6 +235,16 @@ class ZenohAdapter(MessagingClient):
         except Exception as e:
             self._logger.error(f"Failed to connect to Zenoh: {e}")
             raise ConnectionError(f"Failed to connect to Zenoh: {e}") from e
+
+    def configure_d2d_retry(self, retries: int = 3, delay: float = 0.3) -> None:
+        """Configure retry behavior for D2D mode request/reply.
+
+        Args:
+            retries: Number of attempts (default 3).
+            delay: Seconds between retries (default 0.3).
+        """
+        self._d2d_retry_count = retries
+        self._d2d_retry_delay = delay
 
     def _parse_server_url(self, url: str) -> Optional[str]:
         """Convert various URL formats to Zenoh endpoint format.
@@ -325,19 +351,26 @@ class ZenohAdapter(MessagingClient):
         subject: str,
         callback: Callable[[bytes, Optional[str]], Awaitable[None]],
         queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe to Zenoh key expression with callback.
 
-        Declares both a subscriber (for pub/sub) and a queryable (for request/reply)
-        on the same key expression. This enables the hybrid RPC pattern: callers
-        use session.get() which triggers the queryable, while regular publishes
-        trigger the subscriber.
+        By default, declares both a subscriber (for pub/sub) and a queryable
+        (for request/reply) on the same key expression.  The queryable is a
+        workaround for known Zenoh D2D queryable flakiness — having a
+        queryable co-located with the subscriber improves reliability of the
+        hybrid RPC pattern where callers use session.get().
+
+        When *subscribe_only* is True the queryable is skipped, avoiding
+        unnecessary resource overhead for pure pub/sub consumers
+        (e.g. presence and event subscriptions) that never reply.
 
         Args:
             subject: NATS-style subject pattern (supports * and >)
             callback: Async callback(data: bytes, reply_subject: Optional[str])
             queue: Queue group name (logged as warning — Zenoh has no native equivalent)
+            subscribe_only: If True, only declare a subscriber (no queryable).
 
         Returns:
             Subscription handle
@@ -359,11 +392,17 @@ class ZenohAdapter(MessagingClient):
 
             # Zenoh subscriber callback (runs in Zenoh's thread — must not block)
             def on_sample(sample):
-                loop.call_soon_threadsafe(sample_queue.put_nowait, ("sample", sample))
+                try:
+                    loop.call_soon_threadsafe(sample_queue.put_nowait, ("sample", sample))
+                except RuntimeError:
+                    pass  # Event loop closed during shutdown
 
             # Zenoh queryable callback (runs in Zenoh's thread)
             def on_query(query):
-                loop.call_soon_threadsafe(sample_queue.put_nowait, ("query", query))
+                try:
+                    loop.call_soon_threadsafe(sample_queue.put_nowait, ("query", query))
+                except RuntimeError:
+                    pass  # Event loop closed during shutdown
 
             # Background asyncio task to drain queue into user callback
             async def drain_loop():
@@ -384,15 +423,17 @@ class ZenohAdapter(MessagingClient):
                 except asyncio.CancelledError:
                     pass
 
-            # Declare subscriber and queryable in executor
+            # Declare subscriber (always) and queryable (unless subscribe_only)
             subscriber = await loop.run_in_executor(
                 self._executor,
                 lambda: self._session.declare_subscriber(key, on_sample),
             )
-            queryable = await loop.run_in_executor(
-                self._executor,
-                lambda: self._session.declare_queryable(key, on_query, complete=True),
-            )
+            queryable = None
+            if not subscribe_only:
+                queryable = await loop.run_in_executor(
+                    self._executor,
+                    lambda: self._session.declare_queryable(key, on_query, complete=True),
+                )
 
             drain_task = asyncio.create_task(drain_loop())
 
@@ -411,7 +452,7 @@ class ZenohAdapter(MessagingClient):
                 "wrapper": wrapper,
             }
 
-            self._logger.debug(f"Subscribed to {subject} (key: {key})")
+            self._logger.debug(f"Subscribed to {subject} (key: {key}, subscribe_only={subscribe_only})")
             return wrapper
 
         except Exception as e:
@@ -423,6 +464,7 @@ class ZenohAdapter(MessagingClient):
         subject: str,
         callback: Callable[[bytes, str, Optional[str]], Awaitable[None]],
         queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe with callback that receives the matched key expression.
@@ -431,6 +473,7 @@ class ZenohAdapter(MessagingClient):
             subject: NATS-style subject pattern
             callback: Async callback(data: bytes, subject: str, reply: Optional[str])
             queue: Queue group name (warned — no native Zenoh support)
+            subscribe_only: If True, only declare a subscriber (no queryable).
 
         Returns:
             Subscription handle
@@ -451,10 +494,16 @@ class ZenohAdapter(MessagingClient):
             sample_queue: asyncio.Queue = asyncio.Queue()
 
             def on_sample(sample):
-                loop.call_soon_threadsafe(sample_queue.put_nowait, ("sample", sample))
+                try:
+                    loop.call_soon_threadsafe(sample_queue.put_nowait, ("sample", sample))
+                except RuntimeError:
+                    pass  # Event loop closed during shutdown
 
             def on_query(query):
-                loop.call_soon_threadsafe(sample_queue.put_nowait, ("query", query))
+                try:
+                    loop.call_soon_threadsafe(sample_queue.put_nowait, ("query", query))
+                except RuntimeError:
+                    pass  # Event loop closed during shutdown
 
             async def drain_loop():
                 try:
@@ -480,10 +529,12 @@ class ZenohAdapter(MessagingClient):
                 self._executor,
                 lambda: self._session.declare_subscriber(key, on_sample),
             )
-            queryable = await loop.run_in_executor(
-                self._executor,
-                lambda: self._session.declare_queryable(key, on_query, complete=True),
-            )
+            queryable = None
+            if not subscribe_only:
+                queryable = await loop.run_in_executor(
+                    self._executor,
+                    lambda: self._session.declare_queryable(key, on_query, complete=True),
+                )
 
             drain_task = asyncio.create_task(drain_loop())
 
@@ -503,7 +554,7 @@ class ZenohAdapter(MessagingClient):
                 "wrapper": wrapper,
             }
 
-            self._logger.debug(f"Subscribed to {subject} with subject callback (key: {key})")
+            self._logger.debug(f"Subscribed to {subject} with subject callback (key: {key}, subscribe_only={subscribe_only})")
             return wrapper
 
         except Exception as e:
@@ -550,20 +601,24 @@ class ZenohAdapter(MessagingClient):
                 t0 = time.monotonic()
                 loop = asyncio.get_event_loop()
 
-                # Zenoh's receiver blocks for the full query timeout
-                # before yielding replies when the session is running on
-                # a non-main thread (common with run_coroutine_threadsafe
-                # patterns).  Use a CancellationToken to abort the
-                # receiver as soon as the first valid reply arrives,
-                # so callers return immediately instead of waiting for
-                # the full timeout (zenoh#1409).
-                cancel_token = zenoh.CancellationToken()
-
                 def _do_get():
-                    receiver = self._session.get(
-                        key, payload=data, timeout=timeout,
+                    # CancellationToken aborts the receiver as soon as
+                    # the first valid reply arrives so callers return
+                    # immediately instead of waiting for the full
+                    # timeout (zenoh#1409).
+                    cancel_token = zenoh.CancellationToken()
+                    get_kwargs: Dict[str, Any] = dict(
+                        payload=data,
+                        timeout=timeout,
                         cancellation_token=cancel_token,
                     )
+                    # In D2D mode, broadcast queries to all matching
+                    # queryables rather than relying on potentially-stale
+                    # routing table lookups (BestMatching default).
+                    if self._d2d_mode:
+                        get_kwargs["target"] = zenoh.QueryTarget.ALL
+                        get_kwargs["consolidation"] = zenoh.ConsolidationMode.NONE
+                    receiver = self._session.get(key, **get_kwargs)
                     last_err = None
                     for reply in receiver:
                         if reply.ok is not None:
@@ -577,25 +632,45 @@ class ZenohAdapter(MessagingClient):
                         return ("err", last_err)
                     return ("timeout", None)
 
-                result_type, result_data = await loop.run_in_executor(
-                    self._executor, _do_get,
-                )
+                # In D2D mode, retry on "no responders" since multicast
+                # routing tables can be transiently stale.
+                max_attempts = self._d2d_retry_count if self._d2d_mode else 1
 
-                if result_type == "ok":
-                    metrics.msg_request_duration.record(
-                        (time.monotonic() - t0) * 1000,
-                        {"messaging.destination": subject},
+                for attempt in range(max_attempts):
+                    result_type, result_data = await loop.run_in_executor(
+                        self._executor, _do_get,
                     )
-                    span.set_status(StatusCode.OK)
-                    return result_data
-                elif result_type == "err":
-                    err_msg = f"Query error reply: {result_data}"
-                    self._logger.error(err_msg)
-                    span.record_exception(Exception(err_msg))
-                    span.set_status(StatusCode.ERROR, err_msg)
-                    raise PublishError(err_msg)
 
-                # No replies at all
+                    if result_type == "ok":
+                        if attempt > 0:
+                            self._logger.info(
+                                "Request to %s succeeded on retry %d",
+                                subject, attempt,
+                            )
+                        metrics.msg_request_duration.record(
+                            (time.monotonic() - t0) * 1000,
+                            {"messaging.destination": subject},
+                        )
+                        span.set_status(StatusCode.OK)
+                        return result_data
+                    elif result_type == "err":
+                        err_msg = f"Query error reply: {result_data}"
+                        self._logger.error(err_msg)
+                        span.record_exception(Exception(err_msg))
+                        span.set_status(StatusCode.ERROR, err_msg)
+                        raise PublishError(err_msg)
+
+                    # No replies — retry if attempts remain
+                    if attempt < max_attempts - 1:
+                        self._logger.debug(
+                            "Request to %s got no responders (attempt %d/%d), "
+                            "retrying in %.1fs...",
+                            subject, attempt + 1, max_attempts,
+                            self._d2d_retry_delay,
+                        )
+                        await asyncio.sleep(self._d2d_retry_delay)
+
+                # All attempts exhausted
                 span.set_status(StatusCode.ERROR, "timeout")
                 raise RequestTimeoutError(
                     f"Request to {subject} timed out after {timeout}s (no responders)"
@@ -623,8 +698,35 @@ class ZenohAdapter(MessagingClient):
 
     async def close(self) -> None:
         """Close connection to Zenoh and cleanup all resources."""
-        # Cancel all drain tasks and undeclare subscriptions
+        loop = asyncio.get_event_loop()
+        has_queryables = False
+
+        # Phase 1: Undeclare queryables first so peers update routing
+        # tables before the session closes.
         for key, info in list(self._subscriptions.items()):
+            queryable = info.get("queryable")
+            if queryable is not None:
+                has_queryables = True
+                try:
+                    await loop.run_in_executor(self._executor, queryable.undeclare)
+                except Exception:
+                    pass
+                info["queryable"] = None
+
+        # Brief delay for queryable undeclaration to propagate in D2D mesh
+        if self._d2d_mode and has_queryables:
+            await asyncio.sleep(_D2D_QUERYABLE_PROPAGATION_DELAY)
+
+        # Phase 2: Undeclare subscribers first (stops Zenoh callbacks),
+        # then cancel drain tasks.
+        for key, info in list(self._subscriptions.items()):
+            subscriber = info.get("subscriber")
+            if subscriber is not None:
+                try:
+                    await loop.run_in_executor(self._executor, subscriber.undeclare)
+                except Exception:
+                    pass
+
             drain_task = info.get("drain_task")
             if drain_task and not drain_task.done():
                 drain_task.cancel()
@@ -633,27 +735,12 @@ class ZenohAdapter(MessagingClient):
                 except asyncio.CancelledError:
                     pass
 
-            loop = asyncio.get_event_loop()
-            subscriber = info.get("subscriber")
-            if subscriber is not None:
-                try:
-                    await loop.run_in_executor(None, subscriber.undeclare)
-                except Exception:
-                    pass
-            queryable = info.get("queryable")
-            if queryable is not None:
-                try:
-                    await loop.run_in_executor(None, queryable.undeclare)
-                except Exception:
-                    pass
-
         self._subscriptions.clear()
         self._pending_queries.clear()
 
-        # Close session
+        # Phase 3: Close session
         if self._session is not None and not self._session.is_closed():
             try:
-                loop = asyncio.get_event_loop()
                 await loop.run_in_executor(self._executor, self._session.close)
             except Exception as e:
                 self._logger.debug(f"Error closing Zenoh session: {e}")

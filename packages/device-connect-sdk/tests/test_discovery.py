@@ -333,6 +333,48 @@ class TestPresenceCollector:
         assert len(peers) == 0
         await collector.stop()
 
+    @pytest.mark.asyncio
+    async def test_departure_removes_peer(self):
+        """A presence message with departing=True prunes the peer immediately."""
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        # Add a peer first
+        await collector._on_presence(_make_presence_payload("robot-01", "robot"))
+        device = await collector.get_device("robot-01")
+        assert device is not None
+
+        # Send departure
+        departure = json.dumps({
+            "device_id": "robot-01",
+            "departing": True,
+            "ts": time.time(),
+        }).encode()
+        await collector._on_presence(departure)
+
+        device = await collector.get_device("robot-01")
+        assert device is None
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_departure_for_unknown_peer_is_noop(self):
+        """Departure for a peer not in the table does not raise."""
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        departure = json.dumps({
+            "device_id": "unknown-01",
+            "departing": True,
+            "ts": time.time(),
+        }).encode()
+        await collector._on_presence(departure)
+
+        devices = await collector.list_devices()
+        assert len(devices) == 0
+        await collector.stop()
+
 
 # ── D2DRegistry ──────────────────────────────────────────────────
 
@@ -394,4 +436,135 @@ class TestD2DRegistry:
             capabilities=["capture"], timeout=5.0,
         )
         assert isinstance(devices, list)
+        await collector.stop()
+
+
+# ── subscribe_only flag tests ───────────────────────────────────
+
+
+class TestSubscribeOnlyFlag:
+    """Verify that discovery subscriptions use subscribe_only=True."""
+
+    @pytest.mark.asyncio
+    async def test_presence_subscribe_uses_subscribe_only(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        assert messaging.subscribe.call_count == 1
+        call_kwargs = messaging.subscribe.call_args[1]
+        assert call_kwargs.get("subscribe_only") is True
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_probe_subscribe_uses_subscribe_only(self):
+        messaging = _make_messaging()
+        ann = PresenceAnnouncer(
+            messaging, device_id="cam-01", tenant="default",
+            capabilities={}, identity={}, status={},
+        )
+        await ann.start()
+
+        probe_calls = [
+            c for c in messaging.subscribe.call_args_list
+            if c[0][0] == "device-connect.default.discovery.probe"
+        ]
+        assert len(probe_calls) == 1
+        assert probe_calls[0][1].get("subscribe_only") is True
+        await ann.stop()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_presence_not_double_counted(self):
+        """Simulate dual delivery: two rapid _on_presence calls for the same
+        device should result in on_new_peer firing exactly once."""
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        new_peer_calls = []
+        collector._on_new_peer = lambda pid: new_peer_calls.append(pid)
+
+        payload = _make_presence_payload("robot-001", "robot")
+
+        # Simulate two near-simultaneous deliveries (subscriber + queryable paths)
+        await collector._on_presence(payload, None)
+        await collector._on_presence(payload, None)
+
+        assert len(new_peer_calls) == 1
+        devices = await collector.list_devices()
+        robot_entries = [d for d in devices if d["device_id"] == "robot-001"]
+        assert len(robot_entries) == 1
+        await collector.stop()
+
+
+# ── wait_for_device_type / wait_for_device_id ─────────────────
+
+
+class TestPresenceCollectorWait:
+    """Tests for PresenceCollector.wait_for_device_type/id."""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_device_type_raises_if_not_started(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        with pytest.raises(RuntimeError, match="not started"):
+            await collector.wait_for_device_type("robot", timeout=0.1)
+
+    @pytest.mark.asyncio
+    async def test_wait_for_device_id_raises_if_not_started(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        with pytest.raises(RuntimeError, match="not started"):
+            await collector.wait_for_device_id("robot-01", timeout=0.1)
+
+    @pytest.mark.asyncio
+    async def test_wait_for_device_type_returns_match(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        async def add_robot():
+            await asyncio.sleep(0.2)
+            await collector._on_presence(_make_presence_payload("robot-01", "robot"))
+
+        asyncio.create_task(add_robot())
+        result = await collector.wait_for_device_type("robot", timeout=2.0)
+        assert result is not None
+        assert result["device_id"] == "robot-01"
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_device_type_returns_none_on_timeout(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        result = await collector.wait_for_device_type("robot", timeout=0.3)
+        assert result is None
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_device_id_returns_match(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        async def add_device():
+            await asyncio.sleep(0.2)
+            await collector._on_presence(_make_presence_payload("robot-01", "robot"))
+
+        asyncio.create_task(add_device())
+        result = await collector.wait_for_device_id("robot-01", timeout=2.0)
+        assert result is not None
+        assert result["device_id"] == "robot-01"
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_wait_for_device_id_returns_none_on_timeout(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        result = await collector.wait_for_device_id("nonexistent", timeout=0.3)
+        assert result is None
         await collector.stop()

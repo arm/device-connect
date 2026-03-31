@@ -190,6 +190,10 @@ class TestZenohClientConnect:
         call_args = mock_zenoh.Config.from_json5.call_args[0][0]
         config_dict = json.loads(call_args)
         assert config_dict["scouting"]["multicast"]["enabled"] is True
+        assert config_dict["scouting"]["gossip"]["enabled"] is True
+        assert config_dict["scouting"]["gossip"]["multihop"] is False
+        # Verify d2d_mode flag is set
+        assert adapter._d2d_mode is True
 
     @pytest.mark.asyncio
     @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
@@ -576,6 +580,54 @@ class TestZenohClientSubscribe:
         mock_sub.undeclare.assert_called_once()
         mock_qable.undeclare.assert_called_once()
 
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_subscribe_only_skips_queryable(self, mock_zenoh):
+        session = _make_mock_session()
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["tcp/host:7447"])
+
+        async def handler(data, reply):
+            pass
+
+        sub = await adapter.subscribe("test.subject", handler, subscribe_only=True)
+
+        session.declare_subscriber.assert_called_once()
+        session.declare_queryable.assert_not_called()
+
+        await sub.unsubscribe()
+
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_unsubscribe_with_subscribe_only(self, mock_zenoh):
+        session = _make_mock_session()
+        mock_sub = MagicMock()
+        session.declare_subscriber = MagicMock(return_value=mock_sub)
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["tcp/host:7447"])
+
+        async def handler(data, reply):
+            pass
+
+        sub = await adapter.subscribe("test.subject", handler, subscribe_only=True)
+        await sub.unsubscribe()
+
+        mock_sub.undeclare.assert_called_once()
+        # queryable was never created, so no undeclare expected
+        session.declare_queryable.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # TestZenohClientSubscribeWithSubject
@@ -826,6 +878,89 @@ class TestZenohClientRequest:
         with pytest.raises(PublishError, match="query error"):
             await adapter.request("test.rpc", b"data")
 
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_request_d2d_retries_on_no_responders(self, mock_zenoh):
+        """D2D mode retries when session.get returns zero replies."""
+        session = _make_mock_session()
+        reply = _make_mock_reply(b"ok")
+        # First call returns no replies, second returns a reply
+        session.get = MagicMock(side_effect=[[], [reply]])
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+        mock_zenoh.CancellationToken = MagicMock(return_value=MagicMock())
+
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["zenoh://"])  # peer mode → d2d
+        adapter._d2d_retry_delay = 0.01  # speed up test
+
+        result = await adapter.request("test.rpc", b"data")
+        assert result == b"ok"
+        assert session.get.call_count == 2
+
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_request_d2d_uses_query_target_all(self, mock_zenoh):
+        """D2D mode passes QueryTarget.ALL to session.get()."""
+        session = _make_mock_session()
+        reply = _make_mock_reply(b"ok")
+        session.get = MagicMock(return_value=[reply])
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+        mock_zenoh.CancellationToken = MagicMock(return_value=MagicMock())
+        mock_zenoh.QueryTarget.ALL = "ALL"
+        mock_zenoh.ConsolidationMode.NONE = "NONE"
+
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["zenoh://"])
+
+        await adapter.request("test.rpc", b"data")
+
+        call_kwargs = session.get.call_args[1]
+        assert call_kwargs["target"] == "ALL"
+        assert call_kwargs["consolidation"] == "NONE"
+
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_request_router_mode_no_retry(self, mock_zenoh):
+        """Router mode does NOT retry on no responders."""
+        session = _make_mock_session()
+        session.get = MagicMock(return_value=[])
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+        mock_zenoh.CancellationToken = MagicMock(return_value=MagicMock())
+
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+        from device_connect_sdk.messaging.exceptions import RequestTimeoutError
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["tcp/host:7447"])  # router mode
+
+        with pytest.raises(RequestTimeoutError):
+            await adapter.request("test.rpc", b"data", timeout=0.1)
+        # Only 1 attempt in router mode
+        assert session.get.call_count == 1
+
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_configure_d2d_retry(self, mock_zenoh):
+        """configure_d2d_retry updates retry parameters."""
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        adapter.configure_d2d_retry(retries=5, delay=1.0)
+
+        assert adapter._d2d_retry_count == 5
+        assert adapter._d2d_retry_delay == 1.0
+
 
 # ---------------------------------------------------------------------------
 # TestZenohClientClose
@@ -906,6 +1041,37 @@ class TestZenohClientClose:
 
         await adapter.close()
         assert len(adapter._pending_queries) == 0
+
+    @pytest.mark.asyncio
+    @patch("device_connect_sdk.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_sdk.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_close_undeclares_queryables_before_subscribers(self, mock_zenoh):
+        """Phased teardown: queryable.undeclare() must happen before subscriber.undeclare()."""
+        session = _make_mock_session()
+        mock_sub = MagicMock()
+        mock_qable = MagicMock()
+        session.declare_subscriber = MagicMock(return_value=mock_sub)
+        session.declare_queryable = MagicMock(return_value=mock_qable)
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+
+        from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["tcp/host:7447"])
+
+        async def handler(data, reply):
+            pass
+
+        await adapter.subscribe("test.subject", handler)
+
+        call_order = []
+        mock_qable.undeclare = MagicMock(side_effect=lambda: call_order.append("queryable"))
+        mock_sub.undeclare = MagicMock(side_effect=lambda: call_order.append("subscriber"))
+
+        await adapter.close()
+
+        assert call_order == ["queryable", "subscriber"]
 
 
 # ---------------------------------------------------------------------------

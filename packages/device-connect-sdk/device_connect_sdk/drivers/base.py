@@ -64,6 +64,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from abc import ABC
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -124,6 +125,11 @@ class DeviceDriver(ABC):
 
     # Override this class attribute in subclasses
     device_type: str = "unknown"
+
+    # Override in subclasses to gate startup until these device types are present.
+    # DeviceRuntime.run() will call wait_for_device() for each type before
+    # starting background tasks. Example: depends_on = ("robot", "speaker")
+    depends_on: Tuple[str, ...] = ()
 
     # Type alias for event callback
     EventCallback = Callable[[str, Dict[str, Any]], Any]
@@ -955,6 +961,82 @@ class DeviceDriver(ABC):
 
         return await self._registry.get_device(device_id)
 
+    async def wait_for_device(
+        self,
+        device_type: Optional[str] = None,
+        device_id: Optional[str] = None,
+        timeout: float = 10.0,
+    ) -> Dict[str, Any]:
+        """Wait for a device to become available, then return its info.
+
+        Works in both D2D mode (polls PresenceCollector) and registry mode
+        (polls RegistryClient).  Use this instead of manual retry loops
+        around ``list_devices()``.
+
+        Args:
+            device_type: Wait for any device of this type.
+            device_id: Wait for a specific device by ID.
+            timeout: Maximum seconds to wait (default 10).
+
+        Returns:
+            Device info dictionary.
+
+        Raises:
+            ValueError: If neither *device_type* nor *device_id* is specified.
+            RuntimeError: If registry is not configured.
+            DeviceDependencyError: If *timeout* expires without finding a match.
+
+        Example::
+
+            robot = await self.wait_for_device(device_type="robot", timeout=15.0)
+            await self.invoke_remote(robot["device_id"], "wave")
+        """
+        if not device_type and not device_id:
+            raise ValueError("Must specify device_type or device_id")
+
+        if self._registry is None:
+            raise RuntimeError(
+                "Registry not configured. Ensure DeviceRuntime has set up D2D infrastructure."
+            )
+
+        from device_connect_sdk.errors import DeviceDependencyError
+
+        # Fast path: delegate to PresenceCollector if available (D2D mode)
+        collector = getattr(self._device, '_d2d_collector', None) if self._device else None
+        if collector is not None:
+            if device_id:
+                result = await collector.wait_for_device_id(device_id, timeout=timeout)
+            else:
+                result = await collector.wait_for_device_type(device_type, timeout=timeout)
+            if result is not None:
+                return result
+            target = device_id or device_type
+            raise DeviceDependencyError(
+                f"Device '{target}' not found after {timeout}s",
+                device_type=device_type or "",
+                timeout=timeout,
+            )
+
+        # Registry mode: poll list_devices / get_device
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if device_id:
+                result = await self._registry.get_device(device_id)
+                if result is not None:
+                    return result
+            else:
+                results = await self._registry.list_devices(device_type=device_type)
+                if results:
+                    return results[0]
+            await asyncio.sleep(0.25)
+
+        target = device_id or device_type
+        raise DeviceDependencyError(
+            f"Device '{target}' not found after {timeout}s",
+            device_type=device_type or "",
+            timeout=timeout,
+        )
+
     # =========================================================================
     # D2D: Event Subscriptions (@on decorator)
     # =========================================================================
@@ -1038,7 +1120,8 @@ class DeviceDriver(ABC):
         tenant = getattr(self._router, "_tenant", "default")
         subject = f"device-connect.{tenant}.{device_pattern}.event.{event_pattern}"
 
-        logger.info("Subscribing to: %s", subject)
+        self_id = getattr(self, "_device_id", None) or "unknown"
+        logger.info("[%s] Subscribing to: %s", self_id, subject)
 
         # Use subscribe_with_subject to get the matched subject in callback
         # This allows extracting device_id from wildcard subscriptions
@@ -1048,7 +1131,9 @@ class DeviceDriver(ABC):
             try:
                 parsed = json.loads(data.decode())
                 # Extract device_id from subject: device-connect.{tenant}.{device_id}.event.{event}
-                parts = matched_subject.split(".")
+                # Zenoh delivers key expressions with slashes; NATS uses dots — handle both.
+                sep = "/" if "/" in matched_subject else "."
+                parts = matched_subject.split(sep)
                 source_device_id = parts[2] if len(parts) > 2 else "unknown"
                 source_event_name = parsed.get("method", event_name)
                 payload = parsed.get("params", {})
@@ -1061,7 +1146,7 @@ class DeviceDriver(ABC):
             except Exception as e:
                 logger.error("Error in subscription handler: %s", e)
 
-        subscription = await messaging_client.subscribe_with_subject(subject, message_handler)
+        subscription = await messaging_client.subscribe_with_subject(subject, message_handler, subscribe_only=True)
         self._subscriptions.append(subscription)
 
     async def teardown_subscriptions(self) -> None:

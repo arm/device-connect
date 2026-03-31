@@ -111,7 +111,7 @@ class PresenceAnnouncer:
             return
         self._burst_until = time.time() + BURST_DURATION
         self._probe_sub = await self._messaging.subscribe(
-            self.probe_subject, self._on_probe,
+            self.probe_subject, self._on_probe, subscribe_only=True,
         )
         self._task = asyncio.create_task(self._loop())
         logger.info("D2D presence announcer started for %s", self._device_id)
@@ -170,10 +170,13 @@ class PresenceCollector:
         messaging,
         tenant: str,
         on_new_peer: Optional[Callable[[str], None]] = None,
+        device_id: str = "",
     ):
         self._messaging = messaging
         self._tenant = tenant
         self._on_new_peer = on_new_peer
+        self._device_id = device_id
+        self._log_tag = f"D2D [{device_id}]" if device_id else "D2D"
         self._peers: Dict[str, dict] = {}
         self._lock = asyncio.Lock()
         self._sub = None
@@ -184,10 +187,10 @@ class PresenceCollector:
         if self._started:
             return
         subject = f"device-connect.{self._tenant}.*.presence"
-        self._sub = await self._messaging.subscribe(subject, self._on_presence)
+        self._sub = await self._messaging.subscribe(subject, self._on_presence, subscribe_only=True)
         self._prune_task = asyncio.create_task(self._prune_loop())
         self._started = True
-        logger.info("D2D presence collector listening on %s", subject)
+        logger.info("%s: listening on %s", self._log_tag, subject)
 
     async def stop(self) -> None:
         if self._sub is not None:
@@ -215,6 +218,14 @@ class PresenceCollector:
         if not device_id:
             return
 
+        # Handle graceful departure announcements
+        if payload.get("departing"):
+            async with self._lock:
+                removed = self._peers.pop(device_id, None)
+            if removed:
+                logger.info("%s: peer %s departed gracefully", self._log_tag, device_id)
+            return
+
         payload["_last_seen"] = time.time()
 
         async with self._lock:
@@ -222,7 +233,7 @@ class PresenceCollector:
             self._peers[device_id] = payload
 
         if is_new:
-            logger.info("D2D: discovered peer %s", device_id)
+            logger.info("%s: discovered peer %s", self._log_tag, device_id)
             if self._on_new_peer:
                 try:
                     self._on_new_peer(device_id)
@@ -241,7 +252,7 @@ class PresenceCollector:
                     ]
                     for did in stale:
                         del self._peers[did]
-                        logger.info("D2D: peer %s timed out", did)
+                        logger.info("%s: peer %s timed out", self._log_tag, did)
         except asyncio.CancelledError:
             raise
 
@@ -288,6 +299,52 @@ class PresenceCollector:
             await asyncio.sleep(0.25)
         async with self._lock:
             return list(self._peers.values())
+
+    async def wait_for_device_type(
+        self, device_type: str, timeout: float = 10.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Wait until a peer of the given *device_type* appears.
+
+        Sends a discovery probe and polls the peer table at 0.25 s intervals.
+
+        Returns:
+            The first matching peer dict, or ``None`` if *timeout* expires.
+
+        Raises:
+            RuntimeError: If the collector has not been started.
+        """
+        if not self._started:
+            raise RuntimeError("PresenceCollector not started — call start() first")
+        await self.send_discovery_probe()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            matches = await self.list_devices(device_type=device_type)
+            if matches:
+                return matches[0]
+            await asyncio.sleep(0.25)
+        return None
+
+    async def wait_for_device_id(
+        self, device_id: str, timeout: float = 10.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Wait until a specific *device_id* appears in the peer table.
+
+        Returns:
+            The peer dict, or ``None`` if *timeout* expires.
+
+        Raises:
+            RuntimeError: If the collector has not been started.
+        """
+        if not self._started:
+            raise RuntimeError("PresenceCollector not started — call start() first")
+        await self.send_discovery_probe()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            peer = await self.get_device(device_id)
+            if peer is not None:
+                return peer
+            await asyncio.sleep(0.25)
+        return None
 
 
 class D2DRegistry:
