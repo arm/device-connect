@@ -75,7 +75,8 @@ class MessagingClient(ABC):
         self,
         subject: str,
         callback: Callable[[bytes, Optional[str]], Awaitable[None]],
-        queue: Optional[str] = None
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe to subject/topic with callback.
@@ -87,6 +88,9 @@ class MessagingClient(ABC):
             callback: Async function called for each message
                 Signature: async def callback(data: bytes, reply_subject: Optional[str])
             queue: Queue group name for load balancing (optional)
+            subscribe_only: If True, set up pub/sub delivery only and skip
+                request/reply infrastructure (e.g. Zenoh queryable). Use for
+                callers that only consume events and never reply.
 
         Returns:
             Subscription handle that can be used to unsubscribe
@@ -160,7 +164,8 @@ class MessagingClient(ABC):
         self,
         subject: str,
         callback: Callable[[bytes, str, Optional[str]], Awaitable[None]],
-        queue: Optional[str] = None
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe to subject/topic with callback that receives the subject.
@@ -175,6 +180,9 @@ class MessagingClient(ABC):
             callback: Async function called for each message
                 Signature: async def callback(data: bytes, subject: str, reply: Optional[str])
             queue: Queue group name for load balancing (optional)
+            subscribe_only: If True, set up pub/sub delivery only and skip
+                request/reply infrastructure (e.g. Zenoh queryable). Use for
+                callers that only consume events and never reply.
 
         Returns:
             Subscription handle that can be used to unsubscribe

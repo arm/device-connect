@@ -82,6 +82,7 @@ from device_connect_sdk.telemetry import DeviceConnectTelemetry, get_tracer
 from device_connect_sdk.telemetry.propagation import extract_from_meta
 from device_connect_sdk.telemetry.tracer import SpanKind
 
+logger = logging.getLogger(__name__)
 
 
 
@@ -97,7 +98,12 @@ class _D2DRouter:
     Devices can call each other using only the SDK.
     """
 
-    def __init__(self, messaging: MessagingClient, tenant: str = "default", timeout: float = 30.0):
+    def __init__(
+        self,
+        messaging: MessagingClient,
+        tenant: str = "default",
+        timeout: float = 30.0,
+    ):
         self._messaging = messaging
         self._tenant = tenant
         self._timeout = timeout
@@ -113,6 +119,7 @@ class _D2DRouter:
         """Send a JSON-RPC request to a device and return the response."""
         timeout = timeout or self._timeout
         params = params or {}
+
         req_id = f"d2d-{uuid.uuid4().hex[:12]}"
         subject = f"device-connect.{self._tenant}.{device_id}.cmd"
 
@@ -442,6 +449,8 @@ class DeviceRuntime:
         # Auto-detected when no broker URLs are available + backend is zenoh,
         # or forced via DEVICE_CONNECT_DISCOVERY_MODE=d2d
         self._d2d_mode = os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() in ("d2d", "p2p")
+        self._d2d_collector = None
+        self._d2d_announcer = None
 
         # Determine broker URLs
         if messaging_urls:
@@ -1341,13 +1350,14 @@ class DeviceRuntime:
         if hasattr(self._driver, 'start_capability_routines'):
             await self._driver.start_capability_routines()
 
-        # Start D2D presence announcer and collector if in D2D mode
-        self._d2d_announcer = None
-        self._d2d_collector = None
+        # Start D2D presence announcer and collector if in D2D mode.
+        # The collector may already exist if _setup_agentic_driver() created
+        # one for the D2DRegistry — reuse it instead of creating a duplicate.
         if self._d2d_mode:
             from device_connect_sdk.discovery import PresenceAnnouncer, PresenceCollector
             caps = self._driver.capabilities if self._driver else self.capabilities
-            self._d2d_collector = PresenceCollector(self.messaging, self.tenant)
+            if self._d2d_collector is None:
+                self._d2d_collector = PresenceCollector(self.messaging, self.tenant, device_id=self.device_id)
             self._d2d_announcer = PresenceAnnouncer(
                 self.messaging,
                 device_id=self.device_id,
@@ -1356,10 +1366,26 @@ class DeviceRuntime:
                 identity=self.identity,
                 status=self.status,
             )
-            # Wire up: new peer triggers announcer burst
+            # Wire up burst trigger BEFORE starting the collector so that
+            # peers discovered immediately on start already trigger bursts.
             self._d2d_collector._on_new_peer = lambda _pid: self._d2d_announcer.trigger_burst()
-            await self._d2d_collector.start()
+            if not self._d2d_collector._started:
+                await self._d2d_collector.start()
             await self._d2d_announcer.start()
+
+            # Configure D2D retry in messaging adapter
+            if hasattr(self.messaging, 'configure_d2d_retry'):
+                self.messaging.configure_d2d_retry(retries=3, delay=0.3)
+
+        # Gate startup on depends_on device types if the driver declares them.
+        # Runs after the presence collector is started so announcements are
+        # already being received.  Works in both D2D and registry modes.
+        if self._driver and getattr(self._driver, 'depends_on', ()):
+            depends_timeout = float(os.getenv("DEVICE_CONNECT_DEPENDS_TIMEOUT", "30"))
+            for dtype in self._driver.depends_on:
+                self._logger.info("Waiting for dependency: device_type=%s (timeout=%.0fs)", dtype, depends_timeout)
+                await self._driver.wait_for_device(device_type=dtype, timeout=depends_timeout)
+                self._logger.info("Dependency satisfied: device_type=%s", dtype)
 
         # Track background tasks so we can cancel them on shutdown
         self._background_tasks = [
@@ -1383,6 +1409,20 @@ class DeviceRuntime:
             # Wait for tasks to complete cancellation (with timeout)
             if self._background_tasks:
                 await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
+            # Announce departure before tearing down D2D presence
+            if self._d2d_announcer and self.messaging and not self.messaging.is_closed:
+                try:
+                    departure_subject = f"device-connect.{self.tenant}.{self.device_id}.presence"
+                    departure_payload = json.dumps({
+                        "device_id": self.device_id,
+                        "tenant": self.tenant,
+                        "departing": True,
+                        "ts": time.time(),
+                    }).encode()
+                    await self.messaging.publish(departure_subject, departure_payload)
+                except Exception:
+                    self._logger.debug("Failed to publish departure announcement", exc_info=True)
 
             # Stop D2D presence components
             if self._d2d_announcer:
@@ -1478,8 +1518,11 @@ class DeviceRuntime:
 
         self._logger.info("Setting up DeviceDriver D2D capabilities")
 
-        # Create and set D2D router (inline — no orchestration dependency)
-        router = _D2DRouter(self.messaging, tenant=self.tenant)
+        # Create and set D2D router (inline — no orchestration dependency).
+        router = _D2DRouter(
+            self.messaging,
+            tenant=self.tenant,
+        )
         self._driver.router = router
         self._logger.debug("D2D router configured for DeviceDriver")
 
@@ -1490,11 +1533,12 @@ class DeviceRuntime:
         # Create and set registry (RegistryClient or D2DRegistry)
         if self._d2d_mode:
             from device_connect_sdk.discovery import D2DRegistry, PresenceCollector
-            # Reuse the collector from run() if available, otherwise create one
+            # Reuse the collector from run() if available, otherwise create one.
+            # Don't start it here — run() will start it after wiring _on_new_peer
+            # so that burst announcements work from the moment discovery begins.
             collector = getattr(self, '_d2d_collector', None)
             if collector is None:
-                collector = PresenceCollector(self.messaging, self.tenant)
-                await collector.start()
+                collector = PresenceCollector(self.messaging, self.tenant, device_id=self.device_id)
                 self._d2d_collector = collector
             self._driver.registry = D2DRegistry(collector)
             self._logger.debug("D2DRegistry configured for DeviceDriver (no infrastructure)")

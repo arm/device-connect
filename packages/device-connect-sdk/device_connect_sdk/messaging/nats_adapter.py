@@ -295,7 +295,8 @@ class NATSAdapter(MessagingClient):
         self,
         subject: str,
         callback: Callable[[bytes, Optional[str]], Awaitable[None]],
-        queue: Optional[str] = None
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe to NATS subject with callback.
@@ -334,7 +335,8 @@ class NATSAdapter(MessagingClient):
         self,
         subject: str,
         callback: Callable[[bytes, str, Optional[str]], Awaitable[None]],
-        queue: Optional[str] = None
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
     ) -> Subscription:
         """
         Subscribe to NATS subject with callback that receives the subject.
