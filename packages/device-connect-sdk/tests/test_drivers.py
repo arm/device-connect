@@ -3,8 +3,6 @@
 Tests @rpc, @emit decorators, schema generation, and DeviceDriver base class.
 """
 
-import asyncio
-from unittest.mock import AsyncMock
 
 import pytest
 

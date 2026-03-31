@@ -8,7 +8,6 @@ from device_connect_server.drivers import (
     build_function_schema,
     build_event_schema,
 )
-from device_connect_server.types import DeviceCapabilities, DeviceIdentity
 
 
 class TestRpc:

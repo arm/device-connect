@@ -3,7 +3,6 @@
 Uses the SDK MessagingClient abstraction — supports NATS, Zenoh, and MQTT backends.
 """
 
-import asyncio
 import json
 import logging
 import uuid

@@ -7,14 +7,12 @@ with mocked messaging (no real Zenoh/NATS connection).
 import asyncio
 import json
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from device_connect_sdk.discovery import (
     BURST_INTERVAL,
-    STEADY_INTERVAL,
-    BURST_DURATION,
     PEER_TIMEOUT,
     PresenceAnnouncer,
     PresenceCollector,

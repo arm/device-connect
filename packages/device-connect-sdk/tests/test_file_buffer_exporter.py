@@ -1,10 +1,8 @@
 """Tests for device_connect_sdk.telemetry.file_buffer_exporter module."""
 
 import json
-import time
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from device_connect_sdk.telemetry.file_buffer_exporter import (
     FileBufferSpanExporter,

@@ -143,7 +143,6 @@ class TestMessagingConformance:
     async def test_wildcard_subscribe(self, messaging_client):
         """Wildcard subscribe (*.event.*) should match multiple subjects."""
         received = []
-        pattern = f"conformance.*.event.{uuid.uuid4().hex[:6]}"
         unique = uuid.uuid4().hex[:6]
 
         async def handler(data, reply):

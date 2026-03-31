@@ -8,17 +8,14 @@ Tests cover:
 - Unloading capabilities
 """
 
-import asyncio
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 from device_connect_server.drivers.capability_loader import (
     CapabilityLoader,
-    LoadedCapability,
-    EventSubscription,
 )
 
 

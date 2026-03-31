@@ -211,7 +211,7 @@ async def run(device_id: str, interval: float, creds_file: Optional[str] = None)
     """Start the device simulator."""
     nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
     tenant = os.getenv("TENANT", "default")
-    allow_insecure = os.getenv("DEVICE_CONNECT_ALLOW_INSECURE", "").lower() in ("1", "true", "yes")
+
 
     driver = StringGeneratorDriver(interval=interval)
 

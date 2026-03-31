@@ -8,10 +8,8 @@ Tests cover:
 - DeviceConnectTelemetry initialization and provider reuse
 """
 
-import uuid
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pytest
 
 
 # -- No-op behavior tests --
@@ -135,7 +133,7 @@ class TestPropagation:
         from device_connect_sdk.telemetry.propagation import extract_from_meta
 
         meta = {"source_device": "test-001"}
-        ctx = extract_from_meta(meta)
+        extract_from_meta(meta)
         # Should return None or a Context -- never raise
 
     def test_inject_into_payload_adds_fields(self):
@@ -152,7 +150,7 @@ class TestPropagation:
         from device_connect_sdk.telemetry.propagation import extract_from_payload
 
         payload = {"plate_id": "P003", "_traceparent": "00-abc-def-01"}
-        ctx = extract_from_payload(payload)
+        extract_from_payload(payload)
         # Should not raise
 
     def test_inject_extract_meta_roundtrip(self):
@@ -161,7 +159,7 @@ class TestPropagation:
 
         meta = {"source_device": "cam-001"}
         inject_into_meta(meta)
-        ctx = extract_from_meta(meta)
+        extract_from_meta(meta)
         # If OTel is installed, ctx should be a Context; if not, None
         # Either way, this should not raise
 
@@ -227,7 +225,7 @@ class TestDeviceConnectTelemetryConfig:
             cfg._initialized = False
             with patch.dict("os.environ", {"OTEL_SDK_DISABLED": "true"}):
                 from device_connect_sdk.telemetry.config import DeviceConnectTelemetry
-                t = DeviceConnectTelemetry(service_name="test-disabled")
+                DeviceConnectTelemetry(service_name="test-disabled")
                 # After init with OTEL_SDK_DISABLED, should stay disabled
                 # (actual behavior depends on whether OTel is installed)
         finally:

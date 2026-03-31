@@ -4,7 +4,7 @@ Tests use a mocked MessagingClient — no real NATS required.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
 
@@ -75,7 +75,7 @@ class TestRegistryClientConnection:
     @pytest.mark.asyncio
     async def test_context_manager(self):
         mc = _mock_messaging({"result": {}})
-        async with RegistryClient(mc) as client:
+        async with RegistryClient(mc) as _client:
             pass
         mc.close.assert_called_once()
 

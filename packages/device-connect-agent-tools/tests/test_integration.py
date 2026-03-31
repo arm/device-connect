@@ -206,7 +206,7 @@ class TestStandaloneToolsLLM:
     def test_strands_agent_with_device_connect_tools(self, device_connect_connection, api_key):
         """A plain Strands Agent should be able to use Device Connect tools."""
         from strands import Agent
-        from device_connect_agent_tools import discover_devices, invoke_device
+        from device_connect_agent_tools import discover_devices
 
         api_key_value, provider = api_key
 

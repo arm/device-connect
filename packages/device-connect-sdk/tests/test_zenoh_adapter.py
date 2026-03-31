@@ -6,8 +6,7 @@ The Zenoh Python SDK is synchronous, so mocks use MagicMock (not AsyncMock).
 
 import asyncio
 import json
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -526,7 +525,6 @@ class TestZenohClientSubscribe:
         mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
 
         from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
-        import logging
 
         adapter = ZenohAdapter()
         await adapter.connect(servers=["tcp/host:7447"])

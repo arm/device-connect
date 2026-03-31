@@ -1,8 +1,6 @@
 """Tests for D2D (device-to-device) communication in DeviceDriver."""
-import asyncio
-import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from device_connect_server.drivers.base import DeviceDriver, on
 from device_connect_server.drivers.decorators import rpc

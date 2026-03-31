@@ -1,6 +1,5 @@
 """Tests for DeviceDriver.wait_for_device() and depends_on startup gating."""
 
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 

@@ -1,8 +1,6 @@
 """Tests for device_connect_server.statectl.cli helper functions."""
 
 import base64
-import json
-from unittest.mock import MagicMock
 
 from device_connect_server.statectl.cli import (
     _kv_key,

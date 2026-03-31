@@ -6,8 +6,6 @@ and reacts automatically via NATS pub/sub.
 
 import asyncio
 import time
-import uuid
-from typing import Optional
 
 import pytest
 

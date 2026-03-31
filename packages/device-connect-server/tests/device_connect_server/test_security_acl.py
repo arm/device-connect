@@ -1,6 +1,5 @@
 """Tests for device_connect_server.security.acl module."""
 
-import pytest
 from device_connect_server.security.acl import (
     EventACL,
     FunctionACL,

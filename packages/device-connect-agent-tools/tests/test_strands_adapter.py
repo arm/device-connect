@@ -30,7 +30,7 @@ def _install_strands_mock():
 @pytest.fixture(autouse=True)
 def _mock_strands_and_connection():
     """Mock the strands package and the Device Connect connection for all tests."""
-    strands_mod = _install_strands_mock()
+    _install_strands_mock()
 
     mock_conn = MagicMock()
     mock_conn.list_devices.return_value = []

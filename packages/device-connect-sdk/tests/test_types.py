@@ -4,7 +4,6 @@ from device_connect_sdk.types import (
     DeviceState,
     DeviceIdentity,
     DeviceStatus,
-    DeviceCapabilities,
     FunctionDef,
     EventDef,
 )

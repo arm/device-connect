@@ -4,10 +4,9 @@ Tests can run as integration tests against a real etcd instance
 (requires Docker) or as unit tests with mocked etcd3gw client.
 """
 
-import asyncio
 import base64
 import json
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
