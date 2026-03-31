@@ -1,6 +1,5 @@
 """Tests for device_connect_server.logging module."""
 import pytest
-import time
 from device_connect_server.logging import (
     AuditLogger,
     LogEntry,

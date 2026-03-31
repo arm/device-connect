@@ -30,7 +30,7 @@ ITEST_ROOT = Path(__file__).parent
 if str(ITEST_ROOT) not in sys.path:
     sys.path.insert(0, str(ITEST_ROOT))
 
-from fixtures.infrastructure import (
+from fixtures.infrastructure import (  # noqa: E402
     DockerComposeManager,
     clear_device_registry,
     wait_for_all_services,

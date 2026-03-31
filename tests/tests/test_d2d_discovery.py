@@ -11,8 +11,6 @@ Requires: eclipse-zenoh Python package installed.
 
 import asyncio
 import json
-import os
-import time
 
 import pytest
 
@@ -37,8 +35,8 @@ def d2d_env(monkeypatch):
     monkeypatch.delenv("NATS_URLS", raising=False)
 
 
-from device_connect_sdk.drivers import DeviceDriver, rpc
-from device_connect_sdk.types import DeviceIdentity, DeviceStatus
+from device_connect_sdk.drivers import DeviceDriver, rpc  # noqa: E402
+from device_connect_sdk.types import DeviceIdentity, DeviceStatus  # noqa: E402
 
 
 class _StubDriver(DeviceDriver):

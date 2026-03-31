@@ -32,7 +32,7 @@ Authentication Modes:
        - Not suitable for production deployments
 
 Example:
-    from fabric import DeviceRuntime
+    from device_connect_sdk import DeviceRuntime
     from device_connect_sdk.drivers import DeviceDriver, rpc
 
     class CameraDriver(DeviceDriver):
@@ -188,7 +188,7 @@ class DeviceRuntime:
         commissioning_port: TCP port for commissioning server (default: 5540)
 
     Example (Driver-based):
-        from fabric import DeviceRuntime
+        from device_connect_sdk import DeviceRuntime
         from device_connect_sdk.drivers import DeviceDriver, rpc
 
         class CameraDriver(DeviceDriver):
@@ -205,7 +205,7 @@ class DeviceRuntime:
         )
 
     Example (Type models):
-        from fabric import DeviceRuntime
+        from device_connect_sdk import DeviceRuntime
         from device_connect_sdk.types import DeviceCapabilities, DeviceIdentity, DeviceStatus
 
         device = DeviceRuntime(
@@ -591,7 +591,7 @@ class DeviceRuntime:
                 f"  1. Set the credentials file path correctly\n"
                 f"  2. Verified the file exists and is readable\n\n"
                 f"For NATS JWT auth, commission the device first:\n"
-                f"  python -m fabric.devctl commission <device-id> --pin <pin>\n"
+                f"  python -m device_connect_server.devctl commission <device-id> --pin <pin>\n"
                 f"For Zenoh mTLS, generate a client cert:\n"
                 f"  ./security_infra/generate_tls_certs.sh --client <device-id>\n"
                 f"{'='*70}\n"
@@ -827,15 +827,12 @@ class DeviceRuntime:
             Path to credentials file
         """
         try:
-            from device_connect_sdk.security.commissioning import CommissioningMode
+            from device_connect_server.security.commissioning import CommissioningMode
         except ImportError:
-            try:
-                from fabric.security.commissioning import CommissioningMode
-            except ImportError:
-                raise ImportError(
-                    "Commissioning requires device-connect-server[security]. "
-                    "Install with: pip install 'device-connect-server[security]'"
-                )
+            raise ImportError(
+                "Commissioning requires device-connect-server[security]. "
+                "Install with: pip install 'device-connect-server[security]'"
+            )
 
         if not self._factory_identity:
             raise ValueError("Factory identity required for commissioning")
@@ -1547,10 +1544,7 @@ class DeviceRuntime:
             self._logger.debug("D2DRegistry configured for DeviceDriver (no infrastructure)")
         else:
             try:
-                try:
-                    from device_connect_sdk.registry.client import RegistryClient
-                except ImportError:
-                    from fabric.registry.client import RegistryClient
+                from device_connect_server.registry.client import RegistryClient
                 from device_connect_sdk.messaging.config import MessagingConfig
                 config = MessagingConfig(
                     backend=self._messaging_backend or "zenoh",
@@ -1620,5 +1614,3 @@ class DeviceRuntime:
                 asyncio.create_task(cb())
             except Exception as e:
                 self._logger.exception("Registration callback error: %s", e)
-
-

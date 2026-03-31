@@ -1,7 +1,6 @@
 """Tests for DriverTransport — raw messaging transport for DeviceDriver."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

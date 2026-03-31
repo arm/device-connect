@@ -11,7 +11,6 @@ import json
 import sys
 from unittest.mock import MagicMock, patch, call
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # Inject mock etcd3gw into sys.modules BEFORE importing the registry module.

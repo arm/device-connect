@@ -83,12 +83,9 @@ from device_connect_sdk.telemetry.propagation import inject_into_meta
 if TYPE_CHECKING:
     from device_connect_sdk.device import DeviceRuntime, _D2DRouter as DeviceRouter
     try:
-        from device_connect_sdk.registry.client import RegistryClient
+        from device_connect_server.registry.client import RegistryClient
     except ImportError:
-        try:
-            from fabric.registry.client import RegistryClient  # type: ignore[assignment]
-        except ImportError:
-            pass
+        pass
 
 
 logger = logging.getLogger("device_connect.drivers.base")

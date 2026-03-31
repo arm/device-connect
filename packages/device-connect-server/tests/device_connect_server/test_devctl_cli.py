@@ -1,7 +1,6 @@
 """Tests for device_connect_server.devctl.cli module."""
 
 import json
-from io import StringIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

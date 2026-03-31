@@ -81,9 +81,10 @@ jobs:
         run: pip install ruff
       - name: Lint all packages
         run: |
-          ruff check packages/device-connect-sdk/device_connect_sdk/
-          ruff check packages/device-connect-server/device_connect_server/
-          ruff check packages/device-connect-agent-tools/device_connect_agent_tools/
+          ruff check packages/device-connect-sdk/
+          ruff check packages/device-connect-server/
+          ruff check packages/device-connect-agent-tools/
+          ruff check tests/
 
   # ── Tier 1: Integration tests (no LLM) ────────────────────────
   integration-tests:
