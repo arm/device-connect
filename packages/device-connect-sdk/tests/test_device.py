@@ -7,6 +7,8 @@ and _D2DRouter — all with mocked messaging (no real NATS connection).
 import asyncio
 import json
 import os
+import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -357,3 +359,134 @@ class TestEnqueueEvent:
         await rt.enqueue_event("eventA", {"a": 1})
         await rt.enqueue_event("eventB", {"b": 2})
         assert rt._event_queue.qsize() == 2
+
+
+def _fake_package(name: str) -> types.ModuleType:
+    module = types.ModuleType(name)
+    module.__path__ = []  # type: ignore[attr-defined]
+    return module
+
+
+# ── Split-package compatibility regressions ──────────────────────
+
+class TestSplitPackageImports:
+    def test_missing_credentials_error_references_devctl_module(self):
+        rt = DeviceRuntime(device_id="sensor-1", messaging_urls=["nats://localhost:4222"])
+
+        with pytest.raises(FileNotFoundError) as excinfo:
+            rt._load_credentials("/definitely/missing.creds.json")
+
+        assert "python -m device_connect_server.devctl commission" in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_run_commissioning_imports_from_device_connect_server(self, tmp_path):
+        calls = {}
+
+        class FakeCommissioningMode:
+            def __init__(
+                self,
+                *,
+                device_id,
+                device_type,
+                factory_pin,
+                capabilities,
+                nkey_public,
+                nkey_seed,
+                port,
+            ):
+                calls["init"] = {
+                    "device_id": device_id,
+                    "device_type": device_type,
+                    "factory_pin": factory_pin,
+                    "capabilities": capabilities,
+                    "nkey_public": nkey_public,
+                    "nkey_seed": nkey_seed,
+                    "port": port,
+                }
+
+            async def start_commissioning_server(self):
+                calls["started"] = True
+                return {"device_id": "sensor-1", "nats": {"jwt": "jwt", "nkey_seed": "seed"}}
+
+            def save_credentials(self, credentials, path):
+                calls["saved"] = {"credentials": credentials, "path": path}
+
+        server_pkg = _fake_package("device_connect_server")
+        security_pkg = _fake_package("device_connect_server.security")
+        commissioning_mod = types.ModuleType("device_connect_server.security.commissioning")
+        commissioning_mod.CommissioningMode = FakeCommissioningMode
+
+        identity_payload = {
+            "device_id": "sensor-1",
+            "device_type": "sensor",
+            "capabilities": {"functions": [], "events": []},
+            "provisioning": {"pin": "1234-5678", "commissioned": False},
+            "nkey": {"public_key": "PUB", "seed": "SEED"},
+        }
+        identity_path = tmp_path / "factory_identity.json"
+        identity_path.write_text(json.dumps(identity_payload))
+
+        rt = DeviceRuntime(
+            device_id="sensor-1",
+            messaging_urls=["nats://localhost:4222"],
+            factory_identity_file=str(identity_path),
+            auto_commission=False,
+        )
+        rt._factory_identity = dict(identity_payload)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "device_connect_server": server_pkg,
+                "device_connect_server.security": security_pkg,
+                "device_connect_server.security.commissioning": commissioning_mod,
+            },
+            clear=False,
+        ):
+            creds_path = await rt._run_commissioning()
+
+        assert calls["init"]["device_id"] == "sensor-1"
+        assert calls["init"]["device_type"] == "sensor"
+        assert calls["init"]["port"] == rt.commissioning_port
+        assert calls["started"] is True
+        assert calls["saved"]["path"] == creds_path
+        assert rt._factory_identity["provisioning"]["commissioned"] is True
+
+    @pytest.mark.asyncio
+    async def test_setup_agentic_driver_imports_registry_from_device_connect_server(self):
+        class FakeRegistryClient:
+            def __init__(self, messaging, config, tenant="default"):
+                self.messaging = messaging
+                self.config = config
+                self.tenant = tenant
+
+        server_pkg = _fake_package("device_connect_server")
+        registry_pkg = _fake_package("device_connect_server.registry")
+        registry_mod = types.ModuleType("device_connect_server.registry.client")
+        registry_mod.RegistryClient = FakeRegistryClient
+
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="sensor-1",
+            messaging_urls=["nats://localhost:4222"],
+        )
+        rt._d2d_mode = False
+        rt.messaging = AsyncMock()
+
+        with patch.dict(
+            sys.modules,
+            {
+                "device_connect_server": server_pkg,
+                "device_connect_server.registry": registry_pkg,
+                "device_connect_server.registry.client": registry_mod,
+            },
+            clear=False,
+        ):
+            await rt._setup_agentic_driver()
+
+        assert isinstance(driver.registry, FakeRegistryClient)
+        assert driver.registry.messaging is rt.messaging
+        assert driver.registry.tenant == "default"
+        assert driver.registry.config.backend == "nats"
+        assert driver.registry.config.servers == ["nats://localhost:4222"]
