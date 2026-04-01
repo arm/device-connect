@@ -101,7 +101,7 @@ class DeviceToolsServer:
             return
 
         try:
-            from device_connect_sdk.messaging import create_client
+            from device_connect_edge.messaging import create_client
 
             self._messaging = create_client("nats")
             connect_opts = {"servers": [NATS_URL]}

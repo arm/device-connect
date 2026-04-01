@@ -1,6 +1,6 @@
 """Device spawning fixtures for cross-repo integration tests.
 
-Uses device_connect_sdk (device-connect-sdk) — validates the edge SDK package.
+Uses device_connect_edge (device-connect-edge) — validates the edge SDK package.
 """
 
 import asyncio
@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import List, Optional, Tuple
 
-from device_connect_sdk import DeviceRuntime
+from device_connect_edge import DeviceRuntime
 
 from drivers.camera import TestCameraDriver
 from drivers.robot import TestRobotDriver
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 class DeviceFactory:
-    """Factory for spawning simulated test devices using device_connect_sdk.
+    """Factory for spawning simulated test devices using device_connect_edge.
 
     Usage:
         factory = DeviceFactory(messaging_url="nats://localhost:4222")

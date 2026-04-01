@@ -25,8 +25,8 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "device-connect-sdk>=0.1.0",
-    # nats-py, pydantic, nkeys, pyyaml are transitive via device-connect-sdk
+    "device-connect-edge>=0.2.0",
+    # nats-py, pydantic, nkeys, pyyaml are transitive via device-connect-edge
 ]
 
 [project.optional-dependencies]

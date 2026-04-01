@@ -5,7 +5,7 @@ Infrastructure:
     - Dev mode: no TLS, no JWT (DEVICE_CONNECT_ALLOW_INSECURE=true)
 
 Fixtures:
-    - device_spawner: DeviceFactory using device_connect_sdk package
+    - device_spawner: DeviceFactory using device_connect_edge package
     - event_capture: EventCollector for messaging event capture
     - event_injector: EventInjector for simulating device events
     - mock_orchestrator: Rule-based orchestrator (no LLM)
@@ -127,7 +127,7 @@ def nats_url(messaging_url) -> str:
 @pytest_asyncio.fixture
 async def messaging_client(infrastructure, messaging_backend, messaging_url):
     """Connected SDK MessagingClient for direct RPC calls in tests."""
-    from device_connect_sdk.messaging import create_client
+    from device_connect_edge.messaging import create_client
 
     client = create_client(messaging_backend)
     await client.connect(servers=[messaging_url])
@@ -137,11 +137,11 @@ async def messaging_client(infrastructure, messaging_backend, messaging_url):
         await client.close()
 
 
-# ── Device spawner (uses device_connect_sdk) ────────────────────────────
+# ── Device spawner (uses device_connect_edge) ────────────────────────────
 
 @pytest_asyncio.fixture
 async def device_spawner(infrastructure, messaging_url):
-    """Factory for spawning simulated devices via device_connect_sdk."""
+    """Factory for spawning simulated devices via device_connect_edge."""
     from fixtures.devices import DeviceFactory
 
     factory = DeviceFactory(messaging_url=messaging_url)

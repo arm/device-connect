@@ -1,6 +1,6 @@
-"""Test sensor driver using device_connect_sdk (device-connect-sdk).
+"""Test sensor driver using device_connect_edge (device-connect-edge).
 
-Validates the edge SDK package by importing from device_connect_sdk.drivers.
+Validates the edge SDK package by importing from device_connect_edge.drivers.
 """
 
 import asyncio
@@ -8,8 +8,8 @@ import time
 import uuid
 from typing import Optional
 
-from device_connect_sdk.drivers import DeviceDriver, rpc, emit
-from device_connect_sdk.types import DeviceIdentity, DeviceStatus
+from device_connect_edge.drivers import DeviceDriver, rpc, emit
+from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
 
 class TestSensorDriver(DeviceDriver):

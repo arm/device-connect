@@ -1,6 +1,6 @@
 """Integration tests for D2O event emission.
 
-Tests that device_connect_sdk drivers emit events that can be captured
+Tests that device_connect_edge drivers emit events that can be captured
 by messaging subscribers (orchestrator perspective).
 """
 

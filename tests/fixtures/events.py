@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from device_connect_sdk.messaging import create_client
+from device_connect_edge.messaging import create_client
 
 logger = logging.getLogger(__name__)
 

@@ -8,7 +8,7 @@ This is a monorepo containing three packages and a cross-package integration tes
 
 | Package | Description | Install |
 |---------|-------------|---------|
-| [`device-connect-sdk`](packages/device-connect-sdk/) | Edge SDK — `DeviceDriver`, `DeviceRuntime`, `@rpc`/`@emit` decorators | `pip install device-connect-sdk` |
+| [`device-connect-edge`](packages/device-connect-edge/) | Edge SDK — `DeviceDriver`, `DeviceRuntime`, `@rpc`/`@emit` decorators | `pip install device-connect-edge` |
 | [`device-connect-server`](packages/device-connect-server/) | Server — registry, security, state management, `devctl`/`statectl` CLIs | `pip install device-connect-server` |
 | [`device-connect-agent-tools`](packages/device-connect-agent-tools/) | Agent SDK — `discover_devices`, `invoke_device`, Strands/LangChain/MCP adapters | `pip install device-connect-agent-tools` |
 | [`tests/`](tests/) | Integration tests — D2D, D2O, messaging conformance, LLM orchestration | — |
@@ -39,7 +39,7 @@ The fastest way to get started — no Docker, no broker, no configuration. Zenoh
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh  # skip if uv already installed
-uv venv && source .venv/bin/activate && uv pip install device-connect-sdk
+uv venv && source .venv/bin/activate && uv pip install device-connect-edge
 ```
 
 ### 2. Write a device driver
@@ -47,8 +47,8 @@ uv venv && source .venv/bin/activate && uv pip install device-connect-sdk
 ```python
 # sensor.py
 import asyncio
-from device_connect_sdk import DeviceRuntime
-from device_connect_sdk.drivers import DeviceDriver, rpc
+from device_connect_edge import DeviceRuntime
+from device_connect_edge.drivers import DeviceDriver, rpc
 
 class SensorDriver(DeviceDriver):
     device_type = "sensor"
@@ -101,7 +101,7 @@ For quick start with a router, device registry, and distributed state — see [`
 ### Editable install (all packages)
 
 ```bash
-pip install -e packages/device-connect-sdk
+pip install -e packages/device-connect-edge
 pip install -e "packages/device-connect-server[all]"
 pip install -e "packages/device-connect-agent-tools[strands]"
 ```
@@ -110,7 +110,7 @@ pip install -e "packages/device-connect-agent-tools[strands]"
 
 ```bash
 # SDK unit tests (no Docker)
-cd packages/device-connect-sdk && python3 -m pytest tests/ -v
+cd packages/device-connect-edge && python3 -m pytest tests/ -v
 
 # Server unit tests (no Docker)
 cd packages/device-connect-server && python3 -m pytest tests/ -v
