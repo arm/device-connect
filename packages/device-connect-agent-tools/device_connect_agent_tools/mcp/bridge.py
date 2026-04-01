@@ -1,9 +1,12 @@
 """MCP Bridge Server for Claude Desktop.
 
-Connects Claude Desktop to Device Connect devices by:
-1. Discovering devices via NATS registry
-2. Exposing device functions as MCP tools
-3. Routing MCP tool calls to devices via NATS
+Connects Claude Desktop to Device Connect devices by exposing 4 meta-tools
+for hierarchical device discovery, avoiding the MCP tool explosion problem:
+
+1. describe_fleet     — bird's-eye fleet summary
+2. list_devices       — paginated, filterable device roster (no schemas)
+3. get_device_functions — full function schemas for ONE device
+4. invoke_device      — call a function on a device
 
 Usage:
     # As a module (for Claude Desktop config)
@@ -19,16 +22,15 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from device_connect_sdk.messaging import create_client
 from device_connect_sdk.messaging.base import MessagingClient
+from device_connect_sdk.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
-from device_connect_agent_tools.mcp.discovery import DeviceDiscoveryClient, DiscoveryError
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
-from device_connect_agent_tools.mcp.schema import MCPToolDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,9 @@ class MCPBridgeServer:
 
     This server:
     - Runs as an MCP server via stdio transport
-    - Connects to Device Connect NATS for device discovery
-    - Exposes all device functions as MCP tools
-    - Routes tool calls through NATS to devices
+    - Connects to Device Connect messaging for device discovery
+    - Exposes 4 meta-tools for hierarchical discovery (not per-function)
+    - Routes invocations through messaging to devices
 
     Example:
         config = BridgeConfig.from_environment()
@@ -57,11 +59,6 @@ class MCPBridgeServer:
     """
 
     def __init__(self, config: BridgeConfig):
-        """Initialize MCP Bridge Server.
-
-        Args:
-            config: Bridge configuration
-        """
         if not FASTMCP_AVAILABLE:
             raise ImportError(
                 "FastMCP is required for MCP Bridge. "
@@ -71,33 +68,28 @@ class MCPBridgeServer:
         self.config = config
         self._mcp: Optional[FastMCP] = None
         self._messaging_client: Optional[MessagingClient] = None
-        self._discovery: Optional[DeviceDiscoveryClient] = None
+        self._registry: Optional[RegistryClient] = None
         self._router: Optional[ToolRouter] = None
-        self._tools: Dict[str, MCPToolDefinition] = {}
         self._running = False
 
     async def start(self) -> None:
-        """Start the MCP Bridge Server.
-
-        This connects to NATS, discovers devices, and runs the MCP server.
-        The method blocks until the server is stopped.
-        """
+        """Start the MCP Bridge Server."""
         if self._running:
             logger.warning("MCPBridgeServer already running")
             return
 
         self._running = True
         logger.info("Starting MCP Bridge Server")
-        logger.debug(f"Config: {self.config.to_dict()}")
 
         try:
-            # Connect to NATS
+            # Connect to messaging
             await self._connect_messaging()
 
-            # Initialize discovery and router
-            self._discovery = DeviceDiscoveryClient(
+            # Initialize registry client and router
+            self._registry = RegistryClient(
                 self._messaging_client,
                 tenant=self.config.tenant,
+                timeout=self.config.request_timeout,
                 cache_ttl=self.config.refresh_interval,
             )
             self._router = ToolRouter(
@@ -106,185 +98,209 @@ class MCPBridgeServer:
                 timeout=self.config.request_timeout,
             )
 
-            # Create FastMCP server
+            # Create FastMCP server with 4 meta-tools
             self._mcp = FastMCP("Device Connect Bridge")
+            self._register_meta_tools()
 
-            # Register the dynamic tool handler
-            self._register_dynamic_tools()
-
-            # Do initial tool discovery BEFORE starting MCP server
-            # This ensures tools are available when Claude Desktop first queries
-            logger.info("Performing initial tool discovery...")
-            await self._refresh_tools()
-
-            # Start background refresh task
-            refresh_task = asyncio.create_task(self._refresh_loop())
-
-            try:
-                # Run MCP server (async - for stdio transport)
-                logger.info("MCP Bridge ready - waiting for connections")
-                await self._mcp.run_stdio_async()
-            finally:
-                refresh_task.cancel()
-                try:
-                    await refresh_task
-                except asyncio.CancelledError:
-                    pass
+            logger.info("MCP Bridge ready — 4 meta-tools registered")
+            await self._mcp.run_stdio_async()
 
         finally:
             await self._cleanup()
 
     async def _connect_messaging(self) -> None:
-        """Connect to NATS messaging."""
-        logger.info(f"Connecting to NATS: {self.config.messaging_urls}")
-
+        logger.info(f"Connecting to messaging: {self.config.messaging_urls}")
         self._messaging_client = create_client("nats")
         await self._messaging_client.connect(
             servers=self.config.messaging_urls,
             credentials=self.config.messaging_auth,
             tls_config=self.config.messaging_tls,
         )
+        logger.info("Connected to messaging")
 
-        logger.info("Connected to NATS")
+    def _register_meta_tools(self) -> None:
+        """Register the 4 hierarchical discovery meta-tools."""
 
-    def _register_dynamic_tools(self) -> None:
-        """Register the dynamic tool handler with FastMCP.
+        @self._mcp.tool(
+            name="describe_fleet",
+            description=(
+                "Get a high-level summary of all available IoT devices. "
+                "Returns device counts grouped by type and location. "
+                "Call this first to understand what devices are available."
+            ),
+        )
+        async def describe_fleet() -> str:
+            """Fleet summary with type/location groupings."""
+            devices = await self._registry.list_devices()
+            from collections import defaultdict
 
-        Since device tools are discovered dynamically, we register a single
-        handler that routes to the appropriate device based on tool name.
-        """
-        # Register tools/list handler to return discovered tools
-        @self._mcp.resource("device-connect://tools")
-        async def list_device_connect_tools() -> str:
-            """List all available Device Connect device tools."""
-            tools = await self._get_tools()
-            return "\n".join(
-                f"- {t.name}: {t.description}"
-                for t in tools
+            by_type: dict = defaultdict(lambda: {"count": 0, "locations": set()})
+            by_location: dict = defaultdict(lambda: {"count": 0, "types": set()})
+            total_functions = 0
+
+            for d in devices:
+                identity = d.get("identity") or {}
+                status = d.get("status") or {}
+                caps = d.get("capabilities") or {}
+                dt = identity.get("device_type") or d.get("device_type") or "unknown"
+                loc = status.get("location") or d.get("location") or "unknown"
+                funcs = caps.get("functions", [])
+                total_functions += len(funcs)
+
+                by_type[dt]["count"] += 1
+                by_type[dt]["locations"].add(loc)
+                by_location[loc]["count"] += 1
+                by_location[loc]["types"].add(dt)
+
+            result = {
+                "total_devices": len(devices),
+                "total_functions": total_functions,
+                "by_type": {
+                    k: {"count": v["count"], "locations": sorted(v["locations"])}
+                    for k, v in sorted(by_type.items())
+                },
+                "by_location": {
+                    k: {"count": v["count"], "types": sorted(v["types"])}
+                    for k, v in sorted(by_location.items())
+                },
+            }
+            return json.dumps(result, indent=2)
+
+        @self._mcp.tool(
+            name="list_devices",
+            description=(
+                "Browse available IoT devices with filtering and pagination. "
+                "Returns compact summaries WITHOUT function schemas. "
+                "Use get_device_functions(device_id) to see what a device can do."
+            ),
+        )
+        async def list_devices(
+            device_type: str = "",
+            location: str = "",
+            group_by: str = "",
+            offset: int = 0,
+            limit: int = 20,
+        ) -> str:
+            """Paginated, filterable device list."""
+            devices = await self._registry.list_devices(
+                device_type=device_type or None,
+                location=location or None,
             )
 
-    async def _refresh_loop(self) -> None:
-        """Periodically refresh the tool list from device registry."""
-        while self._running:
-            try:
-                await self._refresh_tools()
-            except Exception as e:
-                logger.error(f"Tool refresh failed: {e}")
+            def _compact(d: dict) -> dict:
+                identity = d.get("identity") or {}
+                status = d.get("status") or {}
+                caps = d.get("capabilities") or {}
+                funcs = caps.get("functions", [])
+                return {
+                    "device_id": d.get("device_id"),
+                    "device_type": identity.get("device_type") or d.get("device_type"),
+                    "location": status.get("location") or d.get("location"),
+                    "function_count": len(funcs),
+                    "function_names": [
+                        f.get("name") if isinstance(f, dict) else f for f in funcs
+                    ],
+                }
 
-            await asyncio.sleep(self.config.refresh_interval)
+            total = len(devices)
 
-    async def _refresh_tools(self) -> None:
-        """Refresh available tools from device registry."""
-        if not self._discovery or not self._mcp:
-            return
+            if group_by in ("location", "device_type"):
+                from collections import defaultdict as dd
+                groups: dict = dd(list)
+                for d in devices:
+                    c = _compact(d)
+                    key = c.get(group_by) or "unknown"
+                    groups[key].append(c)
+                result = {"groups": dict(sorted(groups.items())), "total": total}
+            else:
+                page = devices[offset:offset + limit]
+                result = {
+                    "devices": [_compact(d) for d in page],
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + limit < total,
+                }
 
-        try:
-            tools = await self._discovery.get_tools()
-            logger.info(f"Discovered {len(tools)} tools from registry")
+            return json.dumps(result, indent=2)
 
-            # Update tool cache
-            new_tools = {t.name: t for t in tools}
+        @self._mcp.tool(
+            name="get_device_functions",
+            description=(
+                "Get full function schemas for a specific device. "
+                "Call this after list_devices() to see what parameters "
+                "each function accepts before invoking it."
+            ),
+        )
+        async def get_device_functions(device_id: str) -> str:
+            """Full function schemas for one device."""
+            device = await self._registry.get_device(device_id)
+            if not device:
+                return json.dumps({"error": f"Device {device_id} not found"})
 
-            # Register new tools with FastMCP
-            for name, tool_def in new_tools.items():
-                if name not in self._tools:
-                    self._register_tool(tool_def)
+            identity = device.get("identity") or {}
+            status = device.get("status") or {}
+            caps = device.get("capabilities") or {}
+            functions = caps.get("functions", [])
+            events = caps.get("events", [])
 
-            self._tools = new_tools
+            result = {
+                "device_id": device.get("device_id"),
+                "device_type": identity.get("device_type"),
+                "location": status.get("location"),
+                "functions": [
+                    {
+                        "name": f.get("name") if isinstance(f, dict) else f,
+                        "description": f.get("description", "") if isinstance(f, dict) else "",
+                        "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
+                    }
+                    for f in functions
+                ],
+                "events": [
+                    e.get("name") if isinstance(e, dict) else e for e in events
+                ],
+            }
+            return json.dumps(result, indent=2)
 
-        except DiscoveryError as e:
-            logger.warning(f"Discovery failed: {e}")
-
-    def _register_tool(self, tool_def: MCPToolDefinition) -> None:
-        """Register a single tool with FastMCP."""
-        # Original name uses :: separator (e.g., device-id::function_name)
-        original_name = tool_def.name
-
-        # MCP-compliant name uses -- separator (only a-zA-Z0-9_- allowed)
-        mcp_name = original_name.replace("::", "--")
-
-        logger.info(f"Registering tool: {mcp_name}")
-
-        # FastMCP doesn't support **kwargs, so we use a single dict parameter
-        # that we'll pass through to the device
-        async def tool_handler(arguments: str = "{}") -> Any:
-            """Dynamic tool handler.
-
-            Args:
-                arguments: JSON string of arguments to pass to the device function
-            """
-            import json
+        @self._mcp.tool(
+            name="invoke_device",
+            description=(
+                "Call a function on a Device Connect device. "
+                "Use get_device_functions() first to see available functions "
+                "and their parameter schemas."
+            ),
+        )
+        async def invoke_device(
+            device_id: str,
+            function: str,
+            arguments: str = "{}",
+        ) -> str:
+            """Invoke a device function."""
             try:
                 args = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError:
                 args = {}
-            # Use original name with :: for routing to device
-            return await self._invoke_tool(original_name, args)
 
-        # Set function metadata for FastMCP
-        tool_handler.__name__ = mcp_name.replace(".", "_").replace("-", "_")
-        tool_handler.__doc__ = tool_def.description or f"Invoke {original_name}"
-
-        # Register with FastMCP using the MCP-compliant name
-        self._mcp.tool(
-            name=mcp_name,
-            description=tool_def.description or f"Invoke {original_name}",
-        )(tool_handler)
-
-    async def _invoke_tool(
-        self,
-        tool_name: str,
-        arguments: Dict[str, Any],
-    ) -> Any:
-        """Invoke a tool via the router.
-
-        Args:
-            tool_name: Tool name (device_id::function_name)
-            arguments: Tool arguments
-
-        Returns:
-            Tool result
-        """
-        if not self._router:
-            raise RuntimeError("Router not initialized")
-
-        logger.info(f"Invoking tool: {tool_name}")
-
-        try:
-            result = await self._router.invoke(tool_name, arguments)
-            return result
-        except ToolInvocationError as e:
-            logger.error(f"Tool invocation failed: {e}")
-            raise
-
-    async def _get_tools(self) -> List[MCPToolDefinition]:
-        """Get current list of tools."""
-        if not self._discovery:
-            return []
-
-        try:
-            return await self._discovery.get_tools()
-        except DiscoveryError:
-            # Return cached tools on discovery failure
-            return list(self._tools.values())
+            tool_name = f"{device_id}::{function}"
+            try:
+                result = await self._router.invoke(tool_name, args)
+                return json.dumps({"success": True, "result": result}, indent=2)
+            except ToolInvocationError as e:
+                return json.dumps({"success": False, "error": str(e)})
 
     async def _cleanup(self) -> None:
-        """Clean up resources."""
         self._running = False
-
         if self._messaging_client:
             try:
                 await self._messaging_client.close()
             except Exception as e:
                 logger.warning(f"Error closing messaging client: {e}")
-
         self._messaging_client = None
-        self._discovery = None
+        self._registry = None
         self._router = None
         self._mcp = None
 
     async def stop(self) -> None:
-        """Stop the server gracefully."""
         self._running = False
         await self._cleanup()
 

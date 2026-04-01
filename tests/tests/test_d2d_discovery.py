@@ -162,9 +162,9 @@ async def test_discover_devices_d2d_via_tools():
     try:
         await asyncio.sleep(5)
 
-        from device_connect_agent_tools.connection import _DeviceConnectConnection
+        from device_connect_agent_tools.connection import DeviceConnection
 
-        conn = _DeviceConnectConnection(zone="default")
+        conn = DeviceConnection(zone="default")
         conn.connect()
         try:
             # The tools connection creates a separate Zenoh session that needs

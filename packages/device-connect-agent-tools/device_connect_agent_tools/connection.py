@@ -32,13 +32,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 from device_connect_sdk.messaging import create_client, MessagingClient
 from device_connect_sdk.messaging.config import MessagingConfig
+from device_connect_sdk.discovery_provider import DiscoveryProvider
+from device_connect_sdk.registry_client import RegistryClient as _SDKRegistryClient
 
 logger = logging.getLogger(__name__)
 
 # ── Module-level singleton ──────────────────────────────────────────
 
 _lock = threading.Lock()
-_connection: Optional[_DeviceConnectConnection] = None
+_connection: Optional[DeviceConnection] = None  # forward ref resolved below
 
 
 # ── Well-known search paths for auto-discovery ─────────────────────
@@ -132,42 +134,10 @@ def _flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# ── JSON-RPC helper ─────────────────────────────────────────────────
-
-
-async def _rpc_request(
-    client: MessagingClient,
-    subject: str,
-    method: str,
-    params: Optional[Dict[str, Any]] = None,
-    timeout: float = 30.0,
-) -> Any:
-    """Send a JSON-RPC 2.0 request over the messaging client and return the result."""
-    req_id = f"rpc-{uuid.uuid4().hex[:12]}"
-    payload: Dict[str, Any] = {
-        "jsonrpc": "2.0",
-        "id": req_id,
-        "method": method,
-    }
-    if params:
-        payload["params"] = params
-
-    response_data = await client.request(subject, json.dumps(payload).encode(), timeout=timeout)
-    response = json.loads(response_data)
-
-    if "error" in response:
-        error = response["error"]
-        raise RuntimeError(
-            f"RPC error ({error.get('code', -1)}): {error.get('message', 'Unknown error')}"
-        )
-
-    return response.get("result")
-
-
 # ── Connection class ────────────────────────────────────────────────
 
 
-class _DeviceConnectConnection:
+class DeviceConnection:
     """Async messaging client with a dedicated event loop thread for sync callers."""
 
     def __init__(
@@ -206,6 +176,7 @@ class _DeviceConnectConnection:
                 self._servers = ["tls://localhost:4222"]
 
         self._client: Optional[MessagingClient] = None
+        self._provider: Optional[DiscoveryProvider] = None
         self._inbox: Dict[str, List[Dict[str, Any]]] = {}
         self._sync_subs: Dict[str, Any] = {}
 
@@ -256,6 +227,21 @@ class _DeviceConnectConnection:
         )
         logger.info("Connected to %s at %s", self._backend, self._servers)
 
+        # Initialize discovery provider
+        if self._d2d_mode:
+            from device_connect_sdk.discovery import PresenceCollector, D2DRegistry
+            self._d2d_collector = PresenceCollector(self._client, self.zone)
+            await self._d2d_collector.start()
+            await self._d2d_collector.wait_for_peers(timeout=3.0)
+            self._provider = D2DRegistry(self._d2d_collector)
+        else:
+            self._provider = _SDKRegistryClient(
+                self._client,
+                tenant=self.zone,
+                timeout=self._request_timeout,
+                cache_ttl=30.0,
+            )
+
     def close(self) -> None:
         """Close the connection and shut down the event loop thread."""
         if self._loop is None or self._loop.is_closed():
@@ -286,6 +272,7 @@ class _DeviceConnectConnection:
             except Exception:
                 pass
             self._d2d_collector = None
+        self._provider = None
         if self._client:
             try:
                 await asyncio.wait_for(self._client.close(), timeout=2.0)
@@ -298,49 +285,33 @@ class _DeviceConnectConnection:
     def list_devices(
         self,
         device_type: Optional[str] = None,
+        location: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List devices from the Device Connect registry via JSON-RPC."""
-        return self._run(self._async_list_devices(device_type))
+        """List devices via the discovery provider (D2D or registry)."""
+        return self._run(self._async_list_devices(device_type, location))
 
     async def _async_list_devices(
-        self, device_type: Optional[str] = None,
+        self,
+        device_type: Optional[str] = None,
+        location: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        if self._d2d_mode:
-            return await self._d2d_list_devices(device_type)
-
-        subject = f"device-connect.{self.zone}.discovery"
-        params: Dict[str, Any] = {}
-        if device_type:
-            params["device_type"] = device_type
-
-        result = await _rpc_request(
-            self._client, subject, "discovery/listDevices",
-            params if params else None,
-            timeout=self._request_timeout,
+        if self._provider is None:
+            raise RuntimeError("Not connected — call connect() first")
+        devices = await self._provider.list_devices(
+            device_type=device_type, location=location,
         )
-        return [_flatten_device(d) for d in result.get("devices", [])]
-
-    async def _d2d_list_devices(
-        self, device_type: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Discover devices via D2D presence (no registry needed)."""
-        from device_connect_sdk.discovery import PresenceCollector
-
-        if self._d2d_collector is None:
-            self._d2d_collector = PresenceCollector(self._client, self.zone)
-            await self._d2d_collector.start()
-            # Wait for initial presence messages to arrive
-            await self._d2d_collector.wait_for_peers(timeout=3.0)
-
-        devices = await self._d2d_collector.list_devices(device_type=device_type)
         return [_flatten_device(d) for d in devices]
 
     def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get a specific device by ID."""
-        devices = self.list_devices()
-        for device in devices:
-            if device.get("device_id") == device_id:
-                return device
+        return self._run(self._async_get_device(device_id))
+
+    async def _async_get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
+        if self._provider is None:
+            raise RuntimeError("Not connected — call connect() first")
+        device = await self._provider.get_device(device_id)
+        if device:
+            return _flatten_device(device)
         return None
 
     def invoke(
@@ -634,7 +605,7 @@ def connect(
         if _connection is not None:
             return
         zone = zone or os.environ.get("TENANT", "default")
-        conn = _DeviceConnectConnection(
+        conn = DeviceConnection(
             nats_url=nats_url,
             zone=zone,
             credentials=credentials,
@@ -654,7 +625,7 @@ def disconnect() -> None:
             _connection = None
 
 
-def get_connection() -> _DeviceConnectConnection:
+def get_connection() -> DeviceConnection:
     """Get the current connection, auto-connecting if needed."""
     global _connection
     if _connection is None:

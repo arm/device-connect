@@ -260,8 +260,14 @@ class PresenceCollector:
         self,
         *,
         device_type: Optional[str] = None,
+        location: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Return currently known peers, optionally filtered by device_type."""
+        """Return currently known peers, optionally filtered.
+
+        Args:
+            device_type: Filter by device type (fuzzy, case-insensitive).
+            location: Filter by device location (fuzzy, case-insensitive).
+        """
         async with self._lock:
             results = list(self._peers.values())
 
@@ -272,6 +278,13 @@ class PresenceCollector:
                 if device_type.lower() in dt.lower():
                     filtered.append(d)
             results = filtered
+
+        if location:
+            loc = location.lower()
+            results = [
+                d for d in results
+                if loc in ((d.get("status") or {}).get("location", "")).lower()
+            ]
 
         return results
 
@@ -365,7 +378,9 @@ class D2DRegistry:
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._collector.list_devices(device_type=device_type)
+        return await self._collector.list_devices(
+            device_type=device_type, location=location,
+        )
 
     async def get_device(
         self,

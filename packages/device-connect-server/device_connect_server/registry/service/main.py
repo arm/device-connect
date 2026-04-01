@@ -319,25 +319,61 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
 
 
 def _make_list_handler(tenant: str, messaging: MessagingClient):
-    """Create a listDevices RPC handler bound to ``tenant``."""
+    """Create a discovery RPC handler bound to ``tenant``.
 
-    async def rpc_list_devices(data: bytes, reply: Optional[str]):
+    Handles:
+    - ``discovery/listDevices`` — list devices with optional filters
+    - ``discovery/getDevice`` — get a single device by ID (O(1))
+    - ``discovery/describeFleet`` — aggregated fleet summary
+    """
+
+    async def rpc_discovery(data: bytes, reply: Optional[str]):
         payload = json.loads(data)
-        if payload.get("method") != "discovery/listDevices":
-            return
+        method = payload.get("method", "")
+        params = payload.get("params") or {}
+
         try:
-            devs = await asyncio.to_thread(registry.list_devices, tenant)
-            await messaging.publish(
-                reply,
-                build_rpc_response(payload["id"], {"devices": devs})
-            )
+            if method == "discovery/listDevices":
+                device_type = params.get("device_type")
+                location = params.get("location")
+                devs = await asyncio.to_thread(
+                    registry.list_devices, tenant,
+                    device_type=device_type, location=location,
+                )
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload["id"], {"devices": devs})
+                )
+            elif method == "discovery/getDevice":
+                device_id = params.get("device_id")
+                if not device_id:
+                    await messaging.publish(
+                        reply,
+                        build_rpc_error(payload.get("id"), -32602, "device_id required")
+                    )
+                    return
+                device = await asyncio.to_thread(
+                    registry.get_device, tenant, device_id,
+                )
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload["id"], {"device": device})
+                )
+            elif method == "discovery/describeFleet":
+                summary = await asyncio.to_thread(registry.describe_fleet, tenant)
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload["id"], summary)
+                )
+            else:
+                return  # Not a discovery method — ignore
         except Exception as e:
             await messaging.publish(
                 reply,
                 build_rpc_error(payload.get("id"), -32000, str(e))
             )
 
-    return rpc_list_devices
+    return rpc_discovery
 
 
 def _make_hb_handler(tenant: str):

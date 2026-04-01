@@ -39,6 +39,8 @@ from device_connect_sdk.types import (
     FunctionDef,
     EventDef,
 )
+from device_connect_sdk.discovery_provider import DiscoveryProvider
+from device_connect_sdk.registry_client import RegistryClient
 from device_connect_sdk.errors import (
     DeviceConnectError,
     DeviceError,
@@ -59,6 +61,8 @@ __all__ = [
     "DeviceStatus",
     "FunctionDef",
     "EventDef",
+    "DiscoveryProvider",
+    "RegistryClient",
     "DeviceConnectError",
     "DeviceError",
     "DeviceDependencyError",

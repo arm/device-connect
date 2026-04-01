@@ -82,7 +82,7 @@ SAMPLE_DEVICES = [
 
 @pytest.fixture
 def mock_conn():
-    """Provide a mock _DeviceConnectConnection connection and patch get_connection."""
+    """Provide a mock DeviceConnection and patch get_connection."""
     conn = MagicMock()
     conn.list_devices.return_value = SAMPLE_DEVICES
     with patch.object(tools_mod, "get_connection", return_value=conn):
@@ -279,3 +279,110 @@ class TestGetDeviceStatus:
         result = tools_mod.get_device_status("cam-001")
         assert "error" in result
         assert "NATS down" in result["error"]
+
+
+# ── describe_fleet ───────────────────────────────────────────────
+
+
+class TestDescribeFleet:
+    def test_fleet_summary(self, mock_conn):
+        result = tools_mod.describe_fleet()
+        assert result["total_devices"] == 3
+        assert result["total_functions"] == 3
+        assert "camera" in result["by_type"]
+        assert result["by_type"]["camera"]["count"] == 1
+        assert "lab-A" in result["by_type"]["camera"]["locations"]
+        assert "lab-A" in result["by_location"]
+        assert result["by_location"]["lab-A"]["count"] == 2  # cam + robot
+
+    def test_fleet_summary_empty(self, mock_conn):
+        mock_conn.list_devices.return_value = []
+        result = tools_mod.describe_fleet()
+        assert result["total_devices"] == 0
+        assert result["total_functions"] == 0
+        assert result["by_type"] == {}
+
+    def test_fleet_summary_connection_error(self, mock_conn):
+        mock_conn.list_devices.side_effect = Exception("down")
+        result = tools_mod.describe_fleet()
+        assert result["total_devices"] == 0
+
+
+# ── list_devices (new hierarchical) ─────────────────────────────
+
+
+class TestListDevices:
+    def test_list_all(self, mock_conn):
+        result = tools_mod.list_devices()
+        assert result["total"] == 3
+        assert len(result["devices"]) == 3
+        # No schemas in output — only function_names and function_count
+        for d in result["devices"]:
+            assert "function_count" in d
+            assert "function_names" in d
+            assert "parameters" not in str(d)
+
+    def test_list_with_type_filter(self, mock_conn):
+        result = tools_mod.list_devices(device_type="camera")
+        assert result["total"] == 1
+        assert result["devices"][0]["device_id"] == "cam-001"
+
+    def test_list_with_pagination(self, mock_conn):
+        result = tools_mod.list_devices(offset=0, limit=2)
+        assert result["total"] == 3
+        assert len(result["devices"]) == 2
+        assert result["has_more"] is True
+
+        result2 = tools_mod.list_devices(offset=2, limit=2)
+        assert len(result2["devices"]) == 1
+        assert result2["has_more"] is False
+
+    def test_list_group_by_location(self, mock_conn):
+        result = tools_mod.list_devices(group_by="location")
+        assert "groups" in result
+        assert "lab-A" in result["groups"]
+        assert "lab-B" in result["groups"]
+        assert len(result["groups"]["lab-A"]) == 2  # cam + robot
+        assert len(result["groups"]["lab-B"]) == 1  # sensor
+
+    def test_list_group_by_device_type(self, mock_conn):
+        result = tools_mod.list_devices(group_by="device_type")
+        assert "groups" in result
+        assert "camera" in result["groups"]
+        assert "cleaning_robot" in result["groups"]
+
+    def test_list_no_match(self, mock_conn):
+        result = tools_mod.list_devices(device_type="nonexistent")
+        assert result["total"] == 0
+        assert result["devices"] == []
+
+    def test_list_connection_error(self, mock_conn):
+        mock_conn.list_devices.side_effect = Exception("down")
+        result = tools_mod.list_devices()
+        assert result["total"] == 0
+
+
+# ── get_device_functions ─────────────────────────────────────────
+
+
+class TestGetDeviceFunctions:
+    def test_get_functions(self, mock_conn):
+        mock_conn.get_device.return_value = SAMPLE_DEVICES[0]
+        result = tools_mod.get_device_functions("cam-001")
+        assert result["device_id"] == "cam-001"
+        assert result["device_type"] == "camera"
+        assert len(result["functions"]) == 1
+        assert result["functions"][0]["name"] == "capture_image"
+        assert "parameters" in result["functions"][0]
+        assert len(result["events"]) == 2
+
+    def test_device_not_found(self, mock_conn):
+        mock_conn.get_device.return_value = None
+        result = tools_mod.get_device_functions("nonexistent")
+        assert "error" in result
+        assert "not found" in result["error"]
+
+    def test_connection_error(self, mock_conn):
+        mock_conn.get_device.side_effect = Exception("timeout")
+        result = tools_mod.get_device_functions("cam-001")
+        assert "error" in result
