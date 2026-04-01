@@ -1,40 +1,40 @@
-"""Verify that device_connect_server.* re-exports resolve to the same objects as device_connect_sdk.*."""
+"""Verify that device_connect_server.* re-exports resolve to the same objects as device_connect_edge.*."""
 
 import device_connect_server
-import device_connect_sdk
+import device_connect_edge
 from device_connect_server import drivers as server_drivers
-from device_connect_sdk import drivers as device_drivers
+from device_connect_edge import drivers as device_drivers
 from device_connect_server import messaging as server_messaging
-from device_connect_sdk import messaging as device_messaging
+from device_connect_edge import messaging as device_messaging
 from device_connect_server import telemetry as server_telemetry
-from device_connect_sdk import telemetry as device_telemetry
+from device_connect_edge import telemetry as device_telemetry
 
 
 class TestTopLevelReExports:
     def test_device_runtime_is_same(self):
-        assert device_connect_server.DeviceRuntime is device_connect_sdk.DeviceRuntime
+        assert device_connect_server.DeviceRuntime is device_connect_edge.DeviceRuntime
 
     def test_build_rpc_response(self):
-        assert device_connect_server.build_rpc_response is device_connect_sdk.build_rpc_response
+        assert device_connect_server.build_rpc_response is device_connect_edge.build_rpc_response
 
     def test_build_rpc_error(self):
-        assert device_connect_server.build_rpc_error is device_connect_sdk.build_rpc_error
+        assert device_connect_server.build_rpc_error is device_connect_edge.build_rpc_error
 
     def test_types(self):
-        assert device_connect_server.DeviceState is device_connect_sdk.DeviceState
-        assert device_connect_server.DeviceCapabilities is device_connect_sdk.DeviceCapabilities
-        assert device_connect_server.DeviceIdentity is device_connect_sdk.DeviceIdentity
-        assert device_connect_server.DeviceStatus is device_connect_sdk.DeviceStatus
-        assert device_connect_server.FunctionDef is device_connect_sdk.FunctionDef
-        assert device_connect_server.EventDef is device_connect_sdk.EventDef
+        assert device_connect_server.DeviceState is device_connect_edge.DeviceState
+        assert device_connect_server.DeviceCapabilities is device_connect_edge.DeviceCapabilities
+        assert device_connect_server.DeviceIdentity is device_connect_edge.DeviceIdentity
+        assert device_connect_server.DeviceStatus is device_connect_edge.DeviceStatus
+        assert device_connect_server.FunctionDef is device_connect_edge.FunctionDef
+        assert device_connect_server.EventDef is device_connect_edge.EventDef
 
     def test_errors(self):
-        assert device_connect_server.DeviceConnectError is device_connect_sdk.DeviceConnectError
-        assert device_connect_server.DeviceError is device_connect_sdk.DeviceError
-        assert device_connect_server.RegistrationError is device_connect_sdk.RegistrationError
-        assert device_connect_server.FunctionInvocationError is device_connect_sdk.FunctionInvocationError
-        assert device_connect_server.ValidationError is device_connect_sdk.ValidationError
-        assert device_connect_server.CommissioningError is device_connect_sdk.CommissioningError
+        assert device_connect_server.DeviceConnectError is device_connect_edge.DeviceConnectError
+        assert device_connect_server.DeviceError is device_connect_edge.DeviceError
+        assert device_connect_server.RegistrationError is device_connect_edge.RegistrationError
+        assert device_connect_server.FunctionInvocationError is device_connect_edge.FunctionInvocationError
+        assert device_connect_server.ValidationError is device_connect_edge.ValidationError
+        assert device_connect_server.CommissioningError is device_connect_edge.CommissioningError
 
 
 class TestDriversReExports:

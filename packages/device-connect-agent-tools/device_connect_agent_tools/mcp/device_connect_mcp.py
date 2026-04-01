@@ -45,14 +45,14 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
-from device_connect_sdk.device import DeviceRuntime
-from device_connect_sdk.drivers.base import DeviceDriver
-from device_connect_sdk.drivers.decorators import (
+from device_connect_edge.device import DeviceRuntime
+from device_connect_edge.drivers.base import DeviceDriver
+from device_connect_edge.drivers.decorators import (
     build_function_schema,
     build_event_schema,
     _parse_docstring,
 )
-from device_connect_sdk.types import (
+from device_connect_edge.types import (
     DeviceCapabilities,
     DeviceIdentity,
     DeviceStatus,

@@ -9,9 +9,9 @@ import time
 
 import pytest
 
-from device_connect_sdk.drivers import DeviceDriver, rpc, emit, on
-from device_connect_sdk.types import DeviceIdentity, DeviceStatus
-from device_connect_sdk import DeviceRuntime
+from device_connect_edge.drivers import DeviceDriver, rpc, emit, on
+from device_connect_edge.types import DeviceIdentity, DeviceStatus
+from device_connect_edge import DeviceRuntime
 
 
 SETTLE_TIME = 0.5

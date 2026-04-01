@@ -21,7 +21,7 @@ ZENOH_CONNECT = os.getenv("ZENOH_CONNECT", "tcp/localhost:7447")
 @pytest.mark.slow
 async def test_streaming_50hz(infrastructure):
     """Publish at 50Hz for 2 seconds, verify all messages received."""
-    from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+    from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
 
     publisher = ZenohAdapter()
     subscriber = ZenohAdapter()
@@ -85,7 +85,7 @@ async def test_streaming_50hz(infrastructure):
 @pytest.mark.slow
 async def test_streaming_multiple_topics(infrastructure):
     """Publish to 3 topics concurrently at 20Hz each, verify all arrive."""
-    from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+    from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
 
     publisher = ZenohAdapter()
     subscriber = ZenohAdapter()

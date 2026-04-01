@@ -1,6 +1,6 @@
 """Device Connect - Edge device orchestration framework.
 
-This package re-exports everything from device_connect_sdk (the lightweight
+This package re-exports everything from device_connect_edge (the lightweight
 device SDK) and adds core extensions: registry, security, state, logging,
 CapabilityLoader, devctl, and statectl.
 
@@ -40,8 +40,8 @@ Example:
     )
     await device.run()
 """
-# Re-export everything from device_connect_sdk
-from device_connect_sdk import (  # noqa: F401
+# Re-export everything from device_connect_edge
+from device_connect_edge import (  # noqa: F401
     DeviceRuntime,
     build_rpc_error,
     build_rpc_response,

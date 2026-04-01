@@ -1,6 +1,6 @@
 """Integration tests for device lifecycle.
 
-Tests that device_connect_sdk-based drivers register with the real registry,
+Tests that device_connect_edge-based drivers register with the real registry,
 maintain heartbeats, and can be discovered via device-connect-agent-tools.
 """
 
@@ -16,7 +16,7 @@ DISCOVERY_POLL = 0.3
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_camera_registers(device_spawner, messaging_backend):
-    """A device_connect_sdk camera should register and get a registration ID."""
+    """A device_connect_edge camera should register and get a registration ID."""
     device, driver = await device_spawner.spawn_camera("itest-cam-lifecycle")
     if messaging_backend == "zenoh":
         assert device._d2d_announcer is not None
@@ -27,7 +27,7 @@ async def test_camera_registers(device_spawner, messaging_backend):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_robot_registers(device_spawner, messaging_backend):
-    """A device_connect_sdk robot should register and get a registration ID."""
+    """A device_connect_edge robot should register and get a registration ID."""
     device, driver = await device_spawner.spawn_robot("itest-robot-lifecycle")
     if messaging_backend == "zenoh":
         assert device._d2d_announcer is not None
@@ -38,7 +38,7 @@ async def test_robot_registers(device_spawner, messaging_backend):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_sensor_registers(device_spawner, messaging_backend):
-    """A device_connect_sdk sensor should register and get a registration ID."""
+    """A device_connect_edge sensor should register and get a registration ID."""
     device, driver = await device_spawner.spawn_sensor("itest-sensor-lifecycle")
     if messaging_backend == "zenoh":
         assert device._d2d_announcer is not None
@@ -49,7 +49,7 @@ async def test_sensor_registers(device_spawner, messaging_backend):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_device_discoverable_via_tools(device_spawner, messaging_url):
-    """Devices registered via device_connect_sdk should be discoverable via device-connect-agent-tools."""
+    """Devices registered via device_connect_edge should be discoverable via device-connect-agent-tools."""
     device, driver = await device_spawner.spawn_camera("itest-cam-discover")
     await asyncio.sleep(SETTLE_TIME)
 
@@ -73,7 +73,7 @@ async def test_device_discoverable_via_tools(device_spawner, messaging_url):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_multiple_devices_discoverable(device_spawner, messaging_url):
-    """Multiple device_connect_sdk drivers should all appear in discovery."""
+    """Multiple device_connect_edge drivers should all appear in discovery."""
     await device_spawner.spawn_camera("itest-multi-cam")
     await device_spawner.spawn_robot("itest-multi-robot")
     await device_spawner.spawn_sensor("itest-multi-sensor")

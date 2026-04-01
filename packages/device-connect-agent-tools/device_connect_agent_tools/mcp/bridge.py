@@ -23,8 +23,8 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
-from device_connect_sdk.messaging import create_client
-from device_connect_sdk.messaging.base import MessagingClient
+from device_connect_edge.messaging import create_client
+from device_connect_edge.messaging.base import MessagingClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.discovery import DeviceDiscoveryClient, DiscoveryError
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError

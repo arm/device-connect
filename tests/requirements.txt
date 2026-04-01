@@ -1,7 +1,7 @@
 # Cross-repo integration test dependencies.
 #
 # Install all packages in editable mode:
-#   pip install -e ../device-connect-sdk \
+#   pip install -e ../device-connect-edge \
 #               -e ../device-connect-server[all] \
 #               -e ../device-connect-agent-tools[strands] \
 #               -r requirements.txt

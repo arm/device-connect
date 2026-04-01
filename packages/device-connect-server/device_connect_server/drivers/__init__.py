@@ -1,10 +1,10 @@
 """Device driver framework for Device Connect.
 
-Re-exports from device_connect_sdk.drivers and adds core-only extensions:
+Re-exports from device_connect_edge.drivers and adds core-only extensions:
     - CapabilityLoader: Runtime loading of device capabilities from disk
 """
-# Re-export everything from device_connect_sdk.drivers
-from device_connect_sdk.drivers import (  # noqa: F401
+# Re-export everything from device_connect_edge.drivers
+from device_connect_edge.drivers import (  # noqa: F401
     DeviceDriver,
     on,
     rpc,

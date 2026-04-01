@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from device_connect_sdk.messaging.base import MessagingClient
+from device_connect_edge.messaging.base import MessagingClient
 from device_connect_agent_tools.mcp.schema import MCPToolDefinition, devices_to_mcp_tools
 
 logger = logging.getLogger(__name__)

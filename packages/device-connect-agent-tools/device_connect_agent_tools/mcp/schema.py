@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from device_connect_sdk.types import FunctionDef
+from device_connect_edge.types import FunctionDef
 
 
 @dataclass

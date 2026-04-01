@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from device_connect_sdk.messaging import create_client
+from device_connect_edge.messaging import create_client
 
 logger = logging.getLogger(__name__)
 
