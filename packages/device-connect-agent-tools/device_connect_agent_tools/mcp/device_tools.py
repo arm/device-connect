@@ -45,7 +45,7 @@ DEVICE_CONNECT_ALLOW_INSECURE = os.getenv("DEVICE_CONNECT_ALLOW_INSECURE", "fals
 
 # Configurable path to reference capability packs.
 # Defaults to the device-connect-capability-agent repo next to device-connect-agent-tools,
-# or falls back to the legacy core/ location.
+# or checks well-known sibling directory locations.
 CAPABILITY_PACKS_PATH = os.getenv("DEVICE_CONNECT_CAPABILITY_PACKS_PATH")
 
 # MCP protocol types

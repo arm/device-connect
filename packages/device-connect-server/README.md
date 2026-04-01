@@ -173,28 +173,42 @@ statectl --raw list /device-connect/default/devices/
 The Strands Agent subscribes to all device events on the mesh (`device-connect.default.*.event.>`), batches them over a time window, and sends them to Claude for analysis. Claude can call back into devices using `invoke_device()` and `get_device_status()` tools.
 
 ```bash
-git clone https://github.com/arm/strands-device-connect-example.git
-cd strands-device-connect-example
-pip install -r requirements.txt
+pip install "device-connect-agent-tools[strands]"
+```
 
+```python
+from device_connect_agent_tools.adapters.strands_agent import StrandsDeviceConnectAgent
+
+agent = StrandsDeviceConnectAgent(
+    goal="Monitor devices and react to events",
+    model_id="claude-sonnet-4-20250514",
+)
+
+async with agent:
+    await agent.run()  # subscribes to events, batches, and prompts the LLM
+```
+
+```bash
 # Insecure — Zenoh (no auth)
 ZENOH_CONNECT=tcp/localhost:7447 \
-  ANTHROPIC_API_KEY="sk-ant-..." python strands_agent.py
+  DEVICE_CONNECT_ALLOW_INSECURE=true \
+  ANTHROPIC_API_KEY="sk-ant-..." python my_agent.py
 
 # Secure — Zenoh (TLS)
 # ZENOH_CONNECT=tls/localhost:7447 \
-#   MESSAGING_TLS_CA_FILE=../device-connect-server/security_infra/ca.pem \
-#   MESSAGING_TLS_CERT_FILE=../device-connect-server/security_infra/my-agent-cert.pem \
-#   MESSAGING_TLS_KEY_FILE=../device-connect-server/security_infra/my-agent-key.pem \
-#   ANTHROPIC_API_KEY="sk-ant-..." python strands_agent.py
+#   MESSAGING_TLS_CA_FILE=security_infra/ca.pem \
+#   MESSAGING_TLS_CERT_FILE=security_infra/my-agent-cert.pem \
+#   MESSAGING_TLS_KEY_FILE=security_infra/my-agent-key.pem \
+#   ANTHROPIC_API_KEY="sk-ant-..." python my_agent.py
 
 # Insecure — NATS (no auth)
-# ANTHROPIC_API_KEY="sk-ant-..." python strands_agent.py
+# DEVICE_CONNECT_ALLOW_INSECURE=true \
+#   ANTHROPIC_API_KEY="sk-ant-..." python my_agent.py
 
 # Authenticated — NATS (JWT auth)
 # ANTHROPIC_API_KEY="sk-ant-..." \
 #   NATS_CREDENTIALS_FILE=~/.device-connect/credentials/my-agent.creds.json \
-#   NATS_URL=nats://localhost:4222 python strands_agent.py
+#   NATS_URL=nats://localhost:4222 python my_agent.py
 ```
 
 > Get an API key at [console.anthropic.com](https://console.anthropic.com/).

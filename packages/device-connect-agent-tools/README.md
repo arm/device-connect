@@ -65,7 +65,7 @@ pip install -e ".[strands]"
 
 ## Examples
 
-- **[strands-device-connect-example](https://github.com/arm/strands-device-connect-example)** — Event-driven Strands Agent that monitors device events and reacts
+- **`StrandsDeviceConnectAgent`** (`device_connect_agent_tools.adapters.strands_agent`) — Event-driven Strands Agent that monitors device events and reacts
 
 ## Architecture
 

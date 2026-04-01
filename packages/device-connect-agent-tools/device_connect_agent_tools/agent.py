@@ -1,8 +1,5 @@
 """DeviceConnectAgent — high-level agent that connects, discovers, and reacts to events.
 
-Follows the same pattern as strands-device-connect-example/strands_agent.py but
-packaged as a reusable class.
-
 Usage::
 
     from device_connect_agent_tools import DeviceConnectAgent
@@ -85,8 +82,7 @@ class DeviceConnectAgent:
     async def run(self) -> None:
         """Listen for device events and dispatch them.
 
-        Follows the same subscribe → batch → prompt pattern as
-        strands-device-connect-example/strands_agent.py.
+        Uses a subscribe → batch → prompt pattern.
 
         The NATS subscription runs on the connection's dedicated event
         loop thread; a thread-safe queue bridges events back to this
@@ -194,10 +190,7 @@ class DeviceConnectAgent:
 
 
 def _build_prompt(goal: str, batch: list[dict]) -> str:
-    """Build an LLM prompt from a batch of device events.
-
-    Same logic as strands-device-connect-example/strands_agent.py:build_prompt.
-    """
+    """Build an LLM prompt from a batch of device events."""
     lines = []
     for evt in batch:
         display = {

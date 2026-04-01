@@ -62,8 +62,7 @@ _WELL_KNOWN_CA_FILES = [
 def _find_device_connect_root() -> Optional[Path]:
     """Walk up from CWD looking for a Device Connect project root.
 
-    Heuristic: a directory that contains ``security_infra/`` (or whose
-    ``core/`` child does).
+    Heuristic: a directory that contains ``security_infra/credentials/``.
     """
     cwd = Path.cwd().resolve()
     for d in [cwd, *cwd.parents]:

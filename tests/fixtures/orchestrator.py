@@ -18,7 +18,7 @@ from device_connect_sdk.messaging import create_client
 
 logger = logging.getLogger(__name__)
 
-# Legacy monolith root (for running orchestrator subprocess — fabric.orchestration lives here)
+# Path to core/ sibling directory (orchestrator subprocess runs fabric.orchestration from there)
 CORE_ROOT = Path(__file__).resolve().parents[2] / "core"
 
 

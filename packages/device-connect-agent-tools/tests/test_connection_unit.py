@@ -98,7 +98,7 @@ class TestAutoDiscovery:
             assert conn_mod._find_device_connect_root() == tmp_path
 
     def test_find_device_connect_root_core_child(self, tmp_path):
-        """Should find root/core when core/security_infra/credentials exists."""
+        """Should find core/ child when core/security_infra/credentials exists."""
         (tmp_path / "core" / "security_infra" / "credentials").mkdir(parents=True)
         with patch("device_connect_agent_tools.connection.Path.cwd", return_value=tmp_path):
             assert conn_mod._find_device_connect_root() == tmp_path / "core"
