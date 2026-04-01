@@ -1543,18 +1543,10 @@ class DeviceRuntime:
             self._driver.registry = D2DRegistry(collector)
             self._logger.debug("D2DRegistry configured for DeviceDriver (no infrastructure)")
         else:
-            try:
-                from device_connect_server.registry.client import RegistryClient
-                from device_connect_sdk.messaging.config import MessagingConfig
-                config = MessagingConfig(
-                    backend=self._messaging_backend or "zenoh",
-                    servers=self.messaging_urls,
-                )
-                registry = RegistryClient(self.messaging, config, tenant=self.tenant)
-                self._driver.registry = registry
-                self._logger.debug("RegistryClient configured for DeviceDriver")
-            except ImportError:
-                self._logger.debug("RegistryClient not available (device-connect-server not installed)")
+            from device_connect_sdk.registry_client import RegistryClient
+            registry = RegistryClient(self.messaging, tenant=self.tenant)
+            self._driver.registry = registry
+            self._logger.debug("RegistryClient configured for DeviceDriver")
 
         # Set up event subscriptions
         await self._driver.setup_subscriptions()

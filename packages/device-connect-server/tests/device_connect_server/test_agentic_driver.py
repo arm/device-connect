@@ -2,9 +2,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from device_connect_server.drivers.base import DeviceDriver, on
-from device_connect_server.drivers.decorators import rpc
-from device_connect_server.types import DeviceIdentity, DeviceStatus
+from device_connect_sdk.drivers.base import DeviceDriver, on
+from device_connect_sdk.drivers.decorators import rpc
+from device_connect_sdk.types import DeviceIdentity, DeviceStatus
 
 
 class TestDeviceDriver:

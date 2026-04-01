@@ -11,7 +11,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from device_connect_sdk.messaging.base import MessagingClient
-from device_connect_agent_tools.mcp.schema import parse_tool_name, mcp_arguments_to_params
+from device_connect_agent_tools.mcp.schema import parse_tool_name
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class ToolRouter:
         request = {
             "jsonrpc": "2.0",
             "method": function_name,
-            "params": mcp_arguments_to_params(arguments, {}),
+            "params": arguments,
             "id": request_id,
         }
 

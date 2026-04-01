@@ -82,10 +82,7 @@ from device_connect_sdk.telemetry.propagation import inject_into_meta
 
 if TYPE_CHECKING:
     from device_connect_sdk.device import DeviceRuntime, _D2DRouter as DeviceRouter
-    try:
-        from device_connect_server.registry.client import RegistryClient
-    except ImportError:
-        pass
+    from device_connect_sdk.discovery_provider import DiscoveryProvider
 
 
 logger = logging.getLogger("device_connect.drivers.base")
@@ -150,7 +147,7 @@ class DeviceDriver(ABC):
 
         # D2D: Router and registry (set by DeviceRuntime)
         self._router: Optional[DeviceRouter] = None
-        self._registry: Optional[RegistryClient] = None
+        self._registry: Optional[DiscoveryProvider] = None
 
         # D2D: Event subscriptions (@on decorated methods)
         self._subscriptions: List[Any] = []
@@ -788,12 +785,12 @@ class DeviceDriver(ABC):
         self._router = value
 
     @property
-    def registry(self) -> Optional[RegistryClient]:
+    def registry(self) -> Optional[DiscoveryProvider]:
         """Get the registry client for device discovery."""
         return self._registry
 
     @registry.setter
-    def registry(self, value: RegistryClient) -> None:
+    def registry(self, value: DiscoveryProvider) -> None:
         """Set the registry client."""
         self._registry = value
 

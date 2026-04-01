@@ -11,8 +11,8 @@ Key Components:
     - EventSubscription: Event subscription for agentic pattern
 
 Example:
-    from device_connect_server.drivers import DeviceDriver
-    from device_connect_server.drivers.capability_loader import CapabilityDriverMixin
+    from device_connect_sdk.drivers import DeviceDriver
+    from device_connect_sdk.drivers.capability_loader import CapabilityDriverMixin
 
     class MyDriver(CapabilityDriverMixin, DeviceDriver):
         def __init__(self):
@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from device_connect_server.drivers import DeviceDriver
+    from device_connect_sdk.drivers import DeviceDriver
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +451,7 @@ class CapabilityLoader:
         Args:
             loaded: LoadedCapability object
         """
-        from device_connect_server.drivers.decorators import build_function_schema
+        from device_connect_sdk.drivers.decorators import build_function_schema
 
         cap_instance = loaded.instance
         cap_id = loaded.id
@@ -601,7 +601,7 @@ class CapabilityLoader:
             routine: The routine callable
             interval: Interval in seconds
         """
-        from device_connect_server.drivers.decorators import set_call_origin, reset_call_origin
+        from device_connect_sdk.drivers.decorators import set_call_origin, reset_call_origin
 
         logger.debug(f"Starting routine {cap_id}.{routine_name} with interval {interval}s")
         while cap_id in self._capabilities:

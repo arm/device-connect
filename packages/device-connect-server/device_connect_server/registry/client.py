@@ -28,8 +28,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from device_connect_server.messaging import MessagingClient
-from device_connect_server.messaging.config import MessagingConfig
+from device_connect_sdk.messaging import MessagingClient
+from device_connect_sdk.messaging.config import MessagingConfig
 
 
 class RegistryClient:

@@ -45,8 +45,8 @@ import uuid
 from typing import Any, Dict, Optional
 
 from device_connect_server.state.base import StateStore
-from device_connect_server.telemetry.tracer import get_tracer, StatusCode
-from device_connect_server.telemetry.metrics import get_metrics
+from device_connect_sdk.telemetry.tracer import get_tracer, StatusCode
+from device_connect_sdk.telemetry.metrics import get_metrics
 
 logger = logging.getLogger(__name__)
 
