@@ -16,10 +16,10 @@ Lightweight Python SDK for enabling physical devices to work with Device Connect
 ## Where This Fits
 
 ```
-  device-connect-edge        device-connect-server         device-connect-agent-tools
-  (Device Connect SDK — this) (server runtime)    (agent SDK)
-        │                       │                       │
-        └──────────── Device Connect Mesh ──────────────────────┘
+  device-connect-edge        device-connect-server       device-connect-agent-tools
+  (edge runtime — this)      (server runtime)            (agent tools)
+        │                          │                           │
+        └──────────────── Device Connect Mesh ─────────────────┘
 ```
 
 - **device-connect-edge** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
@@ -28,12 +28,8 @@ Lightweight Python SDK for enabling physical devices to work with Device Connect
 
 ## Install
 
-> Not yet on PyPI. Install from Git:
-
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install "device-connect-edge @ git+https://github.com/arm/device-connect.git#subdirectory=packages/device-connect-edge"
+pip install device-connect-edge
 ```
 
 ## Decorators
@@ -48,7 +44,7 @@ pip install "device-connect-edge @ git+https://github.com/arm/device-connect.git
 
 ## Quick Start
 
-After installing the Device Connect SDK, write a driver and run it.
+After installing device-connect-edge, write a driver and run it.
 
 ### 1. Write a driver
 
