@@ -1,7 +1,7 @@
 """Unit tests for device_connect_sdk.device module.
 
 Tests DeviceRuntime lifecycle, build_rpc_response/build_rpc_error helpers,
-and _D2DRouter — all with mocked messaging (no real NATS connection).
+and _RemoteInvoker — all with mocked messaging (no real NATS connection).
 """
 
 import asyncio
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from device_connect_sdk.device import DeviceRuntime, build_rpc_response, build_rpc_error, _D2DRouter
+from device_connect_sdk.device import DeviceRuntime, build_rpc_response, build_rpc_error, _RemoteInvoker
 from device_connect_sdk.drivers import DeviceDriver, rpc, emit
 from device_connect_sdk.types import DeviceCapabilities, DeviceIdentity, DeviceStatus
 
@@ -100,12 +100,12 @@ class TestBuildRpcError:
         assert parsed["error"]["message"] == "Custom error"
 
 
-# ── _D2DRouter ───────────────────────────────────────────────────
+# ── _RemoteInvoker ───────────────────────────────────────────────
 
-class TestD2DRouter:
+class TestRemoteInvoker:
     def _make_router(self, messaging=None, tenant="default", timeout=30.0):
         messaging = messaging or AsyncMock()
-        return _D2DRouter(messaging, tenant=tenant, timeout=timeout), messaging
+        return _RemoteInvoker(messaging, tenant=tenant, timeout=timeout), messaging
 
     @pytest.mark.asyncio
     async def test_invoke_sends_correct_subject(self):

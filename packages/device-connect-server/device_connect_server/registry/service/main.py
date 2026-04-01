@@ -27,6 +27,7 @@ from device_connect_sdk.messaging import MessagingClient, create_client
 from device_connect_sdk.messaging.config import MessagingConfig
 
 from device_connect_server.registry.service import registry
+from device_connect_server.security.acl import ACLManager
 
 
 logging.basicConfig(level=logging.INFO)
@@ -318,13 +319,20 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
     return rpc_register_device
 
 
-def _make_list_handler(tenant: str, messaging: MessagingClient):
+def _make_list_handler(
+    tenant: str,
+    messaging: MessagingClient,
+    acl_manager: Optional[ACLManager] = None,
+):
     """Create a discovery RPC handler bound to ``tenant``.
 
     Handles:
     - ``discovery/listDevices`` — list devices with optional filters
     - ``discovery/getDevice`` — get a single device by ID (O(1))
     - ``discovery/describeFleet`` — aggregated fleet summary
+
+    If *acl_manager* is provided, results are filtered by the
+    ``requester_id`` field in the RPC params.
     """
 
     async def rpc_discovery(data: bytes, reply: Optional[str]):
@@ -340,6 +348,11 @@ def _make_list_handler(tenant: str, messaging: MessagingClient):
                     registry.list_devices, tenant,
                     device_type=device_type, location=location,
                 )
+                if acl_manager:
+                    requester_id = params.get("requester_id", "")
+                    devs = acl_manager.filter_visible_devices(
+                        requester_id, devs, tenant=tenant
+                    )
                 await messaging.publish(
                     reply,
                     build_rpc_response(payload["id"], {"devices": devs})
@@ -355,6 +368,12 @@ def _make_list_handler(tenant: str, messaging: MessagingClient):
                 device = await asyncio.to_thread(
                     registry.get_device, tenant, device_id,
                 )
+                if device and acl_manager:
+                    requester_id = params.get("requester_id", "")
+                    visible = acl_manager.filter_visible_devices(
+                        requester_id, [device], tenant=tenant
+                    )
+                    device = visible[0] if visible else None
                 await messaging.publish(
                     reply,
                     build_rpc_response(payload["id"], {"device": device})
@@ -417,6 +436,9 @@ async def main() -> None:
         tenants,
     )
 
+    # ACL enforcement (permissive by default — no ACL = visible to all)
+    acl_manager = ACLManager()
+
     # Subscribe per-tenant
     for tenant in tenants:
         await messaging.subscribe(
@@ -427,7 +449,7 @@ async def main() -> None:
         await messaging.subscribe(
             f"device-connect.{tenant}.discovery",
             queue="orch",
-            callback=_make_list_handler(tenant, messaging),
+            callback=_make_list_handler(tenant, messaging, acl_manager),
         )
         await messaging.subscribe(
             f"device-connect.{tenant}.*.heartbeat",

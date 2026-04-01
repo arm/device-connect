@@ -133,7 +133,7 @@ async def test_d2d_rpc_between_devices():
     try:
         await asyncio.sleep(5)
 
-        # Send RPC from A to B using raw messaging (same as _D2DRouter does)
+        # Send RPC from A to B using raw messaging (same as _RemoteInvoker does)
         request = {
             "jsonrpc": "2.0",
             "id": "d2d-rpc-1",

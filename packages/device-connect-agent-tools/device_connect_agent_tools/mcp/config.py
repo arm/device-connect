@@ -42,6 +42,9 @@ class BridgeConfig:
     # Device Connect configuration
     tenant: str = "default"
 
+    # Discovery mode: "auto" (detect from backend/URLs), "d2d", or "infra"
+    discovery_mode: str = "auto"
+
     # MCP Bridge configuration
     refresh_interval: float = 30.0  # Seconds between device refreshes
     request_timeout: float = 30.0   # Tool call timeout in seconds
@@ -93,6 +96,7 @@ class BridgeConfig:
             messaging_auth=auth,
             messaging_tls=tls_config,
             tenant=os.getenv("TENANT", "default"),
+            discovery_mode=os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "auto").lower(),
             refresh_interval=float(os.getenv("MCP_REFRESH_INTERVAL", "30")),
             request_timeout=float(os.getenv("MCP_REQUEST_TIMEOUT", "30")),
         )

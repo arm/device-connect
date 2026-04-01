@@ -81,7 +81,7 @@ from device_connect_sdk.telemetry.metrics import get_metrics
 from device_connect_sdk.telemetry.propagation import inject_into_meta
 
 if TYPE_CHECKING:
-    from device_connect_sdk.device import DeviceRuntime, _D2DRouter as DeviceRouter
+    from device_connect_sdk.device import DeviceRuntime, _RemoteInvoker as DeviceRouter
     from device_connect_sdk.discovery_provider import DiscoveryProvider
 
 

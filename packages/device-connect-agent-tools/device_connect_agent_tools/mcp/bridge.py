@@ -68,8 +68,9 @@ class MCPBridgeServer:
         self.config = config
         self._mcp: Optional[FastMCP] = None
         self._messaging_client: Optional[MessagingClient] = None
-        self._registry: Optional[RegistryClient] = None
+        self._registry = None  # RegistryClient or D2DRegistry (DiscoveryProvider)
         self._router: Optional[ToolRouter] = None
+        self._d2d_collector = None  # PresenceCollector, if in D2D mode
         self._running = False
 
     async def start(self) -> None:
@@ -85,13 +86,8 @@ class MCPBridgeServer:
             # Connect to messaging
             await self._connect_messaging()
 
-            # Initialize registry client and router
-            self._registry = RegistryClient(
-                self._messaging_client,
-                tenant=self.config.tenant,
-                timeout=self.config.request_timeout,
-                cache_ttl=self.config.refresh_interval,
-            )
+            # Initialize discovery provider and router
+            await self._init_discovery()
             self._router = ToolRouter(
                 self._messaging_client,
                 tenant=self.config.tenant,
@@ -107,6 +103,41 @@ class MCPBridgeServer:
 
         finally:
             await self._cleanup()
+
+    def _is_d2d_mode(self) -> bool:
+        """Determine if D2D (peer mesh) discovery should be used."""
+        mode = self.config.discovery_mode
+        if mode in ("d2d", "p2p"):
+            return True
+        if mode == "infra":
+            return False
+        # "auto": use D2D if backend is zenoh and no explicit URLs were configured
+        is_zenoh = any(
+            not url.startswith("nats://") and not url.startswith("tls://")
+            for url in self.config.messaging_urls
+        )
+        default_url = self.config.messaging_urls == ["tcp/localhost:7447"]
+        return is_zenoh and default_url
+
+    async def _init_discovery(self) -> None:
+        """Initialize discovery provider — D2D (PresenceCollector) or infra (RegistryClient)."""
+        if self._is_d2d_mode():
+            from device_connect_sdk.discovery import PresenceCollector, D2DRegistry
+            logger.info("Using D2D discovery (PresenceCollector)")
+            self._d2d_collector = PresenceCollector(
+                self._messaging_client, self.config.tenant
+            )
+            await self._d2d_collector.start()
+            await self._d2d_collector.wait_for_peers(timeout=3.0)
+            self._registry = D2DRegistry(self._d2d_collector)
+        else:
+            logger.info("Using infra discovery (RegistryClient)")
+            self._registry = RegistryClient(
+                self._messaging_client,
+                tenant=self.config.tenant,
+                timeout=self.config.request_timeout,
+                cache_ttl=self.config.refresh_interval,
+            )
 
     async def _connect_messaging(self) -> None:
         logger.info(f"Connecting to messaging: {self.config.messaging_urls}")
@@ -290,6 +321,12 @@ class MCPBridgeServer:
 
     async def _cleanup(self) -> None:
         self._running = False
+        if self._d2d_collector:
+            try:
+                await self._d2d_collector.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping D2D collector: {e}")
+            self._d2d_collector = None
         if self._messaging_client:
             try:
                 await self._messaging_client.close()

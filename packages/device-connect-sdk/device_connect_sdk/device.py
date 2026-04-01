@@ -90,8 +90,8 @@ def build_rpc_response(id_: str, result: Any) -> bytes:
     return json.dumps({"jsonrpc": "2.0", "id": id_, "result": result}).encode()
 
 
-class _D2DRouter:
-    """Minimal JSON-RPC router for device-to-device invocation.
+class _RemoteInvoker:
+    """Minimal JSON-RPC invoker for remote device calls.
 
     Provides the same interface as the device_connect_server orchestration router
     but without telemetry, retries, or the orchestration dependency.
@@ -1519,7 +1519,7 @@ class DeviceRuntime:
         self._logger.info("Setting up DeviceDriver D2D capabilities")
 
         # Create and set D2D router (inline — no orchestration dependency).
-        router = _D2DRouter(
+        router = _RemoteInvoker(
             self.messaging,
             tenant=self.tenant,
         )
