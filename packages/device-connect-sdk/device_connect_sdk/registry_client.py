@@ -185,7 +185,7 @@ class RegistryClient:
                 timeout,
             )
             if result:
-                return result.get("device") or result
+                return result.get("device")
         except (RuntimeError, RequestTimeoutError) as e:
             # RuntimeError = server returned JSON-RPC error (method not found)
             # RequestTimeoutError = server didn't respond (RPC not supported)
