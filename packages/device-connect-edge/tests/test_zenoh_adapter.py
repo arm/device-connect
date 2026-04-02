@@ -360,10 +360,11 @@ class TestZenohClientPublishQueryReply:
         adapter = ZenohAdapter()
         await adapter.connect(servers=["tcp/host:7447"])
 
-        # Simulate a pending query
+        # Simulate a pending query (stored as (query, timestamp) tuple)
+        import time
         mock_query = _make_mock_query("test/rpc", b"request")
         query_id = "abc123"
-        adapter._pending_queries[query_id] = mock_query
+        adapter._pending_queries[query_id] = (mock_query, time.monotonic())
 
         # Publish to the reply subject
         await adapter.publish(f"_zenoh_query/{query_id}", b"response")

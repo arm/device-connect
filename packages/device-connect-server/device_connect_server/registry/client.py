@@ -231,15 +231,18 @@ class RegistryClient:
             if camera:
                 print(f"Found: {camera['device_id']}")
         """
-        # Query all devices and filter
-        # TODO: Add dedicated getDevice RPC method to registry service
-        devices = await self.list_devices(timeout=timeout)
-
-        for device in devices:
-            if device.get("device_id") == device_id:
-                return device
-
-        return None
+        subject = f"device-connect.{self._tenant}.discovery"
+        try:
+            result = await self._request(
+                subject,
+                "discovery/getDevice",
+                {"device_id": device_id},
+                timeout,
+            )
+            return result.get("device")
+        except Exception:
+            self._logger.debug("get_device RPC failed for %s", device_id)
+            return None
 
     async def get_device_functions(
         self,

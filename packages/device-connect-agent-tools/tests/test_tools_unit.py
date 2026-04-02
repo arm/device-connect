@@ -382,9 +382,32 @@ class TestListDevices:
     def test_list_grouped_no_auto_expand(self, mock_conn):
         """Grouped results above threshold → no functions key."""
         result = tools_mod.list_devices(group_by="location")
-        for group_devices in result["groups"].values():
-            for d in group_devices:
+        for devices_in_group in result["groups"].values():
+            for d in devices_in_group:
                 assert "functions" not in d
+
+    def test_list_with_location_filter(self, mock_conn):
+        """Filter by location passes through to provider."""
+        tools_mod.list_devices(location="lab-B")
+        # location is passed to conn.list_devices; mock returns all,
+        # so we verify the call was made with location kwarg
+        mock_conn.list_devices.assert_called_with(location="lab-B")
+
+    def test_list_with_status_filter(self, mock_conn):
+        """Filter by status uses extract_status client-side."""
+        result = tools_mod.list_devices(status="online")
+        # cam-001 (online) and sensor-001 (online) match; robot-001 (idle) does not
+        assert result["total"] == 2
+        ids = [d["device_id"] for d in result["devices"]]
+        assert "cam-001" in ids
+        assert "sensor-001" in ids
+        assert "robot-001" not in ids
+
+    def test_list_with_type_and_location_filter(self, mock_conn):
+        """Combined type and location filtering."""
+        result = tools_mod.list_devices(device_type="camera", location="lab-A")
+        assert result["total"] == 1
+        assert result["devices"][0]["device_id"] == "cam-001"
 
 
 # ── get_device_functions ─────────────────────────────────────────

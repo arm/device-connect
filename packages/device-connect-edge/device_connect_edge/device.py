@@ -708,6 +708,10 @@ class DeviceRuntime:
             )
             return
 
+        # Only validate NATS-specific config when using NATS backend (or unknown/default)
+        if self._messaging_backend not in (None, "nats"):
+            return
+
         issues = []
         warnings = []
 
@@ -1342,8 +1346,7 @@ class DeviceRuntime:
         if self._d2d_mode:
             from device_connect_edge.discovery import PresenceAnnouncer, PresenceCollector
             caps = self._driver.capabilities if self._driver else self.capabilities
-            if self._d2d_collector is None:
-                self._d2d_collector = PresenceCollector(self.messaging, self.tenant, device_id=self.device_id)
+            # Create announcer first so the callback closure can reference it.
             self._d2d_announcer = PresenceAnnouncer(
                 self.messaging,
                 device_id=self.device_id,
@@ -1352,9 +1355,17 @@ class DeviceRuntime:
                 identity=self.identity,
                 status=self.status,
             )
-            # Wire up burst trigger BEFORE starting the collector so that
-            # peers discovered immediately on start already trigger bursts.
-            self._d2d_collector._on_new_peer = lambda _pid: self._d2d_announcer.trigger_burst()
+            if self._d2d_collector is None:
+                self._d2d_collector = PresenceCollector(
+                    self.messaging,
+                    tenant=self.tenant,
+                    on_new_peer=lambda _pid: self._d2d_announcer.trigger_burst(),
+                    device_id=self.device_id,
+                )
+            else:
+                # Collector already exists (from _setup_agentic_driver) —
+                # update the callback via the constructor parameter.
+                self._d2d_collector._on_new_peer = lambda _pid: self._d2d_announcer.trigger_burst()
             if not self._d2d_collector._started:
                 await self._d2d_collector.start()
             await self._d2d_announcer.start()

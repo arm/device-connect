@@ -28,11 +28,13 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections import defaultdict
 from typing import Any
 
 from device_connect_agent_tools.connection import get_connection
-from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type, extract_status
+from device_connect_agent_tools._normalize import (
+    full_device, compact_device, fuzzy_filter_by_type, extract_status,
+    aggregate_fleet, group_devices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,38 +82,7 @@ def describe_fleet() -> dict[str, Any]:
         conn = get_connection()
         devices = conn.list_devices()
 
-        by_type: dict[str, dict] = defaultdict(lambda: {"count": 0, "locations": set()})
-        by_location: dict[str, dict] = defaultdict(lambda: {"count": 0, "types": set()})
-        total_functions = 0
-
-        for d in devices:
-            dt = d.get("device_type") or "unknown"
-            loc = d.get("location") or "unknown"
-            funcs = d.get("functions", [])
-            total_functions += len(funcs)
-
-            by_type[dt]["count"] += 1
-            by_type[dt]["locations"].add(loc)
-
-            by_location[loc]["count"] += 1
-            by_location[loc]["types"].add(dt)
-
-        # Convert sets to sorted lists for JSON serialization
-        result_by_type = {
-            k: {"count": v["count"], "locations": sorted(v["locations"])}
-            for k, v in sorted(by_type.items())
-        }
-        result_by_location = {
-            k: {"count": v["count"], "types": sorted(v["types"])}
-            for k, v in sorted(by_location.items())
-        }
-
-        result: dict[str, Any] = {
-            "total_devices": len(devices),
-            "total_functions": total_functions,
-            "by_type": result_by_type,
-            "by_location": result_by_location,
-        }
+        result: dict[str, Any] = aggregate_fleet(devices)
 
         # Auto-expand: include full device details for small fleets
         if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
@@ -162,9 +133,12 @@ def list_devices(
     """
     try:
         conn = get_connection()
-        devices = conn.list_devices(device_type=device_type, location=location)
+        devices = conn.list_devices(location=location)
 
-        # Apply client-side fuzzy filtering for device_type (server may not support it yet)
+        # Client-side fuzzy type filter (provider filter is stricter and
+        # can drop valid fuzzy matches like "environmentsensor" vs
+        # "environment_sensor", so we skip provider-level type filtering
+        # and let fuzzy_filter_by_type be the sole filter).
         if device_type:
             devices = fuzzy_filter_by_type(devices, device_type)
 
@@ -183,11 +157,7 @@ def list_devices(
 
         if group_by in ("location", "device_type"):
             expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
-            groups: dict[str, list] = defaultdict(list)
-            for d in devices:
-                key = d.get(group_by) or "unknown"
-                groups[key].append(_summary(d, expand))
-            return {"groups": dict(sorted(groups.items())), "total": total}
+            return group_devices(devices, group_by, expand)
 
         # Paginate
         page = devices[offset:offset + limit]
@@ -367,9 +337,9 @@ def discover_devices(
     try:
         conn = get_connection()
         # Invalidate cache when refresh is requested
-        if refresh and conn._provider and hasattr(conn._provider, 'invalidate_cache'):
-            conn._provider.invalidate_cache()
-        devices = conn.list_devices(device_type=device_type)
+        if refresh:
+            conn.invalidate_cache()
+        devices = conn.list_devices()
 
         if device_type:
             devices = fuzzy_filter_by_type(devices, device_type)

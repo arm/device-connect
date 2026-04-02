@@ -33,7 +33,10 @@ from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
 from device_connect_agent_tools.connection import flatten_device
-from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type, extract_status
+from device_connect_agent_tools._normalize import (
+    full_device, compact_device, fuzzy_filter_by_type, extract_status,
+    aggregate_fleet, group_devices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,35 +185,8 @@ class MCPBridgeServer:
         async def describe_fleet() -> str:
             """Fleet summary with type/location groupings."""
             devices = await self._list_devices()
-            from collections import defaultdict
 
-            by_type: dict = defaultdict(lambda: {"count": 0, "locations": set()})
-            by_location: dict = defaultdict(lambda: {"count": 0, "types": set()})
-            total_functions = 0
-
-            for d in devices:
-                dt = d.get("device_type") or "unknown"
-                loc = d.get("location") or "unknown"
-                funcs = d.get("functions", [])
-                total_functions += len(funcs)
-
-                by_type[dt]["count"] += 1
-                by_type[dt]["locations"].add(loc)
-                by_location[loc]["count"] += 1
-                by_location[loc]["types"].add(dt)
-
-            result = {
-                "total_devices": len(devices),
-                "total_functions": total_functions,
-                "by_type": {
-                    k: {"count": v["count"], "locations": sorted(v["locations"])}
-                    for k, v in sorted(by_type.items())
-                },
-                "by_location": {
-                    k: {"count": v["count"], "types": sorted(v["types"])}
-                    for k, v in sorted(by_location.items())
-                },
-            }
+            result = aggregate_fleet(devices)
 
             # Auto-expand: include full device details for small fleets
             if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
@@ -262,14 +238,8 @@ class MCPBridgeServer:
             total = len(devices)
 
             if group_by in ("location", "device_type"):
-                from collections import defaultdict as dd
                 expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
-                groups: dict = dd(list)
-                for d in devices:
-                    c = _summary(d, expand)
-                    key = c.get(group_by) or "unknown"
-                    groups[key].append(c)
-                result = {"groups": dict(sorted(groups.items())), "total": total}
+                result = group_devices(devices, group_by, expand)
             else:
                 page = devices[offset:offset + limit]
                 expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
@@ -312,10 +282,6 @@ class MCPBridgeServer:
             arguments: str = "{}",
         ) -> str:
             """Invoke a device function."""
-            device = await self._get_device(device_id)
-            if not device:
-                return json.dumps({"success": False, "error": f"Device {device_id} not found"})
-
             try:
                 args = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError as e:

@@ -300,6 +300,11 @@ class DeviceConnection:
         )
         return [flatten_device(d) for d in devices]
 
+    def invalidate_cache(self) -> None:
+        """Invalidate the provider's device cache, if supported."""
+        if self._provider and hasattr(self._provider, "invalidate_cache"):
+            self._provider.invalidate_cache()
+
     def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get a specific device by ID."""
         return self._run(self._async_get_device(device_id))

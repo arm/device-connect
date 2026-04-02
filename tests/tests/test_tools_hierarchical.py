@@ -239,8 +239,7 @@ async def test_get_device_functions_returns_schemas(device_spawner, messaging_ur
         deadline = time.monotonic() + DISCOVERY_TIMEOUT
         while True:
             conn = get_connection()
-            if conn._provider and hasattr(conn._provider, "invalidate_cache"):
-                conn._provider.invalidate_cache()
+            conn.invalidate_cache()
             result = await asyncio.to_thread(get_device_functions, "itest-funcs-cam")
             if "error" not in result or time.monotonic() > deadline:
                 break
@@ -295,8 +294,7 @@ async def test_full_hierarchical_flow(device_spawner, messaging_url):
         # Step 1: fleet overview — poll until device is visible (D2D is eventually consistent)
         deadline = time.monotonic() + DISCOVERY_TIMEOUT
         while True:
-            if conn._provider and hasattr(conn._provider, "invalidate_cache"):
-                conn._provider.invalidate_cache()
+            conn.invalidate_cache()
             fleet = await asyncio.to_thread(describe_fleet)
             if fleet["total_devices"] >= 1 or time.monotonic() > deadline:
                 break

@@ -66,13 +66,12 @@ def _mock_langchain_and_connection():
 
 
 class TestLangchainAdapterExports:
-    def test_module_exports_four_tools(self):
+    def test_module_exports_all_tools(self):
         from device_connect_agent_tools.adapters import langchain as adapter
 
-        assert hasattr(adapter, "discover_devices")
-        assert hasattr(adapter, "invoke_device")
-        assert hasattr(adapter, "invoke_device_with_fallback")
-        assert hasattr(adapter, "get_device_status")
+        for name in ("discover_devices", "invoke_device", "invoke_device_with_fallback",
+                      "get_device_status", "describe_fleet", "list_devices", "get_device_functions"):
+            assert hasattr(adapter, name), f"Missing export: {name}"
 
     def test_all_list(self):
         from device_connect_agent_tools.adapters import langchain as adapter
@@ -83,23 +82,17 @@ class TestLangchainAdapterExports:
     def test_tools_are_structured_tool_instances(self):
         from device_connect_agent_tools.adapters import langchain as adapter
 
-        assert type(adapter.discover_devices).__name__ == "FakeStructuredTool"
-        assert type(adapter.invoke_device).__name__ == "FakeStructuredTool"
-        assert type(adapter.invoke_device_with_fallback).__name__ == "FakeStructuredTool"
-        assert type(adapter.get_device_status).__name__ == "FakeStructuredTool"
+        for name in adapter.__all__:
+            assert type(getattr(adapter, name)).__name__ == "FakeStructuredTool", f"{name} is not a FakeStructuredTool"
 
     def test_tool_names_match(self):
         from device_connect_agent_tools.adapters import langchain as adapter
 
-        assert adapter.discover_devices.name == "discover_devices"
-        assert adapter.invoke_device.name == "invoke_device"
-        assert adapter.invoke_device_with_fallback.name == "invoke_device_with_fallback"
-        assert adapter.get_device_status.name == "get_device_status"
+        for name in adapter.__all__:
+            assert getattr(adapter, name).name == name, f"{name}.name mismatch"
 
     def test_tool_descriptions_not_empty(self):
         from device_connect_agent_tools.adapters import langchain as adapter
 
-        assert len(adapter.discover_devices.description) > 0
-        assert len(adapter.invoke_device.description) > 0
-        assert len(adapter.invoke_device_with_fallback.description) > 0
-        assert len(adapter.get_device_status.description) > 0
+        for name in adapter.__all__:
+            assert len(getattr(adapter, name).description) > 0, f"{name} has empty description"

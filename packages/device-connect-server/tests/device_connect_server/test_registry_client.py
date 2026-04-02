@@ -136,7 +136,7 @@ class TestListDevices:
 class TestGetDevice:
     @pytest.mark.asyncio
     async def test_get_existing(self):
-        mc = _mock_messaging({"result": {"devices": SAMPLE_DEVICES}})
+        mc = _mock_messaging({"result": {"device": SAMPLE_DEVICES[1]}})
         client = RegistryClient(mc)
         await client.connect()
 
@@ -147,7 +147,7 @@ class TestGetDevice:
 
     @pytest.mark.asyncio
     async def test_get_nonexistent(self):
-        mc = _mock_messaging({"result": {"devices": SAMPLE_DEVICES}})
+        mc = _mock_messaging({"error": {"code": -32602, "message": "not found"}})
         client = RegistryClient(mc)
         await client.connect()
 
@@ -161,7 +161,7 @@ class TestGetDevice:
 class TestGetDeviceFunctionsEvents:
     @pytest.mark.asyncio
     async def test_get_functions(self):
-        mc = _mock_messaging({"result": {"devices": SAMPLE_DEVICES}})
+        mc = _mock_messaging({"result": {"device": SAMPLE_DEVICES[0]}})
         client = RegistryClient(mc)
         await client.connect()
 
@@ -172,7 +172,7 @@ class TestGetDeviceFunctionsEvents:
 
     @pytest.mark.asyncio
     async def test_get_events(self):
-        mc = _mock_messaging({"result": {"devices": SAMPLE_DEVICES}})
+        mc = _mock_messaging({"result": {"device": SAMPLE_DEVICES[0]}})
         client = RegistryClient(mc)
         await client.connect()
 
@@ -183,7 +183,7 @@ class TestGetDeviceFunctionsEvents:
 
     @pytest.mark.asyncio
     async def test_get_functions_nonexistent_device(self):
-        mc = _mock_messaging({"result": {"devices": []}})
+        mc = _mock_messaging({"error": {"code": -32602, "message": "not found"}})
         client = RegistryClient(mc)
         await client.connect()
 
@@ -192,7 +192,7 @@ class TestGetDeviceFunctionsEvents:
 
     @pytest.mark.asyncio
     async def test_get_events_nonexistent_device(self):
-        mc = _mock_messaging({"result": {"devices": []}})
+        mc = _mock_messaging({"error": {"code": -32602, "message": "not found"}})
         client = RegistryClient(mc)
         await client.connect()
 

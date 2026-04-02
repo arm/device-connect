@@ -5,6 +5,7 @@ or equivalent). All callers flatten at the boundary so there is only one shape.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 
@@ -85,3 +86,56 @@ def compact_device(d: dict, expand: bool = False) -> dict[str, Any]:
     if expand:
         result["functions"] = _normalize_functions(funcs)
     return result
+
+
+def aggregate_fleet(devices: list[dict]) -> dict[str, Any]:
+    """Aggregate devices into by_type/by_location summary.
+
+    Returns dict with total_devices, total_functions, by_type, by_location.
+    """
+    by_type: dict[str, dict] = defaultdict(lambda: {"count": 0, "locations": set()})
+    by_location: dict[str, dict] = defaultdict(lambda: {"count": 0, "types": set()})
+    total_functions = 0
+
+    for d in devices:
+        dt = d.get("device_type") or "unknown"
+        loc = d.get("location") or "unknown"
+        funcs = d.get("functions", [])
+        total_functions += len(funcs)
+
+        by_type[dt]["count"] += 1
+        by_type[dt]["locations"].add(loc)
+
+        by_location[loc]["count"] += 1
+        by_location[loc]["types"].add(dt)
+
+    return {
+        "total_devices": len(devices),
+        "total_functions": total_functions,
+        "by_type": {
+            k: {"count": v["count"], "locations": sorted(v["locations"])}
+            for k, v in sorted(by_type.items())
+        },
+        "by_location": {
+            k: {"count": v["count"], "types": sorted(v["types"])}
+            for k, v in sorted(by_location.items())
+        },
+    }
+
+
+def group_devices(
+    devices: list[dict],
+    group_by: str,
+    expand: bool,
+) -> dict[str, Any]:
+    """Group devices by a field, returning {groups: ..., total: ...}.
+
+    Each device is summarized via ``compact_device`` (with status).
+    """
+    groups: dict[str, list] = defaultdict(list)
+    for d in devices:
+        summary = compact_device(d, expand)
+        summary["status"] = extract_status(d)
+        key = d.get(group_by) or "unknown"
+        groups[key].append(summary)
+    return {"groups": dict(sorted(groups.items())), "total": len(devices)}

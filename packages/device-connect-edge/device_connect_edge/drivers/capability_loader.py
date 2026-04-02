@@ -113,6 +113,7 @@ class CapabilityLoader:
         self._routines: Dict[str, asyncio.Task] = {}
         self._subscriptions: List[EventSubscription] = []
         self._spawned_tasks: set[asyncio.Task] = set()
+        self._module_names: Dict[str, str] = {}  # cap_name -> sys.modules key
 
         # Reference to driver (set externally if needed for capability constructor)
         self._driver: Optional["DeviceDriver"] = None
@@ -277,6 +278,7 @@ class CapabilityLoader:
 
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
+        self._module_names[cap_id] = spec.name
         spec.loader.exec_module(module)
 
         # Instantiate the capability
@@ -356,6 +358,11 @@ class CapabilityLoader:
             except Exception as e:
                 logger.error(f"Error stopping capability {cap_id}: {e}")
 
+        # Clean up sys.modules entries for loaded capability modules
+        for mod_name in self._module_names.values():
+            sys.modules.pop(mod_name, None)
+        self._module_names.clear()
+
         self._capabilities.clear()
         logger.info("Unloaded all capabilities")
 
@@ -403,6 +410,11 @@ class CapabilityLoader:
                     loaded.instance.stop()
         except Exception as e:
             logger.error(f"Error stopping capability {capability_id}: {e}")
+
+        # Clean up sys.modules entry for this capability's module
+        mod_name = self._module_names.pop(capability_id, None)
+        if mod_name:
+            sys.modules.pop(mod_name, None)
 
         del self._capabilities[capability_id]
         logger.info(f"Unloaded capability: {capability_id}")

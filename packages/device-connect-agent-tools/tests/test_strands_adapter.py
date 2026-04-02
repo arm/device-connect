@@ -49,13 +49,12 @@ def _mock_strands_and_connection():
 
 
 class TestStrandsAdapterExports:
-    def test_module_exports_four_tools(self):
+    def test_module_exports_all_tools(self):
         from device_connect_agent_tools.adapters import strands as adapter
 
-        assert hasattr(adapter, "discover_devices")
-        assert hasattr(adapter, "invoke_device")
-        assert hasattr(adapter, "invoke_device_with_fallback")
-        assert hasattr(adapter, "get_device_status")
+        for name in ("discover_devices", "invoke_device", "invoke_device_with_fallback",
+                      "get_device_status", "describe_fleet", "list_devices", "get_device_functions"):
+            assert hasattr(adapter, name), f"Missing export: {name}"
 
     def test_all_list(self):
         from device_connect_agent_tools.adapters import strands as adapter
@@ -66,15 +65,11 @@ class TestStrandsAdapterExports:
     def test_tools_are_callable(self):
         from device_connect_agent_tools.adapters import strands as adapter
 
-        assert callable(adapter.discover_devices)
-        assert callable(adapter.invoke_device)
-        assert callable(adapter.invoke_device_with_fallback)
-        assert callable(adapter.get_device_status)
+        for name in adapter.__all__:
+            assert callable(getattr(adapter, name)), f"{name} is not callable"
 
     def test_tool_names_match(self):
         from device_connect_agent_tools.adapters import strands as adapter
 
-        assert adapter.discover_devices.__name__ == "discover_devices"
-        assert adapter.invoke_device.__name__ == "invoke_device"
-        assert adapter.invoke_device_with_fallback.__name__ == "invoke_device_with_fallback"
-        assert adapter.get_device_status.__name__ == "get_device_status"
+        for name in adapter.__all__:
+            assert getattr(adapter, name).__name__ == name, f"{name}.__name__ mismatch"

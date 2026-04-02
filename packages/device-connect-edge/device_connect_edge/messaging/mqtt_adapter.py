@@ -466,6 +466,18 @@ class MQTTAdapter(MessagingClient):
         self._connected = False
         self._closed = True
 
+    async def disconnect(self) -> None:
+        """Alias for close() — disconnect from MQTT."""
+        await self.close()
+
+    async def flush(self) -> None:
+        """No-op for MQTT — publishes are immediate."""
+        pass
+
+    async def drain(self) -> None:
+        """No-op for MQTT — no buffering concept."""
+        pass
+
     @property
     def is_connected(self) -> bool:
         """Check if currently connected to MQTT broker."""
