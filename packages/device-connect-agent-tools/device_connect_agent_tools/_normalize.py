@@ -10,19 +10,25 @@ from typing import Any
 
 def _normalize_functions(functions: list) -> list[dict[str, Any]]:
     """Normalize a list of function defs to {name, description, parameters}."""
-    return [
-        {
-            "name": f.get("name") if isinstance(f, dict) else f,
+    result = []
+    for f in functions:
+        name = f.get("name") if isinstance(f, dict) else f
+        if not name:
+            continue
+        result.append({
+            "name": name,
             "description": f.get("description", "") if isinstance(f, dict) else "",
             "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-        }
-        for f in functions
-    ]
+        })
+    return result
 
 
 def _normalize_events(events: list) -> list[str]:
     """Normalize event list to plain names."""
-    return [e.get("name") if isinstance(e, dict) else e for e in events]
+    return [
+        name for e in events
+        if (name := (e.get("name") if isinstance(e, dict) else e))
+    ]
 
 
 def full_device(d: dict) -> dict[str, Any]:
@@ -45,7 +51,8 @@ def compact_device(d: dict, expand: bool = False) -> dict[str, Any]:
         "location": d.get("location"),
         "function_count": len(funcs),
         "function_names": [
-            f.get("name") if isinstance(f, dict) else f for f in funcs
+            name for f in funcs
+            if (name := (f.get("name") if isinstance(f, dict) else f))
         ],
     }
     if expand:

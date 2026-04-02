@@ -1,4 +1,4 @@
-"""Device Connect SDK — lightweight runtime for edge devices.
+"""Device Connect Edge — lightweight runtime for edge devices.
 
 Build IoT devices with Python. Connect them over Zenoh or NATS. Communicate
 device-to-device using RPC and events. This is the only package a

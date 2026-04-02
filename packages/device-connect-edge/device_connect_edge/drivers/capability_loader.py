@@ -30,6 +30,7 @@ Example:
 import asyncio
 import importlib
 import importlib.util
+import inspect
 import json
 import logging
 import os
@@ -208,9 +209,7 @@ class CapabilityLoader:
                 if await self._load_capability(cap_path):
                     count += 1
             except Exception as e:
-                logger.error(f"Failed to load capability from {cap_path}: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("Failed to load capability from %s: %s", cap_path, e)
 
         logger.info(f"Loaded {count} capabilities from {self._capabilities_dir}")
         return count
@@ -307,7 +306,10 @@ class CapabilityLoader:
 
         # Call start() lifecycle method
         if hasattr(cap_instance, "start"):
-            await cap_instance.start()
+            if inspect.iscoroutinefunction(cap_instance.start):
+                await cap_instance.start()
+            else:
+                cap_instance.start()
 
         self._capabilities[cap_id] = loaded
         logger.info(f"Loaded capability: {cap_id} "
@@ -335,7 +337,10 @@ class CapabilityLoader:
         for cap_id, loaded in self._capabilities.items():
             try:
                 if hasattr(loaded.instance, "stop"):
-                    await loaded.instance.stop()
+                    if inspect.iscoroutinefunction(loaded.instance.stop):
+                        await loaded.instance.stop()
+                    else:
+                        loaded.instance.stop()
             except Exception as e:
                 logger.error(f"Error stopping capability {cap_id}: {e}")
 
@@ -380,7 +385,10 @@ class CapabilityLoader:
         # Stop capability
         try:
             if hasattr(loaded.instance, "stop"):
-                await loaded.instance.stop()
+                if inspect.iscoroutinefunction(loaded.instance.stop):
+                    await loaded.instance.stop()
+                else:
+                    loaded.instance.stop()
         except Exception as e:
             logger.error(f"Error stopping capability {capability_id}: {e}")
 
@@ -429,7 +437,7 @@ class CapabilityLoader:
             raise KeyError(f"Function not found: {function}")
 
         method = self._functions[function]
-        if asyncio.iscoroutinefunction(method):
+        if inspect.iscoroutinefunction(method):
             return await method(**params)
         else:
             return method(**params)
@@ -480,6 +488,11 @@ class CapabilityLoader:
                     # Register with namespace prefix
                     self._functions[f"{cap_id}.{func_name}"] = attr
                     # Also register without prefix for direct invocation
+                    if func_name in self._functions:
+                        logger.warning(
+                            "Capability function %s from %s shadows existing registration",
+                            func_name, cap_id,
+                        )
                     self._functions[func_name] = attr
                     loaded.functions.append(func_name)
                     logger.debug(f"Registered function: {func_name} from {cap_id}")
@@ -608,7 +621,7 @@ class CapabilityLoader:
             # Set call origin to "routine" so RPC logs show LOCAL instead of EXEC
             token = set_call_origin("routine")
             try:
-                if asyncio.iscoroutinefunction(routine):
+                if inspect.iscoroutinefunction(routine):
                     await routine()
                 else:
                     routine()
@@ -793,22 +806,22 @@ class CapabilityDriverMixin:
 
         return funcs
 
-    async def invoke(self, function: str, **params) -> Any:
+    async def invoke(self, function_name: str, **params) -> Any:
         """Override to route to capability functions.
 
         Args:
-            function: Function name to invoke
+            function_name: Function name to invoke
             **params: Function parameters
 
         Returns:
             Function result
         """
         # Check if it's a capability function
-        if self._capability_loader and self._capability_loader.has_function(function):
-            return await self._capability_loader.invoke(function, **params)
+        if self._capability_loader and self._capability_loader.has_function(function_name):
+            return await self._capability_loader.invoke(function_name, **params)
 
         # Fall back to base class
-        return await super().invoke(function, **params)
+        return await super().invoke(function_name, **params)
 
     def get_capability_subscriptions(self) -> List[EventSubscription]:
         """Get event subscriptions from all capabilities.

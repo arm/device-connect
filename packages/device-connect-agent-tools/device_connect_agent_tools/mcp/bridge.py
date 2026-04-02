@@ -115,6 +115,8 @@ class MCPBridgeServer:
         if mode == "infra":
             return False
         # "auto": use D2D when no URL looks like NATS or MQTT
+        if not self.config.messaging_urls:
+            return False
         is_zenoh = all(
             not url.startswith("nats://")
             and not url.startswith("tls://")
@@ -230,6 +232,7 @@ class MCPBridgeServer:
         async def list_devices(
             device_type: str = "",
             location: str = "",
+            status: str = "",
             group_by: str = "",
             offset: int = 0,
             limit: int = 20,
@@ -239,6 +242,14 @@ class MCPBridgeServer:
                 device_type=device_type or None,
                 location=location or None,
             )
+
+            # Client-side status filter
+            if status:
+                s = status.lower()
+                devices = [
+                    d for d in devices
+                    if s in (d.get("status", {}).get("availability") or "").lower()
+                ]
 
             def _summary(d: dict, expand: bool) -> dict:
                 return compact_device(d, expand)
@@ -256,7 +267,7 @@ class MCPBridgeServer:
                 result = {"groups": dict(sorted(groups.items())), "total": total}
             else:
                 page = devices[offset:offset + limit]
-                expand = SMALL_FLEET_THRESHOLD > 0 and len(page) <= SMALL_FLEET_THRESHOLD
+                expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
                 result = {
                     "devices": [_summary(d, expand) for d in page],
                     "total": total,
@@ -314,13 +325,13 @@ class MCPBridgeServer:
             try:
                 await self._d2d_collector.stop()
             except Exception as e:
-                logger.warning(f"Error stopping D2D collector: {e}")
+                logger.warning("Error stopping D2D collector: %s", e)
             self._d2d_collector = None
         if self._messaging_client:
             try:
                 await self._messaging_client.close()
             except Exception as e:
-                logger.warning(f"Error closing messaging client: {e}")
+                logger.warning("Error closing messaging client: %s", e)
         self._messaging_client = None
         self._registry = None
         self._router = None

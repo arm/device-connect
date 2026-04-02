@@ -208,7 +208,7 @@ def list_devices(
 
         # Paginate
         page = devices[offset:offset + limit]
-        expand = SMALL_FLEET_THRESHOLD > 0 and len(page) <= SMALL_FLEET_THRESHOLD
+        expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
         return {
             "devices": [_summary(d, expand) for d in page],
             "total": total,
