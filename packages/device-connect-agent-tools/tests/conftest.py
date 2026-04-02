@@ -1,6 +1,6 @@
 """Shared fixtures for device-connect-agent-tools tests.
 
-Uses device_connect_sdk.messaging.MessagingConfig for credential/TLS resolution.
+Uses device_connect_edge.messaging.MessagingConfig for credential/TLS resolution.
 """
 
 import os
@@ -10,8 +10,8 @@ from typing import Optional
 import pytest
 import pytest_asyncio
 
-from device_connect_sdk.messaging import create_client
-from device_connect_sdk.messaging.config import MessagingConfig
+from device_connect_edge.messaging import create_client
+from device_connect_edge.messaging.config import MessagingConfig
 
 
 def _connection_kwargs() -> dict:

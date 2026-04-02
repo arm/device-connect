@@ -10,7 +10,7 @@ Instead, please report vulnerabilities via [GitHub's private vulnerability repor
 
 - Description of the vulnerability
 - Steps to reproduce
-- Affected package(s) (`device-connect-sdk`, `device-connect-server`, `device-connect-agent-tools`)
+- Affected package(s) (`device-connect-edge`, `device-connect-server`, `device-connect-agent-tools`)
 - Impact assessment (what an attacker could do)
 - Suggested fix (if you have one)
 
@@ -27,7 +27,7 @@ This policy covers all packages in the Device Connect monorepo:
 
 | Package | Scope |
 |---------|-------|
-| `device-connect-sdk` | Messaging clients, device runtime, credential handling |
+| `device-connect-edge` | Messaging clients, device runtime, credential handling |
 | `device-connect-server` | Registry service, JWT/TLS security, state store, CLIs |
 | `device-connect-agent-tools` | Agent connection, MCP bridge, tool invocation |
 

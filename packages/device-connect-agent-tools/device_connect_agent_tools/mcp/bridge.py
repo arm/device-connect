@@ -26,9 +26,9 @@ import json
 import logging
 from typing import Optional
 
-from device_connect_sdk.messaging import create_client
-from device_connect_sdk.messaging.base import MessagingClient
-from device_connect_sdk.registry_client import RegistryClient
+from device_connect_edge.messaging import create_client
+from device_connect_edge.messaging.base import MessagingClient
+from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
@@ -148,7 +148,7 @@ class MCPBridgeServer:
     async def _init_discovery(self) -> None:
         """Initialize discovery provider — D2D (PresenceCollector) or infra (RegistryClient)."""
         if self._is_d2d_mode():
-            from device_connect_sdk.discovery import PresenceCollector, D2DRegistry
+            from device_connect_edge.discovery import PresenceCollector, D2DRegistry
             logger.info("Using D2D discovery (PresenceCollector)")
             self._d2d_collector = PresenceCollector(
                 self._messaging_client, self.config.tenant

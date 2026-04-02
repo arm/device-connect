@@ -10,7 +10,7 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from device_connect_sdk.messaging.base import MessagingClient
+from device_connect_edge.messaging.base import MessagingClient
 from device_connect_agent_tools.mcp.schema import parse_tool_name
 
 logger = logging.getLogger(__name__)

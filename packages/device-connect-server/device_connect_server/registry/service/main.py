@@ -22,9 +22,9 @@ from pydantic import BaseModel, Field
 
 import logging
 
-from device_connect_sdk import DeviceCapabilities, build_rpc_error, build_rpc_response
-from device_connect_sdk.messaging import MessagingClient, create_client
-from device_connect_sdk.messaging.config import MessagingConfig
+from device_connect_edge import DeviceCapabilities, build_rpc_error, build_rpc_response
+from device_connect_edge.messaging import MessagingClient, create_client
+from device_connect_edge.messaging.config import MessagingConfig
 
 from device_connect_server.registry.service import registry
 from device_connect_server.security.acl import ACLManager

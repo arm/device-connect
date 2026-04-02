@@ -30,9 +30,9 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary eclipse-zenoh -e "packages/device-connect-sdk[dev]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev]"
       - name: Run unit tests
-        run: pytest packages/device-connect-sdk/tests/ -v --timeout=30 --tb=short
+        run: pytest packages/device-connect-edge/tests/ -v --timeout=30 --tb=short
 
   unit-tests-server:
     runs-on: ubuntu-latest
@@ -46,7 +46,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
       - name: Run unit tests
         run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short
@@ -63,7 +63,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands,dev]"
       - name: Run unit tests
         run: pytest packages/device-connect-agent-tools/tests/test_connection_unit.py packages/device-connect-agent-tools/tests/test_tools_unit.py packages/device-connect-agent-tools/tests/test_langchain_adapter.py packages/device-connect-agent-tools/tests/test_strands_adapter.py -v --timeout=30 --tb=short
@@ -81,7 +81,7 @@ jobs:
         run: pip install ruff
       - name: Lint all packages
         run: |
-          ruff check packages/device-connect-sdk/
+          ruff check packages/device-connect-edge/
           ruff check packages/device-connect-server/
           ruff check packages/device-connect-agent-tools/
           ruff check tests/
@@ -104,7 +104,7 @@ jobs:
       - name: Install all packages
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands]"
           pip install -r tests/requirements.txt
@@ -162,7 +162,7 @@ jobs:
       - name: Install all packages
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[strands]"
           pip install -r tests/requirements.txt
@@ -207,7 +207,7 @@ jobs:
       - name: Install packages
         run: |
           python -m pip install --upgrade pip
-          pip install --only-binary eclipse-zenoh -e packages/device-connect-sdk
+          pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install -r tests/requirements.txt
       - name: Start infrastructure
         working-directory: tests

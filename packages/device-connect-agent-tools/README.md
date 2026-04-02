@@ -35,13 +35,13 @@ Framework-agnostic tools for Device Connect — discover and invoke devices from
 ## Where This Fits
 
 ```
-  device-connect-sdk          device-connect-server           device-connect-agent-tools
+  device-connect-edge          device-connect-server           device-connect-agent-tools
   (Device Connect SDK)    (server runtime)          (agent SDK — this)
         │                         │                         │
         └──────────── Device Connect Mesh ─────────────────────────┘
 ```
 
-- **[device-connect-sdk](../device-connect-sdk/)** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
+- **[device-connect-edge](../device-connect-edge/)** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
 - **[device-connect-server](../device-connect-server/)** — runs on servers. Adds registry, security, state, and CLIs
 - **device-connect-agent-tools** — connects AI agents (Strands, LangChain, MCP) to the device mesh
 
@@ -337,7 +337,7 @@ export DEVICE_CONNECT_ALLOW_INSECURE=true
 python my_agent.py
 ```
 
-Devices on the same LAN that are also running in D2D mode will be discovered automatically. See [device-connect-sdk](../device-connect-sdk/README.md#device-to-device-mode-no-infrastructure) for details.
+Devices on the same LAN that are also running in D2D mode will be discovered automatically. See [device-connect-edge](../device-connect-edge/README.md#device-to-device-mode-no-infrastructure) for details.
 
 ## Tools
 

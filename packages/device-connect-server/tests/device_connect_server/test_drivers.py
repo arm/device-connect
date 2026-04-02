@@ -1,7 +1,7 @@
 """Tests for device driver decorators (rpc, emit, periodic, before_emit)."""
 import asyncio
 import pytest
-from device_connect_sdk.drivers import (
+from device_connect_edge.drivers import (
     DeviceDriver,
     rpc,
     emit,
@@ -207,7 +207,7 @@ class TestDeviceDriverCapabilities:
     @pytest.mark.asyncio
     async def test_invoke_unknown_function(self):
         """Test invoking unknown function raises error."""
-        from device_connect_sdk.errors import FunctionInvocationError
+        from device_connect_edge.errors import FunctionInvocationError
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -228,7 +228,7 @@ class TestBeforeEmit:
 
     def test_decorator_marks_handler(self):
         """Test that decorator marks handler correctly."""
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         @before_emit("mess_detected")
         async def on_mess(self, zone: str, severity: str, **kwargs):
@@ -240,7 +240,7 @@ class TestBeforeEmit:
 
     def test_suppress_propagation_flag(self):
         """Test suppress_propagation decorator parameter."""
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         @before_emit("event", suppress_propagation=True)
         async def handler(self, **kwargs):
@@ -252,7 +252,7 @@ class TestBeforeEmit:
     async def test_internal_handler_collection(self):
         """Test that internal handlers are collected."""
 
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -283,7 +283,7 @@ class TestBeforeEmit:
     async def test_internal_handler_dispatch_propagate(self):
         """Test dispatch returns True for propagation by default."""
 
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -312,7 +312,7 @@ class TestBeforeEmit:
     async def test_internal_handler_suppress_with_false(self):
         """Test handler returning False suppresses propagation."""
 
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -338,7 +338,7 @@ class TestBeforeEmit:
     async def test_internal_handler_modify_payload(self):
         """Test handler returning dict modifies payload."""
 
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -366,7 +366,7 @@ class TestBeforeEmit:
     async def test_internal_handler_error_continues(self):
         """Test that handler errors don't break event flow."""
 
-        from device_connect_sdk.drivers import before_emit
+        from device_connect_edge.drivers import before_emit
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -401,7 +401,7 @@ class TestPeriodic:
 
     def test_decorator_marks_routine(self):
         """Test that decorator marks routine correctly."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         @periodic(interval=5.0, wait_for_completion=True)
         async def detection_loop(self):
@@ -415,7 +415,7 @@ class TestPeriodic:
 
     def test_custom_name(self):
         """Test custom routine name."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         @periodic(name="custom_loop")
         async def my_routine(self):
@@ -425,7 +425,7 @@ class TestPeriodic:
 
     def test_start_on_connect_false(self):
         """Test start_on_connect parameter."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         @periodic(start_on_connect=False)
         async def manual_routine(self):
@@ -436,7 +436,7 @@ class TestPeriodic:
     @pytest.mark.asyncio
     async def test_routine_collection(self):
         """Test that routines are collected."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -466,7 +466,7 @@ class TestPeriodic:
     @pytest.mark.asyncio
     async def test_start_and_stop_routine(self):
         """Test starting and stopping a routine."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -494,7 +494,7 @@ class TestPeriodic:
     @pytest.mark.asyncio
     async def test_start_routines_auto(self):
         """Test that routines auto-start based on start_on_connect."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -526,7 +526,7 @@ class TestPeriodic:
     @pytest.mark.asyncio
     async def test_routine_error_continues(self):
         """Test that routine errors don't stop the routine."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         class TestDriver(DeviceDriver):
             device_type = "test"
@@ -555,7 +555,7 @@ class TestPeriodic:
     @pytest.mark.asyncio
     async def test_get_routine_status(self):
         """Test get_routine_status method."""
-        from device_connect_sdk.drivers import periodic
+        from device_connect_edge.drivers import periodic
 
         class TestDriver(DeviceDriver):
             device_type = "test"

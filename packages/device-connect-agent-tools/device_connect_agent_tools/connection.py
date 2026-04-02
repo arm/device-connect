@@ -1,6 +1,6 @@
 """Messaging connection management for Device Connect tools.
 
-Uses device_connect_sdk.messaging for the underlying connection, credential
+Uses device_connect_edge.messaging for the underlying connection, credential
 resolution, and TLS setup.  Adds a sync-to-async bridge so that Strands
 @tool functions (which must be synchronous) can call async operations,
 plus auto-discovery of credentials from well-known project paths.
@@ -30,10 +30,10 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from device_connect_sdk.messaging import create_client, MessagingClient
-from device_connect_sdk.messaging.config import MessagingConfig
-from device_connect_sdk.discovery_provider import DiscoveryProvider
-from device_connect_sdk.registry_client import RegistryClient as _SDKRegistryClient
+from device_connect_edge.messaging import create_client, MessagingClient
+from device_connect_edge.messaging.config import MessagingConfig
+from device_connect_edge.discovery_provider import DiscoveryProvider
+from device_connect_edge.registry_client import RegistryClient as _SDKRegistryClient
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +228,7 @@ class DeviceConnection:
 
         # Initialize discovery provider
         if self._d2d_mode:
-            from device_connect_sdk.discovery import PresenceCollector, D2DRegistry
+            from device_connect_edge.discovery import PresenceCollector, D2DRegistry
             self._d2d_collector = PresenceCollector(self._client, self.zone)
             await self._d2d_collector.start()
             await self._d2d_collector.wait_for_peers(timeout=3.0)
@@ -557,7 +557,7 @@ class DeviceConnection:
 
     @property
     def messaging_client(self) -> Optional[MessagingClient]:
-        """The device_connect_sdk MessagingClient instance."""
+        """The device_connect_edge MessagingClient instance."""
         return self._client
 
     @property

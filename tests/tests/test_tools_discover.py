@@ -1,6 +1,6 @@
 """Integration tests for device-connect-agent-tools discover_devices().
 
-Tests that the agent SDK can discover devices registered via device_connect_sdk.
+Tests that the agent SDK can discover devices registered via device_connect_edge.
 """
 
 import asyncio

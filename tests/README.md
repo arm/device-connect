@@ -1,7 +1,7 @@
 # Device Connect Integration Tests
 
 Cross-package integration tests for the Device Connect monorepo. Validates that
-[device-connect-sdk](../packages/device-connect-sdk/),
+[device-connect-edge](../packages/device-connect-edge/),
 [device-connect-server](../packages/device-connect-server/), and
 [device-connect-agent-tools](../packages/device-connect-agent-tools/)
 work together end-to-end.
@@ -63,7 +63,7 @@ cd tests
 python -m venv .venv && source .venv/bin/activate
 
 # Install all packages in editable mode
-pip install -e ../packages/device-connect-sdk
+pip install -e ../packages/device-connect-edge
 pip install -e "../packages/device-connect-server[all]"
 pip install -e "../packages/device-connect-agent-tools[strands]"
 pip install -r requirements.txt

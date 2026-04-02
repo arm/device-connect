@@ -35,8 +35,8 @@ def d2d_env(monkeypatch):
     monkeypatch.delenv("NATS_URLS", raising=False)
 
 
-from device_connect_sdk.drivers import DeviceDriver, rpc  # noqa: E402
-from device_connect_sdk.types import DeviceIdentity, DeviceStatus  # noqa: E402
+from device_connect_edge.drivers import DeviceDriver, rpc  # noqa: E402
+from device_connect_edge.types import DeviceIdentity, DeviceStatus  # noqa: E402
 
 
 class _StubDriver(DeviceDriver):
@@ -72,7 +72,7 @@ class _StubDriver(DeviceDriver):
 
 async def _start_device(device_id, device_type="sensor"):
     """Start a DeviceRuntime in D2D mode, return (runtime, task)."""
-    from device_connect_sdk import DeviceRuntime
+    from device_connect_edge import DeviceRuntime
 
     driver = _StubDriver(dt=device_type)
     runtime = DeviceRuntime(

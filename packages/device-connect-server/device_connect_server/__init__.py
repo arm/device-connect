@@ -1,7 +1,7 @@
 """Device Connect Server — infrastructure extensions for Device Connect.
 
 Device-side logic (DeviceRuntime, DeviceDriver, messaging, types) lives in
-``device_connect_sdk``. This package adds server-side infrastructure:
+``device_connect_edge``. This package adds server-side infrastructure:
 
 Submodules:
     - device_connect_server.security: ACLs, commissioning, credentials
@@ -12,8 +12,8 @@ Submodules:
     - device_connect_server.statectl: State management CLI
 
 Example:
-    from device_connect_sdk import DeviceRuntime
-    from device_connect_sdk.drivers import DeviceDriver, rpc
+    from device_connect_edge import DeviceRuntime
+    from device_connect_edge.drivers import DeviceDriver, rpc
 
     class CameraDriver(DeviceDriver):
         device_type = "camera"

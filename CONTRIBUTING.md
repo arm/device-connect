@@ -18,7 +18,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 
 # Install all packages in editable mode
-pip install -e packages/device-connect-sdk
+pip install -e packages/device-connect-edge
 pip install -e "packages/device-connect-server[all]"
 pip install -e "packages/device-connect-agent-tools[strands]"
 ```
@@ -27,7 +27,7 @@ pip install -e "packages/device-connect-agent-tools[strands]"
 
 | Package | Path | Description |
 |---------|------|-------------|
-| `device-connect-sdk` | `packages/device-connect-sdk/` | Edge SDK for building devices |
+| `device-connect-edge` | `packages/device-connect-edge/` | Edge SDK for building devices |
 | `device-connect-server` | `packages/device-connect-server/` | Server runtime, registry, CLIs |
 | `device-connect-agent-tools` | `packages/device-connect-agent-tools/` | AI agent integration (Strands, LangChain, MCP) |
 | Integration tests | `tests/` | Cross-package integration tests |
@@ -78,7 +78,7 @@ Open a PR on GitHub targeting `main`. Include a description of what changed, why
 
 ```bash
 # SDK
-cd packages/device-connect-sdk && python3 -m pytest tests/ -v
+cd packages/device-connect-edge && python3 -m pytest tests/ -v
 
 # Server
 cd packages/device-connect-server && python3 -m pytest tests/ -v

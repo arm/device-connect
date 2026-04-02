@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from device_connect_sdk.messaging import create_client
+from device_connect_edge.messaging import create_client
 
 logger = logging.getLogger(__name__)
 

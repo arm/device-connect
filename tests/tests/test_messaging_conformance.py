@@ -16,22 +16,22 @@ import uuid
 import pytest
 
 # Import the ABC — this comes from whichever package provides it
-# (device-connect-server or device-connect-sdk both have messaging/)
-from device_connect_sdk.messaging.base import MessagingClient
+# (device-connect-server or device-connect-edge both have messaging/)
+from device_connect_edge.messaging.base import MessagingClient
 
 
 # ── Client factory ─────────────────────────────────────────────────
 
 def _create_nats_client() -> MessagingClient:
     """Create a NATS MessagingClient instance."""
-    from device_connect_sdk.messaging.nats_adapter import NATSAdapter
+    from device_connect_edge.messaging.nats_adapter import NATSAdapter
     return NATSAdapter()
 
 
 def _create_zenoh_client() -> MessagingClient:
     """Create a Zenoh MessagingClient instance."""
     pytest.importorskip("zenoh", reason="eclipse-zenoh not installed")
-    from device_connect_sdk.messaging.zenoh_adapter import ZenohAdapter
+    from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
     return ZenohAdapter()
 
 

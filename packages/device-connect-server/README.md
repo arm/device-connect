@@ -1,6 +1,6 @@
 # device-connect-server
 
-Server-side runtime for the Device Connect framework. Extends [device-connect-sdk](../device-connect-sdk/) with device registry, security (commissioning, ACLs), distributed state, audit logging, and CLI tools.
+Server-side runtime for the Device Connect framework. Extends [device-connect-edge](../device-connect-edge/) with device registry, security (commissioning, ACLs), distributed state, audit logging, and CLI tools.
 
 ## Contents
 
@@ -15,13 +15,13 @@ Server-side runtime for the Device Connect framework. Extends [device-connect-sd
 ## Where This Fits
 
 ```
-  device-connect-sdk          device-connect-server           device-connect-agent-tools
+  device-connect-edge          device-connect-server           device-connect-agent-tools
   (Device Connect SDK)    (server runtime — this)   (agent SDK)
         │                         │                         │
         └──────────────── Mesh ─────────────────────────────┘
 ```
 
-- **device-connect-sdk** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
+- **device-connect-edge** — runs on physical devices (Raspberry Pi, robots, cameras, sensors)
 - **device-connect-server** — runs on servers. Adds registry, security, state, and CLIs
 - **device-connect-agent-tools** — connects AI agents (Strands, LangChain, MCP) to the device mesh
 
@@ -32,11 +32,11 @@ Server-side runtime for the Device Connect framework. Extends [device-connect-sd
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "../device-connect-sdk"
+pip install -e "../device-connect-edge"
 pip install -e ".[all]"
 ```
 
-This pulls in `device-connect-sdk` automatically. Optional extras:
+This pulls in `device-connect-edge` automatically. Optional extras:
 
 | Extra | Adds |
 |-------|------|
@@ -47,7 +47,7 @@ This pulls in `device-connect-sdk` automatically. Optional extras:
 | `[mqtt]` | aiomqtt (MQTT messaging backend) |
 | `[all]` | All of the above + dev tools |
 
-> **Note:** Zenoh is now a core dependency of `device-connect-sdk` and is included automatically.
+> **Note:** Zenoh is now a core dependency of `device-connect-edge` and is included automatically.
 
 ## Quick Start
 
@@ -123,7 +123,7 @@ docker compose -f infra/docker-compose-nats.yml up -d
 The number generator simulator connects to the messaging backend, registers itself with the device registry, and emits `number_generated` events every 5 seconds.
 
 ```bash
-cd ../device-connect-sdk  # sibling package in the monorepo
+cd ../device-connect-edge  # sibling package in the monorepo
 
 # Zenoh (dev mode, no auth)
 DEVICE_CONNECT_ALLOW_INSECURE=true ZENOH_CONNECT=tcp/localhost:7447 \
@@ -238,7 +238,7 @@ rm -rf security_infra/.nsc security_infra/nats-jwt-generated.conf
 rm -f security_infra/*.pem security_infra/*.srl
 ```
 
-See [device-connect-sdk — Credentials](../device-connect-sdk/README.md#credentials) for the credentials file format.
+See [device-connect-edge — Credentials](../device-connect-edge/README.md#credentials) for the credentials file format.
 
 ## CLI Tools
 
@@ -291,7 +291,7 @@ Operator: dc-operator              (trust root)
        └─ User: my-agent            (AI agent, via --user)
 ```
 
-See [device-connect-sdk — Credentials](../device-connect-sdk/README.md#credentials) for how devices consume credentials at runtime.
+See [device-connect-edge — Credentials](../device-connect-edge/README.md#credentials) for how devices consume credentials at runtime.
 
 AI agents connecting via [device-connect-agent-tools](../device-connect-agent-tools/) also need their own credentials: `./security_infra/gen_creds.sh --user my-agent` (NATS) or `./security_infra/generate_tls_certs.sh --client my-agent` (Zenoh).
 
