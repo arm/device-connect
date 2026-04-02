@@ -33,7 +33,7 @@ from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
 from device_connect_agent_tools.connection import _flatten_device
-from device_connect_agent_tools._normalize import full_device, compact_device
+from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type
 
 logger = logging.getLogger(__name__)
 
@@ -114,17 +114,11 @@ class MCPBridgeServer:
             return True
         if mode == "infra":
             return False
-        # "auto": use D2D when no URL looks like NATS or MQTT
-        if not self.config.messaging_urls:
-            return False
-        is_zenoh = all(
-            not url.startswith("nats://")
-            and not url.startswith("tls://")
-            and not url.startswith("mqtt://")
-            for url in self.config.messaging_urls
-        )
-        logger.info("Auto-detected discovery mode: %s", "d2d" if is_zenoh else "infra")
-        return is_zenoh
+        # "auto": D2D when backend is Zenoh
+        backend = self.config.get_backend()
+        is_d2d = backend == "zenoh"
+        logger.info("Auto-detected discovery mode: %s (backend=%s)", "d2d" if is_d2d else "infra", backend)
+        return is_d2d
 
     async def _init_discovery(self) -> None:
         """Initialize discovery provider — D2D (PresenceCollector) or infra (RegistryClient)."""
@@ -242,6 +236,10 @@ class MCPBridgeServer:
                 device_type=device_type or None,
                 location=location or None,
             )
+
+            # Client-side fuzzy type filter (server may not support fuzzy matching)
+            if device_type:
+                devices = fuzzy_filter_by_type(devices, device_type)
 
             # Client-side status filter
             if status:

@@ -31,6 +31,19 @@ def _normalize_events(events: list) -> list[str]:
     ]
 
 
+def fuzzy_filter_by_type(devices: list[dict], device_type: str) -> list[dict]:
+    """Filter devices by type using fuzzy matching (case-insensitive, ignores _/-)."""
+    t = device_type.lower().replace("_", "").replace("-", "")
+    return [
+        d for d in devices
+        if d.get("device_type")
+        and (
+            t in d["device_type"].lower().replace("_", "").replace("-", "")
+            or d["device_type"].lower().replace("_", "").replace("-", "") in t
+        )
+    ]
+
+
 def full_device(d: dict) -> dict[str, Any]:
     """Build a full device dict with function schemas and events."""
     return {
@@ -45,15 +58,16 @@ def full_device(d: dict) -> dict[str, Any]:
 def compact_device(d: dict, expand: bool = False) -> dict[str, Any]:
     """Build a compact device summary, optionally with full function schemas."""
     funcs = d.get("functions", [])
+    names = [
+        name for f in funcs
+        if (name := (f.get("name") if isinstance(f, dict) else f))
+    ]
     result: dict[str, Any] = {
         "device_id": d.get("device_id"),
         "device_type": d.get("device_type"),
         "location": d.get("location"),
-        "function_count": len(funcs),
-        "function_names": [
-            name for f in funcs
-            if (name := (f.get("name") if isinstance(f, dict) else f))
-        ],
+        "function_count": len(names),
+        "function_names": names,
     }
     if expand:
         result["functions"] = _normalize_functions(funcs)

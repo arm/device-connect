@@ -240,7 +240,7 @@
 
 <!-- Package Legend -->
 <div class="pkg-legend">
-  <div class="pkg-item"><div class="pkg-swatch" style="background:#3498db"></div>device-connect-sdk</div>
+  <div class="pkg-item"><div class="pkg-swatch" style="background:#3498db"></div>device-connect-edge</div>
   <div class="pkg-item"><div class="pkg-swatch" style="background:#27ae60"></div>device-connect-server</div>
   <div class="pkg-item"><div class="pkg-swatch" style="background:#9b59b6"></div>device-connect-agent-tools</div>
   <div class="pkg-item" style="gap:4px">
@@ -316,75 +316,75 @@ const classes = [
   { id: 'DeviceDriver', name: 'DeviceDriver', pkg: 'sdk', type: 'abc', x: 120, y: 180,
     methods: ['connect()', 'disconnect()', 'invoke(fn, **params)', 'invoke_remote(device_id, fn)', 'list_devices()', 'get_device()', 'wait_for_device()', 'setup_subscriptions()', 'teardown_subscriptions()', 'emit_event()', 'start_routine(name)', 'stop_routine(name)', 'get_routine_status()'],
     description: 'Abstract base for device logic. Subclass to define @rpc functions, @emit events, @on subscriptions, and @periodic routines. Provides D2D methods: invoke_remote(), list_devices().',
-    file: 'device_connect_sdk/drivers/base.py',
+    file: 'device_connect_edge/drivers/base.py',
     flows: ['1d','1i','2d','2i','5d','5i','6d','6i','7d','7i','8d','8i'] },
 
   { id: 'DeviceRuntime', name: 'DeviceRuntime', pkg: 'sdk', type: 'class', x: 120, y: 620,
     methods: ['run()', 'stop()', 'invoke(fn, **params)', 'enqueue_event()', 'set_heartbeat_provider()', 'add_connection_listener()', 'add_registration_listener()'],
     description: 'Main device lifecycle orchestrator. Manages messaging connection, registration (infra) or presence (D2D), heartbeats, command dispatch, and event queuing.',
-    file: 'device_connect_sdk/device.py',
+    file: 'device_connect_edge/device.py',
     flows: ['1d','1i','2d','2i','5d','5i','7d','7i','8d','8i'] },
 
   { id: 'D2DRouter', name: '_RemoteInvoker', pkg: 'sdk', type: 'class', x: 470, y: 620,
     methods: ['invoke(device_id, fn, params)', 'publish_event(device_id, event)', 'notify_device(device_id, subject, payload)'],
     description: 'Lightweight JSON-RPC client for device-to-device RPC invocation. Used in BOTH D2D and Infra modes. Sends requests via MessagingClient to target device cmd subjects.',
-    file: 'device_connect_sdk/device.py',
+    file: 'device_connect_edge/device.py',
     flows: ['7d','7i'], mode: 'both' },
 
   { id: 'Decorators', name: 'Decorators', pkg: 'sdk', type: 'decorator', x: 470, y: 180,
     methods: ['@rpc()', '@emit()', '@on(device_id=, device_type=, event_name=)', '@periodic(interval)', '@before_emit(event)'],
     description: 'Method decorators that define device capabilities. @rpc exposes callable functions, @emit declares events, @on subscribes to other devices\' events, @periodic runs background routines. Note: @on is defined in base.py, not decorators.py.',
-    file: 'device_connect_sdk/drivers/decorators.py',
+    file: 'device_connect_edge/drivers/decorators.py',
     flows: ['1d','1i','2d','2i','8d','8i'] },
 
   { id: 'DriverTransport', name: 'DriverTransport', pkg: 'sdk', type: 'class', x: 470, y: 420,
     methods: ['publish(topic, data)', 'subscribe(topic, cb)', 'request(topic, data)', 'teardown()'],
     description: 'Raw messaging transport for hardware-native topic access. Allows drivers to use custom topic patterns outside the Device Connect conventions.',
-    file: 'device_connect_sdk/drivers/transport.py',
+    file: 'device_connect_edge/drivers/transport.py',
     flows: [] },
 
   { id: 'TypeModels', name: 'Type Models', pkg: 'sdk', type: 'model', x: 120, y: 1020,
     methods: ['DeviceCapabilities', 'FunctionDef', 'EventDef', 'DeviceIdentity', 'DeviceStatus', 'DeviceState (Enum)'],
     description: 'Pydantic models defining device metadata. DeviceCapabilities bundles functions + events. FunctionDef has JSON Schema parameters. DeviceIdentity has hardware info.',
-    file: 'device_connect_sdk/types.py',
+    file: 'device_connect_edge/types.py',
     flows: [] },
 
   // ── SDK: Messaging ──
   { id: 'MessagingClient', name: 'MessagingClient', pkg: 'sdk', type: 'abc', x: 820, y: 620,
     methods: ['connect()', 'publish(subject, data)', 'subscribe(subject, cb)', 'request(subject, data)', 'close()'],
     description: 'Abstract messaging interface. Implemented by NATSAdapter, ZenohAdapter, MQTTAdapter. Central to all communication \u2014 used by every flow in both modes.',
-    file: 'device_connect_sdk/messaging/base.py',
+    file: 'device_connect_edge/messaging/base.py',
     flows: ['1d','1i','2d','2i','3d','3i','4d','4i','5d','5i','6d','6i','7d','7i','8d','8i'] },
 
   // ── SDK: Discovery ──
   { id: 'DiscoveryProvider', name: 'DiscoveryProvider', pkg: 'sdk', type: 'protocol', x: 1180, y: 180,
     methods: ['list_devices(device_type, location)', 'get_device(device_id)'],
     description: 'Protocol (interface) for device discovery. Implemented by D2DRegistry (peer-based) and RegistryClient (server-based). The point where D2D and Infra discovery paths diverge.',
-    file: 'device_connect_sdk/discovery_provider.py',
+    file: 'device_connect_edge/discovery_provider.py',
     flows: ['4d','4i','6d','6i'] },
 
   { id: 'PresenceAnnouncer', name: 'PresenceAnnouncer', pkg: 'sdk', type: 'class', x: 1000, y: 850,
     methods: ['start()', 'stop()', 'trigger_burst()'],
     description: 'D2D discovery: broadcasts device metadata on presence topic at 2Hz burst (10s) then 0.2Hz steady. Responds to discovery probes instantly.',
-    file: 'device_connect_sdk/discovery.py',
+    file: 'device_connect_edge/discovery.py',
     flows: ['1d'], mode: 'd2d' },
 
   { id: 'PresenceCollector', name: 'PresenceCollector', pkg: 'sdk', type: 'class', x: 1000, y: 1080,
     methods: ['start()', 'stop()', 'list_devices()', 'get_device()', 'send_discovery_probe()', 'wait_for_peers()', 'wait_for_device_type()', 'wait_for_device_id()'],
     description: 'D2D discovery: listens for presence announcements, maintains in-memory peer table, prunes stale peers (30s timeout). Supports blocking wait-for-device.',
-    file: 'device_connect_sdk/discovery.py',
+    file: 'device_connect_edge/discovery.py',
     flows: ['1d','3d','4d','6d'], mode: 'd2d' },
 
   { id: 'D2DRegistry', name: 'D2DRegistry', pkg: 'sdk', type: 'class', x: 1180, y: 420,
     methods: ['list_devices(device_type)', 'get_device(device_id)'],
     description: 'Drop-in DiscoveryProvider backed by PresenceCollector. Used in D2D mode so DeviceDriver.list_devices() and DeviceConnection.list_devices() work without a registry service.',
-    file: 'device_connect_sdk/discovery.py',
+    file: 'device_connect_edge/discovery.py',
     flows: ['3d','4d','6d'], mode: 'd2d' },
 
   { id: 'RegistryClient', name: 'RegistryClient', pkg: 'sdk', type: 'class', x: 1470, y: 420,
     methods: ['list_devices(device_type)', 'get_device(device_id)', 'invalidate_cache()'],
     description: 'Infra-mode DiscoveryProvider. Queries registry service via JSON-RPC over messaging. Results are cached with configurable TTL.',
-    file: 'device_connect_sdk/registry_client.py',
+    file: 'device_connect_edge/registry_client.py',
     flows: ['1i','3i','4i','6i'], mode: 'infra' },
 
   // ── Server Package ──
@@ -419,7 +419,7 @@ const classes = [
   { id: 'CapabilityLoader', name: 'CapabilityLoader', pkg: 'sdk', type: 'class', x: 470, y: 850,
     methods: ['load_all()', 'load_one()', 'invoke(fn, **params)', 'get_functions()', 'start_all_routines()', 'set_driver()'],
     description: 'In-process capability loading from directory of Python modules. Discovers @rpc/@periodic methods, wires event emission, manages routine lifecycle. Includes CapabilityDriverMixin.',
-    file: 'device_connect_sdk/drivers/capability_loader.py', flows: [] },
+    file: 'device_connect_edge/drivers/capability_loader.py', flows: [] },
 
   { id: 'CommissioningMode', name: 'CommissioningMode', pkg: 'server', type: 'class', x: 1820, y: 680,
     methods: ['validate_pin()', 'start_commissioning_server()', 'save_credentials()'],
@@ -472,19 +472,19 @@ const classes = [
   { id: 'NATSAdapter', name: 'NATSAdapter', pkg: 'sdk', type: 'class', x: 680, y: 880,
     methods: ['connect()', 'publish()', 'subscribe()', 'request()', 'close()'],
     description: 'NATS-backed MessagingClient. Supports reconnection callbacks, drain, flush. Primary adapter for routed/infrastructure deployments.',
-    file: 'device_connect_sdk/messaging/nats_adapter.py',
+    file: 'device_connect_edge/messaging/nats_adapter.py',
     flows: [] },
 
   { id: 'ZenohAdapter', name: 'ZenohAdapter', pkg: 'sdk', type: 'class', x: 680, y: 1120,
     methods: ['connect()', 'publish()', 'subscribe()', 'request()', 'close()'],
     description: 'Zenoh-backed MessagingClient. Peer-to-peer capable for D2D mode with configurable scouting and transport keepalive.',
-    file: 'device_connect_sdk/messaging/zenoh_adapter.py',
+    file: 'device_connect_edge/messaging/zenoh_adapter.py',
     flows: [] },
 
   { id: 'MQTTAdapter', name: 'MQTTAdapter', pkg: 'sdk', type: 'class', x: 680, y: 1340,
     methods: ['connect()', 'publish()', 'subscribe()', 'request()', 'close()'],
     description: 'MQTT-backed MessagingClient. Bridges to MQTT 3.1.1/5.0 brokers for constrained IoT environments.',
-    file: 'device_connect_sdk/messaging/mqtt_adapter.py',
+    file: 'device_connect_edge/messaging/mqtt_adapter.py',
     flows: [] },
 
   // ── Server: Audit Logger Implementations ──

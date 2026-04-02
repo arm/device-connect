@@ -32,7 +32,7 @@ from collections import defaultdict
 from typing import Any
 
 from device_connect_agent_tools.connection import get_connection
-from device_connect_agent_tools._normalize import full_device, compact_device
+from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type
 
 logger = logging.getLogger(__name__)
 
@@ -168,19 +168,7 @@ def list_devices(
 
         # Apply client-side fuzzy filtering for device_type (server may not support it yet)
         if device_type:
-            t = device_type.lower().replace("_", "").replace("-", "")
-            filtered = [
-                d for d in devices
-                if d.get("device_type")
-                and (
-                    t in d["device_type"].lower().replace("_", "").replace("-", "")
-                    or d["device_type"].lower().replace("_", "").replace("-", "") in t
-                )
-            ]
-            if filtered:
-                devices = filtered
-            else:
-                devices = []
+            devices = fuzzy_filter_by_type(devices, device_type)
 
         # Status filter
         if status:

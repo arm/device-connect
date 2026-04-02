@@ -360,6 +360,16 @@ class PresenceCollector:
         return None
 
 
+def _device_has_capabilities(device: dict, required: List[str]) -> bool:
+    """Check if a device has all required capabilities (by function name)."""
+    funcs = (device.get("capabilities") or {}).get("functions", [])
+    available = {
+        (f.get("name") if isinstance(f, dict) else f)
+        for f in funcs
+    }
+    return all(cap in available for cap in required)
+
+
 class D2DRegistry:
     """Drop-in replacement for ``RegistryClient`` backed by a ``PresenceCollector``.
 
@@ -378,9 +388,15 @@ class D2DRegistry:
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._collector.list_devices(
+        results = await self._collector.list_devices(
             device_type=device_type, location=location,
         )
+        if capabilities:
+            results = [
+                d for d in results
+                if _device_has_capabilities(d, capabilities)
+            ]
+        return results
 
     async def get_device(
         self,

@@ -430,36 +430,21 @@ class DeviceDriver(ABC):
         """
         from device_connect_edge.errors import FunctionInvocationError
 
-        # Find the method with matching function name
-        for attr_name in dir(self):
-            if attr_name.startswith("_"):
-                continue
-
-            if attr_name in self._SKIP_ATTRS:
-                continue
-
-            attr = getattr(self, attr_name, None)
-            if attr is None or not callable(attr):
-                continue
-
-            if not getattr(attr, "_is_device_function", False):
-                continue
-
-            func_name = getattr(attr, "_function_name", attr_name)
-            if func_name == function_name:
-                try:
-                    return await attr(**params)
-                except Exception as e:
-                    raise FunctionInvocationError(
-                        f"Error invoking {function_name}: {e}",
-                        function_name=function_name,
-                        original_error=e
-                    ) from e
-
-        raise FunctionInvocationError(
-            f"Function '{function_name}' not found",
-            function_name=function_name
-        )
+        funcs = self._get_functions()
+        method = funcs.get(function_name)
+        if method is None:
+            raise FunctionInvocationError(
+                f"Function '{function_name}' not found",
+                function_name=function_name
+            )
+        try:
+            return await method(**params)
+        except Exception as e:
+            raise FunctionInvocationError(
+                f"Error invoking {function_name}: {e}",
+                function_name=function_name,
+                original_error=e
+            ) from e
 
     async def _emit_event_internal(self, event_name: str, payload: Dict[str, Any]) -> None:
         """Internal event emission - called by @emit decorator.
@@ -1132,9 +1117,22 @@ class DeviceDriver(ABC):
                 source_event_name = parsed.get("method", event_name)
                 payload = parsed.get("params", {})
 
-                # Filter by device_type if specified (check device_id prefix)
-                if device_type and not source_device_id.startswith(f"{device_type}-"):
-                    return  # Skip events from non-matching device types
+                # Filter by device_type if specified
+                if device_type:
+                    # Try to resolve type from D2D peer cache
+                    source_type = ""
+                    collector = getattr(self._device, '_d2d_collector', None) if self._device else None
+                    if collector is not None:
+                        peer = collector._peers.get(source_device_id)
+                        if peer:
+                            source_type = (peer.get("identity") or {}).get("device_type", "")
+                    if source_type:
+                        if device_type.lower() not in source_type.lower():
+                            return
+                    else:
+                        # Fallback: case-insensitive substring match on device_id
+                        if device_type.lower() not in source_device_id.lower():
+                            return
 
                 await handler(source_device_id, source_event_name, payload)
             except Exception as e:

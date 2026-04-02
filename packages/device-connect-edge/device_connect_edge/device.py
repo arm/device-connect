@@ -57,6 +57,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -326,7 +327,6 @@ class DeviceRuntime:
         self.identity = identity_payload
         self.status = status_payload
         self.device_id = device_id or f"device-{uuid.uuid4().hex[:8]}"
-        import re
         if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$', self.device_id):
             raise ValueError(
                 f"Invalid device_id {self.device_id!r}. Must match "
@@ -535,6 +535,7 @@ class DeviceRuntime:
 
         # Run state (for stop())
         self._run_future: Optional[asyncio.Future] = None
+        self._stopped: Optional[asyncio.Event] = None
         self._background_tasks: List[asyncio.Task] = []
 
     def _validate_device_id_from_creds(self, creds: dict) -> None:
@@ -1262,6 +1263,8 @@ class DeviceRuntime:
             2. Register with registry
             3. Start heartbeat, command subscription, event dispatch
         """
+        self._stopped = asyncio.Event()
+
         # Handle commissioning if needed
         entering_commissioning = False
         if self.factory_identity_file and self.auto_commission:
@@ -1445,18 +1448,23 @@ class DeviceRuntime:
                 await self.messaging.close()
                 self._logger.debug("Messaging connection closed")
 
+            if self._stopped is not None:
+                self._stopped.set()
+
     async def stop(self) -> None:
         """Stop the device gracefully.
 
-        Cancels the run() loop and allows cleanup to proceed.
+        Cancels the run() loop and waits for cleanup to complete.
         """
         if self._run_future is not None and not self._run_future.done():
             self._run_future.cancel()
-            # Wait for cleanup to complete
-            try:
-                await asyncio.sleep(0.1)
-            except asyncio.CancelledError:
-                pass
+            if self._stopped is not None:
+                try:
+                    await asyncio.wait_for(self._stopped.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self._logger.warning("Device cleanup did not complete within 10s")
+                except asyncio.CancelledError:
+                    pass
 
     async def invoke(
         self,

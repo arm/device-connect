@@ -27,6 +27,7 @@ from device_connect_edge.messaging import MessagingClient, create_client
 from device_connect_edge.messaging.config import MessagingConfig
 
 from device_connect_server.registry.service import registry
+from device_connect_server.registry.service.registry import summarize_fleet
 from device_connect_server.security.acl import ACLManager
 
 
@@ -319,41 +320,6 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
     return rpc_register_device
 
 
-def _summarize_fleet(devices: list[dict]) -> dict:
-    """Aggregate a device list into a fleet summary."""
-    by_type: dict[str, dict] = {}
-    by_location: dict[str, dict] = {}
-    total_functions = 0
-
-    for d in devices:
-        dt = (d.get("identity") or {}).get("device_type") or "unknown"
-        loc = (d.get("status") or {}).get("location") or "unknown"
-        funcs = (d.get("capabilities") or {}).get("functions", [])
-        total_functions += len(funcs)
-
-        if dt not in by_type:
-            by_type[dt] = {"count": 0, "locations": set()}
-        by_type[dt]["count"] += 1
-        by_type[dt]["locations"].add(loc)
-
-        if loc not in by_location:
-            by_location[loc] = {"count": 0, "types": set()}
-        by_location[loc]["count"] += 1
-        by_location[loc]["types"].add(dt)
-
-    for info in by_type.values():
-        info["locations"] = sorted(info["locations"])
-    for info in by_location.values():
-        info["types"] = sorted(info["types"])
-
-    return {
-        "total_devices": len(devices),
-        "total_functions": total_functions,
-        "by_type": by_type,
-        "by_location": by_location,
-    }
-
-
 def _make_list_handler(
     tenant: str,
     messaging: MessagingClient,
@@ -420,7 +386,7 @@ def _make_list_handler(
                     devs = acl_manager.filter_visible_devices(
                         requester_id, devs, tenant=tenant
                     )
-                summary = _summarize_fleet(devs)
+                summary = summarize_fleet(devs)
                 await messaging.publish(
                     reply,
                     build_rpc_response(payload["id"], summary)

@@ -127,7 +127,6 @@ def _flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
         "location": raw.get("location") or status.get("location"),
         "status": status,
         "identity": identity,
-        "capabilities": caps,
         "functions": caps.get("functions", []),
         "events": caps.get("events", []),
     }

@@ -32,6 +32,45 @@ def _kv_key(kv: dict) -> str:
         return raw if isinstance(raw, str) else str(raw)
 
 
+def summarize_fleet(devices: list[dict]) -> dict:
+    """Aggregate a device list into a fleet summary.
+
+    Returns dict with ``total_devices``, ``total_functions``,
+    ``by_type``, and ``by_location``.
+    """
+    by_type: dict[str, dict] = {}
+    by_location: dict[str, dict] = {}
+    total_functions = 0
+
+    for d in devices:
+        dt = (d.get("identity") or {}).get("device_type") or "unknown"
+        loc = (d.get("status") or {}).get("location") or "unknown"
+        funcs = (d.get("capabilities") or {}).get("functions", [])
+        total_functions += len(funcs)
+
+        if dt not in by_type:
+            by_type[dt] = {"count": 0, "locations": set()}
+        by_type[dt]["count"] += 1
+        by_type[dt]["locations"].add(loc)
+
+        if loc not in by_location:
+            by_location[loc] = {"count": 0, "types": set()}
+        by_location[loc]["count"] += 1
+        by_location[loc]["types"].add(dt)
+
+    for info in by_type.values():
+        info["locations"] = sorted(info["locations"])
+    for info in by_location.values():
+        info["types"] = sorted(info["types"])
+
+    return {
+        "total_devices": len(devices),
+        "total_functions": total_functions,
+        "by_type": by_type,
+        "by_location": by_location,
+    }
+
+
 @dataclass
 class DeviceRegistry:
     """Wrapper around ``etcd3gw`` that tracks leases per device."""
@@ -126,41 +165,7 @@ class DeviceRegistry:
             Dict with ``total_devices``, ``total_functions``,
             ``by_type``, and ``by_location``.
         """
-        devices = self.list_devices(tenant)
-        by_type: dict[str, dict] = {}
-        by_location: dict[str, dict] = {}
-        total_functions = 0
-
-        for d in devices:
-            dt = (d.get("identity") or {}).get("device_type") or "unknown"
-            loc = (d.get("status") or {}).get("location") or "unknown"
-            funcs = (d.get("capabilities") or {}).get("functions", [])
-            total_functions += len(funcs)
-
-            # by_type
-            if dt not in by_type:
-                by_type[dt] = {"count": 0, "locations": set()}
-            by_type[dt]["count"] += 1
-            by_type[dt]["locations"].add(loc)
-
-            # by_location
-            if loc not in by_location:
-                by_location[loc] = {"count": 0, "types": set()}
-            by_location[loc]["count"] += 1
-            by_location[loc]["types"].add(dt)
-
-        # Convert sets to sorted lists for JSON serialization
-        for info in by_type.values():
-            info["locations"] = sorted(info["locations"])
-        for info in by_location.values():
-            info["types"] = sorted(info["types"])
-
-        return {
-            "total_devices": len(devices),
-            "total_functions": total_functions,
-            "by_type": by_type,
-            "by_location": by_location,
-        }
+        return summarize_fleet(self.list_devices(tenant))
 
     def update_status(self, tenant: str, device_id: str, status: dict) -> None:
         """Update the ``status`` section of a device entry.
