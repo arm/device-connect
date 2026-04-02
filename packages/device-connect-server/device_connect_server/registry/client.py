@@ -5,8 +5,8 @@ device registry service over the messaging layer using JSON-RPC.
 
 Example:
     from device_connect_server.registry import RegistryClient
-    from device_connect_server.messaging import create_client
-    from device_connect_server.messaging.config import MessagingConfig
+    from device_connect_edge.messaging import create_client
+    from device_connect_edge.messaging.config import MessagingConfig
 
     config = MessagingConfig()
     messaging = create_client(config.backend)

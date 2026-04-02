@@ -139,7 +139,12 @@ async def test_list_devices_filter_by_type(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        result = await asyncio.to_thread(list_devices, device_type="camera")
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            result = await asyncio.to_thread(list_devices, device_type="camera")
+            if result["total"] >= 1 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert result["total"] >= 1
         for d in result["devices"]:
             assert "camera" in d["device_type"].lower()
@@ -159,8 +164,13 @@ async def test_list_devices_auto_expand_functions(device_spawner, messaging_url)
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
-            result = await asyncio.to_thread(tools_mod.list_devices)
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
+                result = await asyncio.to_thread(tools_mod.list_devices)
+            if result["total"] >= 1 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         for d in result["devices"]:
             assert "functions" in d, "Small result set should auto-include functions"
             # Should still have compact fields too
@@ -213,12 +223,15 @@ async def test_get_device_functions_returns_schemas(device_spawner, messaging_ur
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        # Invalidate cache so freshly-registered device is visible
-        conn = get_connection()
-        if conn._provider and hasattr(conn._provider, "invalidate_cache"):
-            conn._provider.invalidate_cache()
-
-        result = await asyncio.to_thread(get_device_functions, "itest-funcs-cam")
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            conn = get_connection()
+            if conn._provider and hasattr(conn._provider, "invalidate_cache"):
+                conn._provider.invalidate_cache()
+            result = await asyncio.to_thread(get_device_functions, "itest-funcs-cam")
+            if "error" not in result or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert "error" not in result, f"Unexpected error: {result}"
         assert result["device_id"] == "itest-funcs-cam"
         assert len(result["functions"]) >= 1

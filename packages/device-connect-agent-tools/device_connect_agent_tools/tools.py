@@ -32,6 +32,7 @@ from collections import defaultdict
 from typing import Any
 
 from device_connect_agent_tools.connection import get_connection
+from device_connect_agent_tools._normalize import full_device, compact_device
 
 logger = logging.getLogger(__name__)
 
@@ -39,33 +40,19 @@ logger = logging.getLogger(__name__)
 # describe_fleet() and list_devices() auto-include full function schemas
 # so the agent can skip get_device_functions() and go straight to invoke.
 # Set to 0 to disable auto-expansion.
-SMALL_FLEET_THRESHOLD = int(os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD", "5"))
+try:
+    SMALL_FLEET_THRESHOLD = int(os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD", "5"))
+except (ValueError, TypeError):
+    logger.warning(
+        "Invalid DEVICE_CONNECT_SMALL_FLEET_THRESHOLD value %r, defaulting to 5",
+        os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD"),
+    )
+    SMALL_FLEET_THRESHOLD = 5
 
 
 # ── Shared helpers ──────────────────────────────────────────────
 
-
-def _full_device(d: dict) -> dict:
-    """Build a full device dict with function schemas and events."""
-    functions = d.get("functions", [])
-    events = d.get("events", [])
-    return {
-        "device_id": d.get("device_id"),
-        "device_type": d.get("device_type"),
-        "location": d.get("location"),
-        "functions": [
-            {
-                "name": f.get("name") if isinstance(f, dict) else f,
-                "description": f.get("description", "") if isinstance(f, dict) else "",
-                "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-            }
-            for f in functions
-        ],
-        "events": [
-            e.get("name") if isinstance(e, dict) else e
-            for e in events
-        ],
-    }
+_full_device = full_device  # backward-compat alias for internal callers
 
 
 # ── Hierarchical discovery tools ─────────────────────────────────
@@ -207,27 +194,8 @@ def list_devices(
 
         # Build device summaries — include schemas for small result sets
         def _summary(d: dict, expand: bool) -> dict:
-            funcs = d.get("functions", [])
-            result = {
-                "device_id": d.get("device_id"),
-                "device_type": d.get("device_type"),
-                "location": d.get("location"),
-                "status": (d.get("status", {}).get("availability") or "unknown"),
-                "function_count": len(funcs),
-                "function_names": [
-                    f.get("name") if isinstance(f, dict) else f
-                    for f in funcs
-                ],
-            }
-            if expand:
-                result["functions"] = [
-                    {
-                        "name": f.get("name") if isinstance(f, dict) else f,
-                        "description": f.get("description", "") if isinstance(f, dict) else "",
-                        "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-                    }
-                    for f in funcs
-                ]
+            result = compact_device(d, expand)
+            result["status"] = (d.get("status", {}).get("availability") or "unknown") if isinstance(d.get("status"), dict) else "unknown"
             return result
 
         if group_by in ("location", "device_type"):
@@ -437,27 +405,9 @@ def discover_devices(
 
         results = []
         for d in devices:
-            functions = d.get("functions", [])
-            events = d.get("events", [])
-
-            results.append({
-                "device_id": d.get("device_id"),
-                "device_type": d.get("device_type"),
-                "location": d.get("location"),
-                "status": d.get("status", {}),
-                "functions": [
-                    {
-                        "name": f.get("name") if isinstance(f, dict) else f,
-                        "description": f.get("description", "") if isinstance(f, dict) else "",
-                        "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-                    }
-                    for f in functions
-                ],
-                "events": [
-                    e.get("name") if isinstance(e, dict) else e
-                    for e in events
-                ],
-            })
+            entry = full_device(d)
+            entry["status"] = d.get("status", {})
+            results.append(entry)
         return results
 
     except Exception as e:

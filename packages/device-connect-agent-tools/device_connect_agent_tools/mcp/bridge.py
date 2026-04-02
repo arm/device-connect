@@ -32,6 +32,8 @@ from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
+from device_connect_agent_tools.connection import _flatten_device
+from device_connect_agent_tools._normalize import full_device, compact_device
 
 logger = logging.getLogger(__name__)
 
@@ -42,31 +44,6 @@ try:
 except ImportError:
     FASTMCP_AVAILABLE = False
     FastMCP = None  # type: ignore
-
-
-def _bridge_full_device(d: dict) -> dict:
-    """Build full device dict from raw registry data (nested identity/status/capabilities)."""
-    identity = d.get("identity") or {}
-    status = d.get("status") or {}
-    caps = d.get("capabilities") or {}
-    functions = caps.get("functions", [])
-    events = caps.get("events", [])
-    return {
-        "device_id": d.get("device_id"),
-        "device_type": identity.get("device_type") or d.get("device_type"),
-        "location": status.get("location") or d.get("location"),
-        "functions": [
-            {
-                "name": f.get("name") if isinstance(f, dict) else f,
-                "description": f.get("description", "") if isinstance(f, dict) else "",
-                "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-            }
-            for f in functions
-        ],
-        "events": [
-            e.get("name") if isinstance(e, dict) else e for e in events
-        ],
-    }
 
 
 class MCPBridgeServer:
@@ -137,13 +114,15 @@ class MCPBridgeServer:
             return True
         if mode == "infra":
             return False
-        # "auto": use D2D if backend is zenoh and no explicit URLs were configured
-        is_zenoh = any(
-            not url.startswith("nats://") and not url.startswith("tls://")
+        # "auto": use D2D when no URL looks like NATS or MQTT
+        is_zenoh = all(
+            not url.startswith("nats://")
+            and not url.startswith("tls://")
+            and not url.startswith("mqtt://")
             for url in self.config.messaging_urls
         )
-        default_url = self.config.messaging_urls == ["tcp/localhost:7447"]
-        return is_zenoh and default_url
+        logger.info("Auto-detected discovery mode: %s", "d2d" if is_zenoh else "infra")
+        return is_zenoh
 
     async def _init_discovery(self) -> None:
         """Initialize discovery provider — D2D (PresenceCollector) or infra (RegistryClient)."""
@@ -165,9 +144,20 @@ class MCPBridgeServer:
                 cache_ttl=self.config.refresh_interval,
             )
 
+    async def _list_devices(self, **kwargs) -> list[dict]:
+        """List devices from registry and flatten to canonical shape."""
+        raw = await self._registry.list_devices(**kwargs)
+        return [_flatten_device(d) for d in raw]
+
+    async def _get_device(self, device_id: str) -> dict | None:
+        """Get one device from registry and flatten to canonical shape."""
+        raw = await self._registry.get_device(device_id)
+        return _flatten_device(raw) if raw else None
+
     async def _connect_messaging(self) -> None:
-        logger.info(f"Connecting to messaging: {self.config.messaging_urls}")
-        self._messaging_client = create_client("nats")
+        backend = self.config.get_backend()
+        logger.info("Connecting to messaging: %s (backend=%s)", self.config.messaging_urls, backend)
+        self._messaging_client = create_client(backend)
         await self._messaging_client.connect(
             servers=self.config.messaging_urls,
             credentials=self.config.messaging_auth,
@@ -188,7 +178,7 @@ class MCPBridgeServer:
         )
         async def describe_fleet() -> str:
             """Fleet summary with type/location groupings."""
-            devices = await self._registry.list_devices()
+            devices = await self._list_devices()
             from collections import defaultdict
 
             by_type: dict = defaultdict(lambda: {"count": 0, "locations": set()})
@@ -196,12 +186,9 @@ class MCPBridgeServer:
             total_functions = 0
 
             for d in devices:
-                identity = d.get("identity") or {}
-                status = d.get("status") or {}
-                caps = d.get("capabilities") or {}
-                dt = identity.get("device_type") or d.get("device_type") or "unknown"
-                loc = status.get("location") or d.get("location") or "unknown"
-                funcs = caps.get("functions", [])
+                dt = d.get("device_type") or "unknown"
+                loc = d.get("location") or "unknown"
+                funcs = d.get("functions", [])
                 total_functions += len(funcs)
 
                 by_type[dt]["count"] += 1
@@ -224,7 +211,7 @@ class MCPBridgeServer:
 
             # Auto-expand: include full device details for small fleets
             if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
-                result["devices"] = [_bridge_full_device(d) for d in devices]
+                result["devices"] = [full_device(d) for d in devices]
                 result["hint"] = (
                     "Full device details included — skip list_devices / "
                     "get_device_functions and go straight to invoke_device."
@@ -248,35 +235,13 @@ class MCPBridgeServer:
             limit: int = 20,
         ) -> str:
             """Paginated, filterable device list."""
-            devices = await self._registry.list_devices(
+            devices = await self._list_devices(
                 device_type=device_type or None,
                 location=location or None,
             )
 
             def _summary(d: dict, expand: bool) -> dict:
-                identity = d.get("identity") or {}
-                status = d.get("status") or {}
-                caps = d.get("capabilities") or {}
-                funcs = caps.get("functions", [])
-                result = {
-                    "device_id": d.get("device_id"),
-                    "device_type": identity.get("device_type") or d.get("device_type"),
-                    "location": status.get("location") or d.get("location"),
-                    "function_count": len(funcs),
-                    "function_names": [
-                        f.get("name") if isinstance(f, dict) else f for f in funcs
-                    ],
-                }
-                if expand:
-                    result["functions"] = [
-                        {
-                            "name": f.get("name") if isinstance(f, dict) else f,
-                            "description": f.get("description", "") if isinstance(f, dict) else "",
-                            "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-                        }
-                        for f in funcs
-                    ]
-                return result
+                return compact_device(d, expand)
 
             total = len(devices)
 
@@ -312,33 +277,10 @@ class MCPBridgeServer:
         )
         async def get_device_functions(device_id: str) -> str:
             """Full function schemas for one device."""
-            device = await self._registry.get_device(device_id)
+            device = await self._get_device(device_id)
             if not device:
                 return json.dumps({"error": f"Device {device_id} not found"})
-
-            identity = device.get("identity") or {}
-            status = device.get("status") or {}
-            caps = device.get("capabilities") or {}
-            functions = caps.get("functions", [])
-            events = caps.get("events", [])
-
-            result = {
-                "device_id": device.get("device_id"),
-                "device_type": identity.get("device_type"),
-                "location": status.get("location"),
-                "functions": [
-                    {
-                        "name": f.get("name") if isinstance(f, dict) else f,
-                        "description": f.get("description", "") if isinstance(f, dict) else "",
-                        "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-                    }
-                    for f in functions
-                ],
-                "events": [
-                    e.get("name") if isinstance(e, dict) else e for e in events
-                ],
-            }
-            return json.dumps(result, indent=2)
+            return json.dumps(full_device(device), indent=2)
 
         @self._mcp.tool(
             name="invoke_device",
