@@ -457,16 +457,16 @@ const classes = [
     flows: ['3d','3i','4d','4i','5d','5i'] },
 
   { id: 'MCPBridgeServer', name: 'MCPBridgeServer', pkg: 'agent', type: 'class', x: 3450, y: 180,
-    methods: ['start()', '_register_meta_tools()', '_connect_messaging()', 'stop()'],
-    description: 'MCP protocol server for Claude Desktop. Exposes 4 hierarchical discovery meta-tools: describe_fleet, list_devices, get_device_functions, invoke_device.',
+    methods: ['start()', '_init_discovery()', '_register_meta_tools()', '_connect_messaging()', 'stop()'],
+    description: 'MCP protocol server for Claude Desktop. Supports D2D (PresenceCollector) and Infra (RegistryClient) discovery. Exposes 4 hierarchical meta-tools.',
     file: 'device_connect_agent_tools/mcp/bridge.py',
-    flows: ['4i','5i'] },
+    flows: ['4d','4i','5d','5i'] },
 
   { id: 'ToolRouter', name: 'ToolRouter', pkg: 'agent', type: 'class', x: 3450, y: 470,
     methods: ['invoke(tool_name, arguments, timeout=None)'],
     description: 'Routes MCP tool calls to Device Connect devices. Parses device_id::function_name format, builds JSON-RPC 2.0 request, sends via MessagingClient.',
     file: 'device_connect_agent_tools/mcp/router.py',
-    flows: ['5i'] },
+    flows: ['5d','5i'] },
 
   // ── SDK: Messaging Adapters ──
   { id: 'NATSAdapter', name: 'NATSAdapter', pkg: 'sdk', type: 'class', x: 680, y: 880,
@@ -655,15 +655,19 @@ const connections = [
 
   { from: 'MCPBridgeServer', to: 'ToolRouter', type: 'composition', label: 'has router',
     fromAnchor: 'bottom', toAnchor: 'top',
-    flows: ['5i'] },
+    flows: ['5d','5i'] },
 
-  { from: 'MCPBridgeServer', to: 'RegistryClient', type: 'uses', label: 'registry queries',
+  { from: 'MCPBridgeServer', to: 'RegistryClient', type: 'uses', label: 'discovery (infra)',
     fromAnchor: 'left', toAnchor: 'right',
     flows: ['4i'] },
 
+  { from: 'MCPBridgeServer', to: 'D2DRegistry', type: 'uses', label: 'discovery (D2D)',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['4d'] },
+
   { from: 'ToolRouter', to: 'MessagingClient', type: 'uses', label: 'JSON-RPC invoke',
     fromAnchor: 'left', toAnchor: 'right',
-    flows: ['5i'] },
+    flows: ['5d','5i'] },
 
   // ── Messaging adapter inheritance ──
   { from: 'NATSAdapter', to: 'MessagingClient', type: 'inheritance', label: 'extends',
@@ -930,10 +934,25 @@ viewport.addEventListener('touchend', () => { isPanning = false; lastTouchDist =
 document.getElementById('zoom-in').addEventListener('click', () => zoomTo(scale * 1.2));
 document.getElementById('zoom-out').addEventListener('click', () => zoomTo(scale / 1.2));
 document.getElementById('zoom-fit').addEventListener('click', () => {
+  // Calculate actual content bounds from rendered boxes
+  const boxes = Object.values(boxElements);
+  if (!boxes.length) return;
+  let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+  boxes.forEach(el => {
+    minX = Math.min(minX, el.offsetLeft);
+    minY = Math.min(minY, el.offsetTop);
+    maxX = Math.max(maxX, el.offsetLeft + el.offsetWidth);
+    maxY = Math.max(maxY, el.offsetTop + el.offsetHeight);
+  });
+  const pad = 40;
+  const contentW = maxX - minX + pad * 2;
+  const contentH = maxY - minY + pad * 2;
   const vr = viewport.getBoundingClientRect();
-  scale = Math.min(vr.width / 4200, vr.height / 3000) * 0.9;
-  panX = (vr.width - 4200 * scale) / 2;
-  panY = (vr.height - 3000 * scale) / 2;
+  // Account for flow legend panel on the right (~360px)
+  const availW = vr.width - 360;
+  scale = Math.min(availW / contentW, vr.height / contentH) * 0.92;
+  panX = (availW - contentW * scale) / 2 - minX * scale + pad * scale;
+  panY = (vr.height - contentH * scale) / 2 - minY * scale + pad * scale;
   applyTransform();
 });
 
@@ -995,7 +1014,7 @@ function toggleFlow(flowId) {
   const desc = mode === 'd2d' ? sc.d2d_desc : sc.infra_desc;
   let html = `<strong>${mode === 'd2d' ? 'D2D' : 'Infra'}:</strong> ${desc}`;
   if (sc.identical) {
-    html += `<br><span class="same-path-note">Same class-level path in both modes \u2014 only the messaging backend differs</span>`;
+    html += `<br><span class="same-path-note">* Same class-level path in both modes \u2014 only the messaging backend differs</span>`;
   }
   descEl.innerHTML = html;
   descEl.classList.add('visible');
@@ -1107,6 +1126,13 @@ window.addEventListener('keydown', e => {
 });
 
 renderScenarioRows();
+
+// Auto-fit on load
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    document.getElementById('zoom-fit').click();
+  });
+});
 
 
 // ══════════════════════════════════════════════════════════════
