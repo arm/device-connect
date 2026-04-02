@@ -528,10 +528,10 @@ class DeviceRuntime:
         self._registration_id: Optional[str] = None
         self._registration_expires_at: float = 0.0
         self._heartbeat_interval: float = heartbeat_interval or max(1.0, self.ttl / 3)
-        self._registration_lock: Optional[asyncio.Lock] = None  # Initialized in run()
+        self._registration_lock: asyncio.Lock = asyncio.Lock()
 
-        # Messaging client (initialized in run())
-        self.messaging: Optional[MessagingClient] = None
+        # Messaging client (initialized in run(); first assignment at line 350)
+
 
         # Run state (for stop())
         self._run_future: Optional[asyncio.Future] = None
@@ -949,9 +949,6 @@ class DeviceRuntime:
             return
 
         # Use lock to prevent duplicate concurrent registrations
-        if self._registration_lock is None:
-            self._registration_lock = asyncio.Lock()
-
         if self._registration_lock.locked():
             self._logger.debug("Registration already in progress, skipping")
             return

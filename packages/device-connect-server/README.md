@@ -16,7 +16,7 @@ Server-side runtime for the Device Connect framework. Extends [device-connect-ed
 
 ```
   device-connect-edge          device-connect-server           device-connect-agent-tools
-  (Device Connect SDK)    (server runtime — this)   (agent SDK)
+  (edge runtime)          (server runtime — this)   (agent SDK)
         │                         │                         │
         └──────────────── Mesh ─────────────────────────────┘
 ```

@@ -238,8 +238,9 @@ class RegistryClient:
                 d for d in result
                 if caps_set.issubset(
                     set(
-                        c.lower() for c in
-                        (d.get("identity") or {}).get("capabilities", [])
+                        (f["name"] if isinstance(f, dict) else f).lower()
+                        for f in (d.get("capabilities") or {}).get("functions", [])
+                        if (f["name"] if isinstance(f, dict) else f)
                     )
                 )
             ]

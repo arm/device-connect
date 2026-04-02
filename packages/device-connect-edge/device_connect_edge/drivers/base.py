@@ -1123,7 +1123,7 @@ class DeviceDriver(ABC):
                     source_type = ""
                     collector = getattr(self._device, '_d2d_collector', None) if self._device else None
                     if collector is not None:
-                        peer = collector._peers.get(source_device_id)
+                        peer = await collector.get_device(source_device_id)
                         if peer:
                             source_type = (peer.get("identity") or {}).get("device_type", "")
                     if source_type:

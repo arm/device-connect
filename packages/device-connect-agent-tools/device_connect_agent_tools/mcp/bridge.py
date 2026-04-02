@@ -246,11 +246,13 @@ class MCPBridgeServer:
                 s = status.lower()
                 devices = [
                     d for d in devices
-                    if s in (d.get("status", {}).get("availability") or "").lower()
+                    if s in (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "").lower()
                 ]
 
             def _summary(d: dict, expand: bool) -> dict:
-                return compact_device(d, expand)
+                result = compact_device(d, expand)
+                result["status"] = (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "unknown") if isinstance(d.get("status"), dict) else "unknown"
+                return result
 
             total = len(devices)
 
@@ -305,10 +307,14 @@ class MCPBridgeServer:
             arguments: str = "{}",
         ) -> str:
             """Invoke a device function."""
+            device = await self._get_device(device_id)
+            if not device:
+                return json.dumps({"success": False, "error": f"Device {device_id} not found"})
+
             try:
                 args = json.loads(arguments) if arguments else {}
-            except json.JSONDecodeError:
-                args = {}
+            except json.JSONDecodeError as e:
+                return json.dumps({"success": False, "error": f"Invalid JSON arguments: {e}"})
 
             tool_name = f"{device_id}::{function}"
             try:

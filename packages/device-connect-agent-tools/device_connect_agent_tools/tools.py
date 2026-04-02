@@ -52,8 +52,6 @@ except (ValueError, TypeError):
 
 # ── Shared helpers ──────────────────────────────────────────────
 
-_full_device = full_device  # backward-compat alias for internal callers
-
 
 # ── Hierarchical discovery tools ─────────────────────────────────
 
@@ -117,7 +115,7 @@ def describe_fleet() -> dict[str, Any]:
 
         # Auto-expand: include full device details for small fleets
         if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
-            result["devices"] = [_full_device(d) for d in devices]
+            result["devices"] = [full_device(d) for d in devices]
             result["hint"] = (
                 "Full device details included — skip list_devices / "
                 "get_device_functions and go straight to invoke_device."
@@ -175,7 +173,7 @@ def list_devices(
             s = status.lower()
             devices = [
                 d for d in devices
-                if s in (d.get("status", {}).get("availability") or "").lower()
+                if s in (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "").lower()
             ]
 
         total = len(devices)
@@ -183,7 +181,7 @@ def list_devices(
         # Build device summaries — include schemas for small result sets
         def _summary(d: dict, expand: bool) -> dict:
             result = compact_device(d, expand)
-            result["status"] = (d.get("status", {}).get("availability") or "unknown") if isinstance(d.get("status"), dict) else "unknown"
+            result["status"] = (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "unknown") if isinstance(d.get("status"), dict) else "unknown"
             return result
 
         if group_by in ("location", "device_type"):
@@ -231,7 +229,7 @@ def get_device_functions(device_id: str) -> dict[str, Any]:
         device = conn.get_device(device_id)
         if not device:
             return {"error": f"Device {device_id} not found"}
-        return _full_device(device)
+        return full_device(device)
     except Exception as e:
         return {"error": str(e)}
 
@@ -377,19 +375,7 @@ def discover_devices(
         devices = conn.list_devices(device_type=device_type)
 
         if device_type:
-            t = device_type.lower().replace("_", "").replace("-", "")
-            filtered = [
-                d for d in devices
-                if d.get("device_type")
-                and (
-                    t in d["device_type"].lower().replace("_", "").replace("-", "")
-                    or d["device_type"].lower().replace("_", "").replace("-", "") in t
-                )
-            ]
-            if filtered:
-                devices = filtered
-            else:
-                devices = []
+            devices = fuzzy_filter_by_type(devices, device_type)
 
         results = []
         for d in devices:

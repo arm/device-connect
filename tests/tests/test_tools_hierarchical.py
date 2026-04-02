@@ -308,3 +308,131 @@ async def test_full_hierarchical_flow(device_spawner, messaging_url):
         assert result.get("success") is True
     finally:
         await asyncio.to_thread(disconnect)
+
+
+# ── regression tests ───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_list_devices_includes_function_names(device_spawner, messaging_url):
+    """list_devices() should return correct function_names from device capabilities."""
+    await device_spawner.spawn_camera("itest-cap-cam", location="lobby")
+    await device_spawner.spawn_sensor("itest-cap-sensor", location="lab", initial_temp=20.0)
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import connect, disconnect
+    from device_connect_agent_tools import tools as tools_mod
+    from device_connect_agent_tools.tools import list_devices
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    try:
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        cam_result = None
+        while True:
+            with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
+                cam_result = await asyncio.to_thread(list_devices, device_type="camera")
+            if cam_result["total"] >= 1 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
+        assert cam_result["total"] >= 1
+        cam = cam_result["devices"][0]
+        assert cam["function_count"] >= 1
+        assert "capture_image" in cam["function_names"]
+
+        with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
+            sensor_result = await asyncio.to_thread(list_devices, device_type="sensor")
+        assert sensor_result["total"] >= 1
+        sensor = sensor_result["devices"][0]
+        assert sensor["function_count"] >= 3
+        assert "get_reading" in sensor["function_names"]
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_invoke_nonexistent_device_returns_error(messaging_url):
+    """invoke_device() for a missing device should return an error, not crash."""
+    from device_connect_agent_tools import connect, disconnect
+    from device_connect_agent_tools.tools import invoke_device
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    try:
+        result = await asyncio.to_thread(
+            invoke_device,
+            device_id="does-not-exist-xyz",
+            function="foo",
+        )
+        assert result.get("success") is not True
+        assert "error" in result or "not found" in str(result).lower()
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_list_devices_includes_status(device_spawner, messaging_url):
+    """list_devices() should include a status field for each device."""
+    await device_spawner.spawn_camera("itest-status-cam", location="lobby")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import connect, disconnect
+    from device_connect_agent_tools import tools as tools_mod
+    from device_connect_agent_tools.tools import list_devices
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    try:
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        result = None
+        while True:
+            with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
+                result = await asyncio.to_thread(list_devices)
+            if result["total"] >= 1 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
+        assert result["total"] >= 1
+        for dev in result["devices"]:
+            assert "status" in dev, f"Device {dev.get('device_id')} missing status field"
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_describe_fleet_function_count_matches_actual(device_spawner, messaging_url):
+    """describe_fleet() total_functions should match sum of individual device function counts."""
+    await device_spawner.spawn_camera("itest-fcount-cam", location="lobby")
+    await device_spawner.spawn_sensor("itest-fcount-sensor", location="lab", initial_temp=20.0)
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import connect, disconnect, get_connection
+    from device_connect_agent_tools import tools as tools_mod
+    from device_connect_agent_tools.tools import describe_fleet, get_device_functions
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    try:
+        conn = get_connection()
+        if conn._provider and hasattr(conn._provider, "invalidate_cache"):
+            conn._provider.invalidate_cache()
+
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        fleet = None
+        while True:
+            with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
+                fleet = await asyncio.to_thread(describe_fleet)
+            if fleet["total_devices"] >= 2 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
+        assert fleet["total_devices"] >= 2
+        assert "devices" in fleet, "Auto-expansion should include devices list"
+
+        # Cross-check: sum of individual function counts == total_functions
+        individual_total = 0
+        for dev in fleet["devices"]:
+            funcs = await asyncio.to_thread(get_device_functions, dev["device_id"])
+            if "error" not in funcs:
+                individual_total += len(funcs["functions"])
+        assert individual_total == fleet["total_functions"]
+    finally:
+        await asyncio.to_thread(disconnect)
