@@ -269,14 +269,14 @@ class DeviceConnection:
             try:
                 await self._d2d_collector.stop()
             except Exception:
-                pass
+                logger.debug("cleanup error stopping D2D collector", exc_info=True)
             self._d2d_collector = None
         self._provider = None
         if self._client:
             try:
                 await asyncio.wait_for(self._client.close(), timeout=2.0)
             except Exception:
-                pass
+                logger.debug("cleanup error closing messaging client", exc_info=True)
         self._client = None
 
     # ── Device operations (sync wrappers) ───────────────────────────
@@ -412,7 +412,7 @@ class DeviceConnection:
             try:
                 self._run(sub.unsubscribe())
             except Exception:
-                pass
+                logger.debug("cleanup error during buffered unsubscribe", exc_info=True)
         self._inbox.pop(name, None)
 
     def get_inbox(

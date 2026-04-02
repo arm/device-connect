@@ -48,6 +48,8 @@ _QUERY_REPLY_PREFIX = "_zenoh_query/"
 # after undeclaring queryables during graceful shutdown.
 _D2D_QUERYABLE_PROPAGATION_DELAY = 0.5
 
+logger = logging.getLogger(__name__)
+
 
 class ZenohSubscriptionWrapper(Subscription):
     """Wraps a Zenoh subscriber + optional queryable for unsubscribe."""
@@ -80,12 +82,12 @@ class ZenohSubscriptionWrapper(Subscription):
             try:
                 await loop.run_in_executor(None, self._subscriber.undeclare)
             except Exception:
-                pass
+                logger.debug("cleanup error undeclaring subscriber", exc_info=True)
         if self._queryable is not None:
             try:
                 await loop.run_in_executor(None, self._queryable.undeclare)
             except Exception:
-                pass
+                logger.debug("cleanup error undeclaring queryable", exc_info=True)
 
         if self._adapter and self._key_expr:
             self._adapter._subscriptions.pop(self._key_expr, None)
@@ -710,7 +712,7 @@ class ZenohAdapter(MessagingClient):
                 try:
                     await loop.run_in_executor(self._executor, queryable.undeclare)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error undeclaring queryable during close", exc_info=True)
                 info["queryable"] = None
 
         # Brief delay for queryable undeclaration to propagate in D2D mesh
@@ -725,7 +727,7 @@ class ZenohAdapter(MessagingClient):
                 try:
                     await loop.run_in_executor(self._executor, subscriber.undeclare)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error undeclaring subscriber during close", exc_info=True)
 
             drain_task = info.get("drain_task")
             if drain_task and not drain_task.done():

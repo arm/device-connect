@@ -173,7 +173,7 @@ class DeviceToolsServer:
                     if "device_id" in result and result.get("device_id") != "unknown":
                         devices.append(result)
                 except Exception:
-                    pass
+                    logger.warning("Failed to parse discovery response", exc_info=True)
 
             # Subscribe to inbox to collect responses
             sub = await self._messaging.subscribe(inbox, callback=on_response)

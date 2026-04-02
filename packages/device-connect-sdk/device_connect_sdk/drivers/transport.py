@@ -60,5 +60,5 @@ class DriverTransport:
             try:
                 await sub.unsubscribe()
             except Exception:
-                pass
+                logger.debug("cleanup error during transport teardown unsubscribe", exc_info=True)
         self._subscriptions.clear()

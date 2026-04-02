@@ -129,7 +129,7 @@ class PresenceAnnouncer:
             try:
                 await self._probe_sub.unsubscribe()
             except Exception:
-                pass
+                logger.debug("cleanup error unsubscribing probe", exc_info=True)
             self._probe_sub = None
         if self._task is not None:
             self._task.cancel()
@@ -197,7 +197,7 @@ class PresenceCollector:
             try:
                 await self._sub.unsubscribe()
             except Exception:
-                pass
+                logger.debug("cleanup error unsubscribing presence", exc_info=True)
             self._sub = None
         if self._prune_task is not None:
             self._prune_task.cancel()
@@ -238,7 +238,7 @@ class PresenceCollector:
                 try:
                     self._on_new_peer(device_id)
                 except Exception:
-                    pass
+                    logger.warning("on_new_peer callback failed for device %s", device_id, exc_info=True)
 
     async def _prune_loop(self) -> None:
         try:
