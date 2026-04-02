@@ -1552,13 +1552,15 @@ class DeviceRuntime:
         if self._d2d_mode:
             from device_connect_edge.discovery import D2DRegistry, PresenceCollector
             # Reuse the collector from run() if available, otherwise create one.
-            # Don't start it here — run() will start it after wiring _on_new_peer
-            # so that burst announcements work from the moment discovery begins.
+            # Start it early so @on handlers can resolve device types from the
+            # peer cache.  run() will skip the redundant start via _started guard.
             collector = getattr(self, '_d2d_collector', None)
             if collector is None:
                 collector = PresenceCollector(self.messaging, self.tenant, device_id=self.device_id)
                 self._d2d_collector = collector
             self._driver.registry = D2DRegistry(collector)
+            if not collector._started:
+                await collector.start()
             self._logger.debug("D2DRegistry configured for DeviceDriver (no infrastructure)")
         else:
             from device_connect_edge.registry_client import RegistryClient

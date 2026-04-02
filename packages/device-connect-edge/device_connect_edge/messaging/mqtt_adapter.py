@@ -218,7 +218,7 @@ class MQTTAdapter(MessagingClient):
                 for pattern, callback in self._subscriptions.items():
                     if self._topic_matches(topic, pattern):
                         try:
-                            await callback(payload, None)
+                            await callback(payload, topic, None)
                         except Exception as e:
                             self._logger.error(f"Error in subscriber callback: {e}")
 
@@ -330,10 +330,52 @@ class MQTTAdapter(MessagingClient):
             self._logger.debug(f"Subscribing to {topic}")
 
         try:
+            # Wrap 2-arg user callback to match 3-arg internal format (data, topic, reply)
+            async def _topic_wrapper(data: bytes, _topic: str, reply: Optional[str]):
+                await callback(data, reply)
+
+            await self._client.subscribe(subscribe_topic, qos=self._qos)
+            self._subscriptions[subscribe_topic] = _topic_wrapper
+            return MQTTSubscriptionWrapper(self._client, subscribe_topic)
+
+        except Exception as e:
+            self._logger.error(f"Failed to subscribe to {topic}: {e}")
+            raise SubscribeError(f"Failed to subscribe: {e}") from e
+
+    async def subscribe_with_subject(
+        self,
+        subject: str,
+        callback: Callable[[bytes, str, Optional[str]], Awaitable[None]],
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
+    ) -> Subscription:
+        """Subscribe to MQTT topic, passing the matched topic to the callback.
+
+        Args:
+            subject: Subject pattern (NATS-style, will be converted to MQTT).
+            callback: Async callback ``(data, matched_topic, reply)``.
+            queue: Queue group name for load balancing (``$share/group/topic``).
+            subscribe_only: Ignored for MQTT (always subscribe-only).
+
+        Returns:
+            Subscription handle.
+        """
+        if not self.is_connected:
+            raise NotConnectedError("Not connected to MQTT broker")
+
+        topic = self.convert_subject_syntax(subject)
+
+        subscribe_topic = topic
+        if queue:
+            subscribe_topic = f"$share/{queue}/{topic}"
+            self._logger.debug(f"Subscribing to {topic} with subject callback (shared group: {queue})")
+        else:
+            self._logger.debug(f"Subscribing to {topic} with subject callback")
+
+        try:
             await self._client.subscribe(subscribe_topic, qos=self._qos)
             self._subscriptions[subscribe_topic] = callback
             return MQTTSubscriptionWrapper(self._client, subscribe_topic)
-
         except Exception as e:
             self._logger.error(f"Failed to subscribe to {topic}: {e}")
             raise SubscribeError(f"Failed to subscribe: {e}") from e

@@ -313,7 +313,8 @@ class TestMQTTClientSubscribe:
         await adapter.subscribe("events.test", cb)
 
         assert "events/test" in adapter._subscriptions
-        assert adapter._subscriptions["events/test"] is cb
+        # Stored callback is a wrapper that forwards to the original
+        assert callable(adapter._subscriptions["events/test"])
 
     @pytest.mark.asyncio
     @patch("device_connect_edge.messaging.mqtt_adapter.MQTTClient")
@@ -366,6 +367,87 @@ class TestMQTTClientSubscribe:
         await sub.unsubscribe()
 
         mock_client.unsubscribe.assert_awaited_once_with("events/test")
+
+
+# ---------------------------------------------------------------------------
+# TestMQTTSubscribeWithSubject
+# ---------------------------------------------------------------------------
+
+
+class TestMQTTSubscribeWithSubject:
+    """Verify subscribe_with_subject() stores callback and passes topic."""
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.mqtt_adapter.MQTTClient")
+    async def test_converts_subject_syntax(self, MockClient):
+        mock_client = _make_mock_mqtt_client()
+        MockClient.return_value = mock_client
+        from device_connect_edge.messaging.mqtt_adapter import MQTTAdapter
+
+        adapter = MQTTAdapter()
+        await adapter.connect(servers=["mqtt://broker:1883"])
+        await adapter.subscribe_with_subject(
+            "device-connect.tenant.*.event.*", AsyncMock(),
+        )
+
+        mock_client.subscribe.assert_awaited_once_with(
+            "device-connect/tenant/+/event/+", qos=1,
+        )
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.mqtt_adapter.MQTTClient")
+    async def test_stores_callback_directly(self, MockClient):
+        mock_client = _make_mock_mqtt_client()
+        MockClient.return_value = mock_client
+        from device_connect_edge.messaging.mqtt_adapter import MQTTAdapter
+
+        cb = AsyncMock()
+        adapter = MQTTAdapter()
+        await adapter.connect(servers=["mqtt://broker:1883"])
+        await adapter.subscribe_with_subject("events.test", cb)
+
+        assert "events/test" in adapter._subscriptions
+        # subscribe_with_subject stores the 3-arg callback directly (no wrapper)
+        assert adapter._subscriptions["events/test"] is cb
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.mqtt_adapter.MQTTClient")
+    async def test_returns_subscription_wrapper(self, MockClient):
+        mock_client = _make_mock_mqtt_client()
+        MockClient.return_value = mock_client
+        from device_connect_edge.messaging.mqtt_adapter import MQTTAdapter, MQTTSubscriptionWrapper
+
+        adapter = MQTTAdapter()
+        await adapter.connect(servers=["mqtt://broker:1883"])
+        sub = await adapter.subscribe_with_subject("events.test", AsyncMock())
+
+        assert isinstance(sub, MQTTSubscriptionWrapper)
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.mqtt_adapter.MQTTClient")
+    async def test_raises_when_disconnected(self, MockClient):
+        MockClient.return_value = _make_mock_mqtt_client()
+        from device_connect_edge.messaging.mqtt_adapter import MQTTAdapter
+        from device_connect_edge.messaging.exceptions import NotConnectedError
+
+        adapter = MQTTAdapter()
+        with pytest.raises(NotConnectedError):
+            await adapter.subscribe_with_subject("subject", AsyncMock())
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.mqtt_adapter.MQTTClient")
+    async def test_with_queue_uses_shared_prefix(self, MockClient):
+        mock_client = _make_mock_mqtt_client()
+        MockClient.return_value = mock_client
+        from device_connect_edge.messaging.mqtt_adapter import MQTTAdapter
+
+        adapter = MQTTAdapter()
+        await adapter.connect(servers=["mqtt://broker:1883"])
+        await adapter.subscribe_with_subject("events.>", AsyncMock(), queue="workers")
+
+        mock_client.subscribe.assert_awaited_once_with(
+            "$share/workers/events/#", qos=1,
+        )
 
 
 # ---------------------------------------------------------------------------

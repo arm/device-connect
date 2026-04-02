@@ -153,6 +153,9 @@ class DeviceDriver(ABC):
         self._subscriptions: List[Any] = []
         self._subscription_tasks: List[asyncio.Task] = []
 
+        # Device identity (set by DeviceRuntime via _setup_agentic_driver)
+        self._device_id: Optional[str] = None
+
         # Raw transport for hardware-native topic access
         self._transport: Optional["DriverTransport"] = None  # noqa: F821
 
@@ -1066,7 +1069,15 @@ class DeviceDriver(ABC):
         logger.info("Setting up %d event subscriptions", len(subscriptions))
 
         for sub in subscriptions:
-            await self._setup_subscription(sub)
+            try:
+                await self._setup_subscription(sub)
+            except Exception as e:
+                handler = sub.get("handler")
+                name = getattr(handler, "__name__", str(handler)) if callable(handler) else str(handler)
+                logger.error(
+                    "Failed to set up subscription %s (device_type=%s, event=%s): %s",
+                    name, sub.get("device_type"), sub.get("event_name"), e,
+                )
 
     async def _setup_subscription(self, sub: Dict[str, Any]) -> None:
         """Set up a single event subscription.
@@ -1113,7 +1124,14 @@ class DeviceDriver(ABC):
                 # Zenoh delivers key expressions with slashes; NATS uses dots — handle both.
                 sep = "/" if "/" in matched_subject else "."
                 parts = matched_subject.split(sep)
-                source_device_id = parts[2] if len(parts) > 2 else "unknown"
+                # Parse from the end for robustness: {prefix}.{tenant}.{device_id}.event.{name}
+                # This handles device IDs that might contain the separator.
+                if len(parts) >= 5 and parts[-2] == "event":
+                    source_device_id = sep.join(parts[2:-2])
+                elif len(parts) > 2:
+                    source_device_id = parts[2]
+                else:
+                    source_device_id = "unknown"
                 source_event_name = parsed.get("method", event_name)
                 payload = parsed.get("params", {})
 
@@ -1127,12 +1145,17 @@ class DeviceDriver(ABC):
                         if peer:
                             source_type = (peer.get("identity") or {}).get("device_type", "")
                     if source_type:
-                        if device_type.lower() not in source_type.lower():
+                        if source_type.lower() != device_type.lower():
                             return
                     else:
-                        # Fallback: case-insensitive substring match on device_id
-                        if device_type.lower() not in source_device_id.lower():
-                            return
+                        # Cannot resolve device_type from D2D peer cache.
+                        # Don't filter — false negatives (dropping valid events)
+                        # are worse than false positives (passing extra events).
+                        logger.debug(
+                            "[%s] Cannot resolve device_type for %s, "
+                            "allowing event through (wanted type=%s)",
+                            self_id, source_device_id, device_type,
+                        )
 
                 await handler(source_device_id, source_event_name, payload)
             except Exception as e:

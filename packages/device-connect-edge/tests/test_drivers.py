@@ -1,12 +1,14 @@
 """Unit tests for device_connect_edge.drivers module.
 
-Tests @rpc, @emit decorators, schema generation, and DeviceDriver base class.
+Tests @rpc, @emit, @on decorators, schema generation, and DeviceDriver base class.
 """
 
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from device_connect_edge.drivers import DeviceDriver, rpc, emit, build_function_schema, build_event_schema
+from device_connect_edge.drivers.base import on
 from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
 
@@ -188,3 +190,169 @@ class TestDeviceDriverBase:
         event_names = [getattr(getattr(driver, m), "_event_name") for m in events]
         assert "do_something" in func_names
         assert "something_happened" in event_names
+
+
+# ── @on decorator ─────────────────────────────────────────────────
+
+class TestOn:
+    def test_marks_event_subscription(self):
+        @on(device_type="camera", event_name="motion_detected")
+        async def handler(self, device_id, event_name, payload):
+            pass
+
+        assert handler._is_event_subscription is True
+        assert handler._sub_device_type == "camera"
+        assert handler._sub_event_name == "motion_detected"
+        assert handler._sub_device_id is None
+
+    def test_with_device_id(self):
+        @on(device_id="cam-001", event_name="alert")
+        async def handler(self, device_id, event_name, payload):
+            pass
+
+        assert handler._sub_device_id == "cam-001"
+        assert handler._sub_device_type is None
+
+    def test_all_params(self):
+        @on(device_id="robot-1", device_type="robot", event_name="done")
+        async def handler(self, device_id, event_name, payload):
+            pass
+
+        assert handler._sub_device_id == "robot-1"
+        assert handler._sub_device_type == "robot"
+        assert handler._sub_event_name == "done"
+
+    def test_defaults_to_none(self):
+        @on()
+        async def handler(self, device_id, event_name, payload):
+            pass
+
+        assert handler._is_event_subscription is True
+        assert handler._sub_device_id is None
+        assert handler._sub_device_type is None
+        assert handler._sub_event_name is None
+
+
+# ── _collect_event_subscriptions ──────────────────────────────────
+
+class TestCollectEventSubscriptions:
+    def test_collects_on_methods(self):
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="camera", event_name="motion")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        assert len(subs) == 1
+        assert subs[0]["device_type"] == "camera"
+        assert subs[0]["event_name"] == "motion"
+
+    def test_ignores_rpc_methods(self):
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @rpc()
+            async def do_thing(self) -> dict:
+                """A function."""
+                return {}
+
+            @on(device_type="sensor")
+            async def on_reading(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        assert len(subs) == 1
+        assert subs[0]["device_type"] == "sensor"
+
+    def test_multiple_subscriptions(self):
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="camera", event_name="motion")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            @on(device_id="robot-001", event_name="done")
+            async def on_done(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        assert len(subs) == 2
+
+
+# ── setup_subscriptions error isolation ───────────────────────────
+
+class TestSetupSubscriptionsErrorIsolation:
+    @pytest.mark.asyncio
+    async def test_one_failure_does_not_block_others(self):
+        """If one subscription fails, the rest should still be set up."""
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="camera", event_name="motion")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            @on(device_type="sensor", event_name="reading")
+            async def on_reading(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+
+        # Use a simple object (not MagicMock) to avoid MagicMock's
+        # auto-attribute creation leaking into DeviceDriver introspection.
+        mock_messaging = AsyncMock()
+        call_count = 0
+
+        async def fail_then_succeed(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise Exception("first subscription fails")
+            return MagicMock()  # subscription handle
+
+        mock_messaging.subscribe_with_subject = AsyncMock(side_effect=fail_then_succeed)
+
+        class FakeRouter:
+            def __init__(self):
+                self._messaging = mock_messaging
+                self._tenant = "default"
+
+        driver._router = FakeRouter()
+
+        await driver.setup_subscriptions()
+
+        # Both were attempted
+        assert mock_messaging.subscribe_with_subject.await_count == 2
+        # Only the second (successful) subscription was tracked
+        assert len(driver._subscriptions) == 1

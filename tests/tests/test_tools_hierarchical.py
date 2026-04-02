@@ -277,13 +277,17 @@ async def test_full_hierarchical_flow(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        # Invalidate cache so freshly-registered device is visible
         conn = get_connection()
-        if conn._provider and hasattr(conn._provider, "invalidate_cache"):
-            conn._provider.invalidate_cache()
 
-        # Step 1: fleet overview
-        fleet = await asyncio.to_thread(describe_fleet)
+        # Step 1: fleet overview — poll until device is visible (D2D is eventually consistent)
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            if conn._provider and hasattr(conn._provider, "invalidate_cache"):
+                conn._provider.invalidate_cache()
+            fleet = await asyncio.to_thread(describe_fleet)
+            if fleet["total_devices"] >= 1 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert fleet["total_devices"] >= 1
 
         # Step 2: list sensors
