@@ -6,11 +6,13 @@ registered via the NATS registry.
 """
 
 import asyncio
+import time
 from unittest.mock import patch
 
 import pytest
 
 SETTLE_TIME = 0.3
+DISCOVERY_TIMEOUT = 5.0  # max seconds to wait for D2D peers to appear
 
 
 # ── describe_fleet ──────────────────────────────────────────────
@@ -29,7 +31,13 @@ async def test_describe_fleet_returns_summary(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        result = await asyncio.to_thread(describe_fleet)
+        # D2D discovery is eventually consistent — poll until both peers visible
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            result = await asyncio.to_thread(describe_fleet)
+            if result["total_devices"] >= 2 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert result["total_devices"] >= 2
         assert result["total_functions"] >= 1
         assert "by_type" in result
@@ -102,7 +110,13 @@ async def test_list_devices_compact(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        result = await asyncio.to_thread(list_devices)
+        # D2D discovery is eventually consistent — poll until both peers visible
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            result = await asyncio.to_thread(list_devices)
+            if result["total"] >= 2 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert result["total"] >= 2
         for d in result["devices"]:
             assert "device_id" in d
@@ -170,7 +184,13 @@ async def test_list_devices_pagination(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        result = await asyncio.to_thread(list_devices, offset=0, limit=2)
+        # D2D discovery is eventually consistent — poll until all peers visible
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            result = await asyncio.to_thread(list_devices, offset=0, limit=2)
+            if result["total"] >= 3 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert len(result["devices"]) <= 2
         assert result["total"] >= 3
         assert result["has_more"] is True
