@@ -175,14 +175,18 @@ class RegistryClient:
         Returns:
             Device dictionary, or ``None`` if not found.
         """
-        # Try dedicated RPC first
+        # Try dedicated RPC first.  Use a short timeout for the probe —
+        # if the server supports getDevice the response is near-instant
+        # (O(1) etcd lookup).  A long timeout here causes cascading delays
+        # when the registry is an older version that silently drops the RPC.
         subject = f"device-connect.{self._tenant}.discovery"
+        probe_timeout = min(timeout or self._timeout, 5.0)
         try:
             result = await self._request(
                 subject,
                 "discovery/getDevice",
                 {"device_id": device_id},
-                timeout,
+                probe_timeout,
             )
             if result:
                 return result.get("device")

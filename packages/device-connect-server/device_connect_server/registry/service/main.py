@@ -406,6 +406,7 @@ def _make_hb_handler(tenant: str):
     """Create a heartbeat handler bound to ``tenant``."""
 
     async def hb_handler(data_bytes: bytes, reply: Optional[str]):
+        data: Any = None
         try:
             data = json.loads(data_bytes)
             device_id = data.pop("device_id")

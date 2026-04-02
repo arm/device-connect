@@ -537,6 +537,7 @@ class DeviceRuntime:
         self._run_future: Optional[asyncio.Future] = None
         self._stopped: Optional[asyncio.Event] = None
         self._background_tasks: List[asyncio.Task] = []
+        self._spawned_tasks: set[asyncio.Task] = set()
 
     def _validate_device_id_from_creds(self, creds: dict) -> None:
         """
@@ -1138,6 +1139,12 @@ class DeviceRuntime:
             self._event_queue.task_done()
 
 
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Register a dynamically-spawned task for lifecycle tracking."""
+        self._spawned_tasks.add(task)
+        task.add_done_callback(self._spawned_tasks.discard)
+        return task
+
     async def _notify_conn_state(self, state: bool) -> None:
         """Notify registered callbacks of a connection state change."""
 
@@ -1158,7 +1165,7 @@ class DeviceRuntime:
         async def on_reconnect():
             self._logger.info(f"{self._messaging_backend.upper()} reconnected")
             if not self._d2d_mode:
-                asyncio.create_task(self._register(force=True))
+                self._track_task(asyncio.create_task(self._register(force=True)))
             await self._notify_conn_state(True)
 
         # Create messaging client based on backend
@@ -1406,9 +1413,15 @@ class DeviceRuntime:
                 if not task.done():
                     task.cancel()
 
-            # Wait for tasks to complete cancellation (with timeout)
-            if self._background_tasks:
-                await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            # Cancel dynamically-spawned tasks (reconnect registrations, callbacks)
+            for task in self._spawned_tasks:
+                if not task.done():
+                    task.cancel()
+
+            # Wait for all tracked tasks to complete cancellation
+            all_tasks = list(self._background_tasks) + list(self._spawned_tasks)
+            if all_tasks:
+                await asyncio.gather(*all_tasks, return_exceptions=True)
 
             # Announce departure before tearing down D2D presence
             if self._d2d_announcer and self.messaging and not self.messaging.is_closed:
@@ -1608,6 +1621,6 @@ class DeviceRuntime:
         # Notify registration callbacks
         for cb in list(self._registration_callbacks):
             try:
-                asyncio.create_task(cb())
+                self._track_task(asyncio.create_task(cb()))
             except Exception as e:
                 self._logger.exception("Registration callback error: %s", e)
