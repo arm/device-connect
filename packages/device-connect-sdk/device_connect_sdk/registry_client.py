@@ -30,6 +30,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from device_connect_sdk.messaging.base import MessagingClient
+from device_connect_sdk.messaging.exceptions import RequestTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -185,9 +186,10 @@ class RegistryClient:
             )
             if result:
                 return result.get("device") or result
-        except RuntimeError:
-            # Server may not support this RPC yet — fall back
-            pass
+        except (RuntimeError, RequestTimeoutError) as e:
+            # RuntimeError = server returned JSON-RPC error (method not found)
+            # RequestTimeoutError = server didn't respond (RPC not supported)
+            logger.debug("discovery/getDevice not available, falling back to list: %s", e)
 
         # Fallback: iterate list
         devices = await self.list_devices(timeout=timeout)

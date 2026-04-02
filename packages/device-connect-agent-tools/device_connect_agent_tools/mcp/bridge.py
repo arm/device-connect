@@ -31,6 +31,7 @@ from device_connect_sdk.messaging.base import MessagingClient
 from device_connect_sdk.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
+from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,31 @@ try:
 except ImportError:
     FASTMCP_AVAILABLE = False
     FastMCP = None  # type: ignore
+
+
+def _bridge_full_device(d: dict) -> dict:
+    """Build full device dict from raw registry data (nested identity/status/capabilities)."""
+    identity = d.get("identity") or {}
+    status = d.get("status") or {}
+    caps = d.get("capabilities") or {}
+    functions = caps.get("functions", [])
+    events = caps.get("events", [])
+    return {
+        "device_id": d.get("device_id"),
+        "device_type": identity.get("device_type") or d.get("device_type"),
+        "location": status.get("location") or d.get("location"),
+        "functions": [
+            {
+                "name": f.get("name") if isinstance(f, dict) else f,
+                "description": f.get("description", "") if isinstance(f, dict) else "",
+                "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
+            }
+            for f in functions
+        ],
+        "events": [
+            e.get("name") if isinstance(e, dict) else e for e in events
+        ],
+    }
 
 
 class MCPBridgeServer:
@@ -195,6 +221,15 @@ class MCPBridgeServer:
                     for k, v in sorted(by_location.items())
                 },
             }
+
+            # Auto-expand: include full device details for small fleets
+            if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
+                result["devices"] = [_bridge_full_device(d) for d in devices]
+                result["hint"] = (
+                    "Full device details included — skip list_devices / "
+                    "get_device_functions and go straight to invoke_device."
+                )
+
             return json.dumps(result, indent=2)
 
         @self._mcp.tool(
@@ -218,12 +253,12 @@ class MCPBridgeServer:
                 location=location or None,
             )
 
-            def _compact(d: dict) -> dict:
+            def _summary(d: dict, expand: bool) -> dict:
                 identity = d.get("identity") or {}
                 status = d.get("status") or {}
                 caps = d.get("capabilities") or {}
                 funcs = caps.get("functions", [])
-                return {
+                result = {
                     "device_id": d.get("device_id"),
                     "device_type": identity.get("device_type") or d.get("device_type"),
                     "location": status.get("location") or d.get("location"),
@@ -232,21 +267,33 @@ class MCPBridgeServer:
                         f.get("name") if isinstance(f, dict) else f for f in funcs
                     ],
                 }
+                if expand:
+                    result["functions"] = [
+                        {
+                            "name": f.get("name") if isinstance(f, dict) else f,
+                            "description": f.get("description", "") if isinstance(f, dict) else "",
+                            "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
+                        }
+                        for f in funcs
+                    ]
+                return result
 
             total = len(devices)
 
             if group_by in ("location", "device_type"):
                 from collections import defaultdict as dd
+                expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
                 groups: dict = dd(list)
                 for d in devices:
-                    c = _compact(d)
+                    c = _summary(d, expand)
                     key = c.get(group_by) or "unknown"
                     groups[key].append(c)
                 result = {"groups": dict(sorted(groups.items())), "total": total}
             else:
                 page = devices[offset:offset + limit]
+                expand = SMALL_FLEET_THRESHOLD > 0 and len(page) <= SMALL_FLEET_THRESHOLD
                 result = {
-                    "devices": [_compact(d) for d in page],
+                    "devices": [_summary(d, expand) for d in page],
                     "total": total,
                     "offset": offset,
                     "limit": limit,

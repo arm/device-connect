@@ -4,27 +4,33 @@ Framework-agnostic tools for Device Connect — discover and invoke devices from
 
 ## Contents
 
-- [Where This Fits](#where-this-fits)
-- [Install](#install)
-- [Examples](#examples)
-- [Architecture](#architecture)
-- [Quick Start](#quick-start)
-  - [Plain Python](#plain-python-no-framework)
-  - [Strands Agent](#strands-agent)
-  - [LangChain / LangGraph](#langchain--langgraph)
-  - [MCP Bridge](#mcp-bridge)
-- [Connection](#connection)
-  - [Auto-Discovery](#auto-discovery)
-  - [JWT Credentials](#jwt-credentials)
-  - [Explicit Configuration](#explicit-configuration)
-  - [Environment Variables](#environment-variables)
-  - [Device-to-Device Mode](#device-to-device-mode-no-infrastructure)
-- [Tools](#tools)
-- [Event Subscription](#event-subscription)
-- [DeviceConnectMCP — Build Devices with Decorators](#deviceconnectmcp--build-devices-with-decorators)
-- [Writing an Adapter](#writing-an-adapter)
-- [API Reference](#api-reference)
-- [Contributing](#contributing)
+- [device-connect-agent-tools](#device-connect-agent-tools)
+  - [Contents](#contents)
+  - [Where This Fits](#where-this-fits)
+  - [Install](#install)
+  - [Examples](#examples)
+  - [Architecture](#architecture)
+    - [Hierarchical Discovery](#hierarchical-discovery)
+  - [Quick Start](#quick-start)
+    - [Plain Python (no framework)](#plain-python-no-framework)
+    - [Strands Agent](#strands-agent)
+    - [LangChain / LangGraph](#langchain--langgraph)
+    - [MCP Bridge](#mcp-bridge)
+  - [Connection](#connection)
+    - [Auto-Discovery](#auto-discovery)
+    - [JWT Credentials](#jwt-credentials)
+    - [Explicit Configuration](#explicit-configuration)
+    - [Environment Variables](#environment-variables)
+    - [Device-to-Device Mode (No Infrastructure)](#device-to-device-mode-no-infrastructure)
+  - [Tools](#tools)
+  - [Event Subscription](#event-subscription)
+  - [DeviceConnectMCP — Build Devices with Decorators](#deviceconnectmcp--build-devices-with-decorators)
+  - [Writing an Adapter](#writing-an-adapter)
+  - [API Reference](#api-reference)
+    - [Connection](#connection-1)
+    - [Tools](#tools-1)
+    - [Connection Object](#connection-object)
+  - [Contributing](#contributing)
 
 ## Where This Fits
 
@@ -79,37 +85,114 @@ pip install -e ".[strands]"
                     ┌────────▼─────────────────────────┐
                     │  device-connect-agent-tools      │
                     │                                  │
-                    │  discover_devices()              │
-                    │  invoke_device()                 │  JSON-RPC over
-                    │  get_device_status()             │  Zenoh / NATS
-                    │  invoke_device_with_fallback()   │──────────┐
+                    │  1. describe_fleet()             │
+                    │  2. list_devices(type, location) │  JSON-RPC over
+                    │  3. get_device_functions(id)     │  Zenoh / NATS
+                    │  4. invoke_device(id, fn, args)  │──────────┐
                     │                                  │          │
                     │  connect() / disconnect()        │          │
                     └──────────────────────────────────┘          │
-                                                        ┌────────▼────────┐
-                                                        │  Device Connect Mesh    │
-                                                        │  ┌────────────┐ │
-                                                        │  │ Camera     │ │
-                                                        │  │ Robot      │ │
-                                                        │  │ Sensor     │ │
-                                                        │  └────────────┘ │
-                                                        └─────────────────┘
+                                                        ┌─────────▼─────────────┐
+                                                        │  Device Connect Mesh  │
+                                                        │  ┌─────────────┐      │
+                                                        │  │ Camera      │      │
+                                                        │  │ Robot       │      │
+                                                        │  │ Sensor      │      │
+                                                        │  └─────────────┘      │
+                                                        └───────────────────────┘
 ```
+
+### Hierarchical Discovery
+
+Protocols like MCP typically register every device function as a separate tool. With 50 devices averaging 10 functions each, the LLM sees 500 tool definitions — thousands of tokens of JSON Schema that crowd out space for actual reasoning.
+
+This package exposes **4 meta-tools** that let the agent drill down progressively, loading detail only when needed:
+
+```
+describe_fleet()                       ~200 tokens  (counts by type and location)
+  └─▸ list_devices(device_type=...)    ~50 tokens/device  (names only, no schemas)
+        └─▸ get_device_functions(id)   full schemas for ONE device
+              └─▸ invoke_device(...)   call a function
+```
+
+**Small-fleet shortcut:** When the fleet has 5 or fewer devices, `describe_fleet()` and `list_devices()` automatically include full function schemas in the response — the agent can skip straight to `invoke_device()` in one or two calls. The threshold is configurable via the `DEVICE_CONNECT_SMALL_FLEET_THRESHOLD` environment variable (set to `0` to always require drill-down).
+
+**Example — an agent resolving "check the lobby cameras":**
+
+**Step 1** — `describe_fleet()` returns a bird's-eye view (~200 tokens):
+
+```json
+{
+  "total_devices": 47,
+  "total_functions": 183,
+  "by_type": {
+    "camera":  {"count": 12, "locations": ["lobby", "warehouse", "parking"]},
+    "robot":   {"count": 8,  "locations": ["warehouse"]},
+    "sensor":  {"count": 27, "locations": ["lobby", "warehouse", "parking", "office"]}
+  },
+  "by_location": {
+    "lobby":     {"count": 9,  "types": ["camera", "sensor"]},
+    "warehouse": {"count": 31, "types": ["camera", "robot", "sensor"]}
+  }
+}
+```
+
+**Step 2** — Agent sees 12 cameras, narrows to lobby: `list_devices(device_type="camera", location="lobby")` — compact roster, no schemas:
+
+```json
+{
+  "devices": [
+    {"device_id": "cam-001", "device_type": "camera", "location": "lobby", "function_count": 3, "function_names": ["capture_image", "pan_tilt", "get_status"]},
+    {"device_id": "cam-002", "device_type": "camera", "location": "lobby", "function_count": 3, "function_names": ["capture_image", "pan_tilt", "get_status"]}
+  ],
+  "total": 2, "offset": 0, "limit": 20, "has_more": false
+}
+```
+
+**Step 3** — Agent picks cam-001, loads its schemas: `get_device_functions("cam-001")` — full detail for ONE device:
+
+```json
+{
+  "device_id": "cam-001", "device_type": "camera", "location": "lobby",
+  "functions": [{
+    "name": "capture_image",
+    "description": "Capture a still image",
+    "parameters": {"type": "object", "properties": {"resolution": {"type": "string", "enum": ["720p", "1080p", "4k"]}}, "required": ["resolution"]}
+  }]
+}
+```
+
+**Step 4** — `invoke_device("cam-001", "capture_image", {"resolution": "1080p"})`
+
+Total context: ~450 tokens across 4 calls, vs ~5 000+ if every function schema were loaded upfront. Each step gives the LLM a **focused decision** ("which type?" → "which device?" → "which function?" → "what params?") instead of a 500-way tool selection.
+
+The same 4 tools are available in every adapter (Strands, LangChain, MCP) and in plain Python. The MCP bridge registers exactly these 4 tools — not one per device function — so MCP clients like Claude Desktop stay responsive regardless of fleet size.
 
 ## Quick Start
 
 ### Plain Python (no framework)
 
 ```python
-from device_connect_agent_tools import connect, disconnect, discover_devices, invoke_device
+from device_connect_agent_tools import (
+    connect, disconnect, describe_fleet, list_devices, get_device_functions, invoke_device,
+)
 
 connect()
 
-devices = discover_devices()
-for d in devices:
-    print(f"{d['device_id']} ({d['device_type']}): {[f['name'] for f in d['functions']]}")
+# 1. What's on the network?
+fleet = describe_fleet()
+print(fleet)  # {total_devices: 47, by_type: {camera: {count: 12}, ...}}
 
-result = invoke_device("robot-001", "get_status")
+# 2. Browse a specific type
+cameras = list_devices(device_type="camera", location="lobby")
+for d in cameras["devices"]:
+    print(f"{d['device_id']}: {d['function_names']}")
+
+# 3. Get full schemas for one device
+info = get_device_functions("cam-001")
+
+# 4. Call a function
+result = invoke_device("cam-001", "capture_image", {"resolution": "1080p"})
 print(result)
 
 disconnect()
@@ -121,17 +204,19 @@ disconnect()
 from strands import Agent
 from strands.models import AnthropicModel
 from device_connect_agent_tools import connect
-from device_connect_agent_tools.adapters.strands import discover_devices, invoke_device
+from device_connect_agent_tools.adapters.strands import (
+    describe_fleet, list_devices, get_device_functions, invoke_device,
+)
 
 connect()
 
 agent = Agent(
     model=AnthropicModel(model_id="claude-sonnet-4-20250514"),
-    tools=[discover_devices, invoke_device],
+    tools=[describe_fleet, list_devices, get_device_functions, invoke_device],
     system_prompt="You manage devices on a Device Connect network.",
 )
 
-agent("What devices are online? Get the status of each one.")
+agent("Find all cameras in the lobby and capture an image from each one.")
 ```
 
 ### LangChain / LangGraph
@@ -140,12 +225,14 @@ agent("What devices are online? Get the status of each one.")
 from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 from device_connect_agent_tools import connect
-from device_connect_agent_tools.adapters.langchain import discover_devices, invoke_device
+from device_connect_agent_tools.adapters.langchain import (
+    describe_fleet, list_devices, get_device_functions, invoke_device,
+)
 
 connect()
 
 model = ChatAnthropic(model="claude-sonnet-4-20250514")
-agent = create_react_agent(model, tools=[discover_devices, invoke_device])
+agent = create_react_agent(model, tools=[describe_fleet, list_devices, get_device_functions, invoke_device])
 
 result = agent.invoke({"messages": [{"role": "user", "content": "What devices are online?"}]})
 print(result["messages"][-1].content)
@@ -153,7 +240,7 @@ print(result["messages"][-1].content)
 
 ### MCP Bridge
 
-The MCP bridge discovers devices on the Device Connect mesh and exposes them as MCP tools.
+The MCP bridge exposes the same 4 hierarchical meta-tools over the MCP protocol. Unlike traditional MCP servers that register one tool per device function, the bridge stays constant regardless of fleet size.
 
 Add to your MCP client config (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
 
@@ -172,7 +259,7 @@ Add to your MCP client config (e.g., `~/Library/Application Support/Claude/claud
 }
 ```
 
-Each device function appears as a tool in the MCP client. The agent can discover devices, invoke functions, and read status — all routed through the Device Connect mesh.
+The MCP client sees `describe_fleet`, `list_devices`, `get_device_functions`, and `invoke_device` — the agent navigates the fleet the same way it would via Strands or LangChain.
 
 ## Connection
 
@@ -242,7 +329,7 @@ Resolution order: explicit parameter > environment variable > auto-discovery.
 
 ### Device-to-Device Mode (No Infrastructure)
 
-With no endpoint URLs configured, `discover_devices()` automatically uses D2D presence-based discovery (Zenoh multicast scouting) instead of querying the registry service. No Docker infrastructure needed:
+With no endpoint URLs configured, the discovery tools automatically use D2D presence-based discovery (Zenoh multicast scouting) instead of querying the registry service. No Docker infrastructure needed:
 
 ```bash
 export DEVICE_CONNECT_ALLOW_INSECURE=true
@@ -254,17 +341,17 @@ Devices on the same LAN that are also running in D2D mode will be discovered aut
 
 ## Tools
 
-All four tools are plain Python functions. Import them directly for framework-free use, or from an adapter for framework integration:
+The 4 hierarchical discovery tools are plain Python functions. Import them directly or from an adapter:
 
 ```python
 # Plain Python
-from device_connect_agent_tools import discover_devices, invoke_device
+from device_connect_agent_tools import describe_fleet, list_devices, get_device_functions, invoke_device
 
 # Strands (returns DecoratedFunctionTool)
-from device_connect_agent_tools.adapters.strands import discover_devices, invoke_device
+from device_connect_agent_tools.adapters.strands import describe_fleet, list_devices, get_device_functions, invoke_device
 
 # LangChain (returns StructuredTool)
-from device_connect_agent_tools.adapters.langchain import discover_devices, invoke_device
+from device_connect_agent_tools.adapters.langchain import describe_fleet, list_devices, get_device_functions, invoke_device
 ```
 
 ## Event Subscription
@@ -326,16 +413,16 @@ To add support for another framework, wrap the plain functions:
 
 from my_framework import wrap_tool
 from device_connect_agent_tools.tools import (
-    discover_devices as _discover_devices,
+    describe_fleet as _describe_fleet,
+    list_devices as _list_devices,
+    get_device_functions as _get_device_functions,
     invoke_device as _invoke_device,
-    invoke_device_with_fallback as _invoke_device_with_fallback,
-    get_device_status as _get_device_status,
 )
 
-discover_devices = wrap_tool(_discover_devices)
+describe_fleet = wrap_tool(_describe_fleet)
+list_devices = wrap_tool(_list_devices)
+get_device_functions = wrap_tool(_get_device_functions)
 invoke_device = wrap_tool(_invoke_device)
-invoke_device_with_fallback = wrap_tool(_invoke_device_with_fallback)
-get_device_status = wrap_tool(_get_device_status)
 ```
 
 ## API Reference
@@ -348,14 +435,22 @@ get_device_status = wrap_tool(_get_device_status)
 | `disconnect()` | Close connection and release resources |
 | `get_connection()` | Get current connection (auto-connects if needed) |
 
-### Tools
+### Hierarchical Discovery Tools
 
 | Function | Description |
 |---|---|
-| `discover_devices(device_type, refresh)` | List devices with function schemas |
+| `describe_fleet()` | Bird's-eye summary — device counts by type and location |
+| `list_devices(device_type, location, status, group_by, offset, limit)` | Paginated device roster (compact, no schemas) |
+| `get_device_functions(device_id)` | Full function schemas and events for one device |
 | `invoke_device(device_id, function, params, llm_reasoning)` | Call a function on a device |
+
+### Additional Tools
+
+| Function | Description |
+|---|---|
 | `invoke_device_with_fallback(device_ids, function, params, llm_reasoning)` | Try multiple devices in order |
 | `get_device_status(device_id)` | Get detailed device status |
+| `discover_devices(device_type, refresh)` | *(deprecated)* Flat list with full schemas — use the hierarchical tools above |
 
 ### Connection Object
 
@@ -363,7 +458,7 @@ For advanced use via `get_connection()`:
 
 | Method | Description |
 |---|---|
-| `conn.list_devices(device_type)` | List devices from registry |
+| `conn.list_devices(device_type, location)` | List devices from registry/D2D |
 | `conn.get_device(device_id)` | Get single device by ID |
 | `conn.invoke(device_id, function, params)` | Direct JSON-RPC call |
 | `conn.async_subscribe(subject, callback)` | Subscribe to messaging subject |

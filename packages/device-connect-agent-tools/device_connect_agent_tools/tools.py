@@ -26,6 +26,7 @@ or wrap with a framework adapter:
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections import defaultdict
 from typing import Any
@@ -33,6 +34,38 @@ from typing import Any
 from device_connect_agent_tools.connection import get_connection
 
 logger = logging.getLogger(__name__)
+
+# When the fleet (or filtered result set) has this many devices or fewer,
+# describe_fleet() and list_devices() auto-include full function schemas
+# so the agent can skip get_device_functions() and go straight to invoke.
+# Set to 0 to disable auto-expansion.
+SMALL_FLEET_THRESHOLD = int(os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD", "5"))
+
+
+# ── Shared helpers ──────────────────────────────────────────────
+
+
+def _full_device(d: dict) -> dict:
+    """Build a full device dict with function schemas and events."""
+    functions = d.get("functions", [])
+    events = d.get("events", [])
+    return {
+        "device_id": d.get("device_id"),
+        "device_type": d.get("device_type"),
+        "location": d.get("location"),
+        "functions": [
+            {
+                "name": f.get("name") if isinstance(f, dict) else f,
+                "description": f.get("description", "") if isinstance(f, dict) else "",
+                "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
+            }
+            for f in functions
+        ],
+        "events": [
+            e.get("name") if isinstance(e, dict) else e
+            for e in events
+        ],
+    }
 
 
 # ── Hierarchical discovery tools ─────────────────────────────────
@@ -45,8 +78,14 @@ def describe_fleet() -> dict[str, Any]:
     to understand what devices are available, then call list_devices()
     to browse specific types or locations.
 
+    For small fleets (≤ SMALL_FLEET_THRESHOLD devices), full device
+    details including function schemas are included automatically — you
+    can skip list_devices / get_device_functions and go straight to
+    invoke_device.
+
     Returns:
         Dict with total_devices, total_functions, by_type, by_location.
+        For small fleets, also includes "devices" with full schemas.
 
     Example:
         fleet = describe_fleet()
@@ -82,12 +121,22 @@ def describe_fleet() -> dict[str, Any]:
             for k, v in sorted(by_location.items())
         }
 
-        return {
+        result: dict[str, Any] = {
             "total_devices": len(devices),
             "total_functions": total_functions,
             "by_type": result_by_type,
             "by_location": result_by_location,
         }
+
+        # Auto-expand: include full device details for small fleets
+        if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
+            result["devices"] = [_full_device(d) for d in devices]
+            result["hint"] = (
+                "Full device details included — skip list_devices / "
+                "get_device_functions and go straight to invoke_device."
+            )
+
+        return result
 
     except Exception as e:
         logger.error("describe_fleet failed: %s", e)
@@ -104,8 +153,9 @@ def list_devices(
 ) -> dict[str, Any]:
     """Browse available devices with filtering and pagination.
 
-    Returns compact device summaries WITHOUT function schemas.
-    Use get_device_functions(device_id) to see what a device can do.
+    Returns compact device summaries. When the result set is small
+    (≤ SMALL_FLEET_THRESHOLD), full function schemas are included
+    automatically so you can skip get_device_functions().
 
     Args:
         device_type: Filter by type (e.g., "camera", "robot"). Fuzzy matching.
@@ -155,10 +205,10 @@ def list_devices(
 
         total = len(devices)
 
-        # Build compact summaries (no schemas)
-        def _compact(d: dict) -> dict:
+        # Build device summaries — include schemas for small result sets
+        def _summary(d: dict, expand: bool) -> dict:
             funcs = d.get("functions", [])
-            return {
+            result = {
                 "device_id": d.get("device_id"),
                 "device_type": d.get("device_type"),
                 "location": d.get("location"),
@@ -169,18 +219,30 @@ def list_devices(
                     for f in funcs
                 ],
             }
+            if expand:
+                result["functions"] = [
+                    {
+                        "name": f.get("name") if isinstance(f, dict) else f,
+                        "description": f.get("description", "") if isinstance(f, dict) else "",
+                        "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
+                    }
+                    for f in funcs
+                ]
+            return result
 
         if group_by in ("location", "device_type"):
+            expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
             groups: dict[str, list] = defaultdict(list)
             for d in devices:
                 key = d.get(group_by) or "unknown"
-                groups[key].append(_compact(d))
+                groups[key].append(_summary(d, expand))
             return {"groups": dict(sorted(groups.items())), "total": total}
 
         # Paginate
         page = devices[offset:offset + limit]
+        expand = SMALL_FLEET_THRESHOLD > 0 and len(page) <= SMALL_FLEET_THRESHOLD
         return {
-            "devices": [_compact(d) for d in page],
+            "devices": [_summary(d, expand) for d in page],
             "total": total,
             "offset": offset,
             "limit": limit,
@@ -213,27 +275,7 @@ def get_device_functions(device_id: str) -> dict[str, Any]:
         device = conn.get_device(device_id)
         if not device:
             return {"error": f"Device {device_id} not found"}
-
-        functions = device.get("functions", [])
-        events = device.get("events", [])
-
-        return {
-            "device_id": device.get("device_id"),
-            "device_type": device.get("device_type"),
-            "location": device.get("location"),
-            "functions": [
-                {
-                    "name": f.get("name") if isinstance(f, dict) else f,
-                    "description": f.get("description", "") if isinstance(f, dict) else "",
-                    "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-                }
-                for f in functions
-            ],
-            "events": [
-                e.get("name") if isinstance(e, dict) else e
-                for e in events
-            ],
-        }
+        return _full_device(device)
     except Exception as e:
         return {"error": str(e)}
 

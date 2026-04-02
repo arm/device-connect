@@ -307,6 +307,33 @@ class TestDescribeFleet:
         result = tools_mod.describe_fleet()
         assert result["total_devices"] == 0
 
+    def test_fleet_auto_includes_devices_small(self, mock_conn):
+        """Small fleet (3 devices, threshold=5) → full device details included."""
+        result = tools_mod.describe_fleet()
+        assert "devices" in result
+        assert "hint" in result
+        assert len(result["devices"]) == 3
+        # Each device should have full function schemas
+        cam = next(d for d in result["devices"] if d["device_id"] == "cam-001")
+        assert len(cam["functions"]) == 1
+        assert cam["functions"][0]["name"] == "capture_image"
+        assert "parameters" in cam["functions"][0]
+
+    @patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 1)
+    def test_fleet_auto_excludes_devices_large(self, mock_conn):
+        """Fleet above threshold → no devices key."""
+        result = tools_mod.describe_fleet()
+        assert result["total_devices"] == 3
+        assert "devices" not in result
+        assert "hint" not in result
+
+    @patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 0)
+    def test_fleet_threshold_zero_disables(self, mock_conn):
+        """Threshold=0 disables auto-expansion even for small fleets."""
+        result = tools_mod.describe_fleet()
+        assert result["total_devices"] == 3
+        assert "devices" not in result
+
 
 # ── list_devices (new hierarchical) ─────────────────────────────
 
@@ -316,11 +343,10 @@ class TestListDevices:
         result = tools_mod.list_devices()
         assert result["total"] == 3
         assert len(result["devices"]) == 3
-        # No schemas in output — only function_names and function_count
+        # Compact fields always present
         for d in result["devices"]:
             assert "function_count" in d
             assert "function_names" in d
-            assert "parameters" not in str(d)
 
     def test_list_with_type_filter(self, mock_conn):
         result = tools_mod.list_devices(device_type="camera")
@@ -360,6 +386,28 @@ class TestListDevices:
         mock_conn.list_devices.side_effect = Exception("down")
         result = tools_mod.list_devices()
         assert result["total"] == 0
+
+    def test_list_auto_includes_functions_small(self, mock_conn):
+        """Small result set (3 devices, threshold=5) → schemas included."""
+        result = tools_mod.list_devices()
+        for d in result["devices"]:
+            assert "functions" in d
+            assert "parameters" in str(d["functions"])
+
+    @patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 1)
+    def test_list_auto_excludes_functions_large(self, mock_conn):
+        """Result set above threshold → no functions key in devices."""
+        result = tools_mod.list_devices()
+        for d in result["devices"]:
+            assert "functions" not in d
+
+    @patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 1)
+    def test_list_grouped_no_auto_expand(self, mock_conn):
+        """Grouped results above threshold → no functions key."""
+        result = tools_mod.list_devices(group_by="location")
+        for group_devices in result["groups"].values():
+            for d in group_devices:
+                assert "functions" not in d
 
 
 # ── get_device_functions ─────────────────────────────────────────
