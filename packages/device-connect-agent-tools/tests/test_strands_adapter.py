@@ -60,7 +60,7 @@ class TestStrandsAdapterExports:
     def test_all_list(self):
         from device_connect_agent_tools.adapters import strands as adapter
 
-        expected = {"discover_devices", "invoke_device", "invoke_device_with_fallback", "get_device_status"}
+        expected = {"discover_devices", "invoke_device", "invoke_device_with_fallback", "get_device_status", "list_devices", "get_device_functions", "describe_fleet"}
         assert set(adapter.__all__) == expected
 
     def test_tools_are_callable(self):
