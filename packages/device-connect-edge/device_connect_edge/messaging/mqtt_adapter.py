@@ -174,7 +174,7 @@ class MQTTAdapter(MessagingClient):
         cert_file = tls_config.get("cert_file")
         key_file = tls_config.get("key_file")
 
-        tls_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
         # Load CA certificate
         if ca_file:

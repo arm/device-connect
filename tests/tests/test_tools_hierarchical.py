@@ -87,8 +87,21 @@ async def test_describe_fleet_no_expand_when_disabled(device_spawner, messaging_
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
+        # First, confirm the device is actually discoverable
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        while True:
+            result = await asyncio.to_thread(tools_mod.describe_fleet)
+            if result["total_devices"] >= 1 or time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
+        assert result["total_devices"] >= 1, (
+            f"Timed out waiting for device discovery: got {result['total_devices']}"
+        )
+
+        # Now verify expansion is disabled with threshold=0
         with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 0):
             result = await asyncio.to_thread(tools_mod.describe_fleet)
+        assert result["total_devices"] >= 1
         assert "devices" not in result
     finally:
         await asyncio.to_thread(disconnect)
@@ -245,7 +258,7 @@ async def test_get_device_functions_returns_schemas(device_spawner, messaging_ur
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_get_device_functions_not_found(messaging_url):
+async def test_get_device_functions_not_found(infrastructure, messaging_url):
     """get_device_functions() for missing device returns error."""
     from device_connect_agent_tools import connect, disconnect
     from device_connect_agent_tools.tools import get_device_functions
@@ -356,7 +369,7 @@ async def test_list_devices_includes_function_names(device_spawner, messaging_ur
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_nonexistent_device_returns_error(messaging_url):
+async def test_invoke_nonexistent_device_returns_error(infrastructure, messaging_url):
     """invoke_device() for a missing device should return an error, not crash."""
     from device_connect_agent_tools import connect, disconnect
     from device_connect_agent_tools.tools import invoke_device

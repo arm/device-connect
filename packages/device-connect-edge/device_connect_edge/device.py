@@ -949,11 +949,6 @@ class DeviceRuntime:
             )
             return
 
-        # Use lock to prevent duplicate concurrent registrations
-        if self._registration_lock.locked():
-            self._logger.debug("Registration already in progress, skipping")
-            return
-
         async with self._registration_lock:
             # Double-check after acquiring lock (another task may have just registered)
             if not force and self._registration_id and self._registration_expires_at > time.time():

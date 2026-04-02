@@ -37,10 +37,7 @@ def fuzzy_filter_by_type(devices: list[dict], device_type: str) -> list[dict]:
     return [
         d for d in devices
         if d.get("device_type")
-        and (
-            t in d["device_type"].lower().replace("_", "").replace("-", "")
-            or d["device_type"].lower().replace("_", "").replace("-", "") in t
-        )
+        and t in d["device_type"].lower().replace("_", "").replace("-", "")
     ]
 
 

@@ -112,6 +112,7 @@ class CapabilityLoader:
         self._functions: Dict[str, Callable] = {}
         self._routines: Dict[str, asyncio.Task] = {}
         self._subscriptions: List[EventSubscription] = []
+        self._spawned_tasks: set[asyncio.Task] = set()
 
         # Reference to driver (set externally if needed for capability constructor)
         self._driver: Optional["DeviceDriver"] = None
@@ -316,6 +317,12 @@ class CapabilityLoader:
                     f"(functions={loaded.functions}, routines={loaded.routines})")
         return True
 
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Register a dynamically-spawned task for lifecycle tracking."""
+        self._spawned_tasks.add(task)
+        task.add_done_callback(self._spawned_tasks.discard)
+        return task
+
     async def unload_all(self) -> None:
         """Unload all capabilities, cancel routines, and cleanup."""
         # Cancel all routines
@@ -326,6 +333,11 @@ class CapabilityLoader:
             except asyncio.CancelledError:
                 pass
         self._routines.clear()
+
+        # Cancel all tracked spawned tasks
+        for task in list(self._spawned_tasks):
+            task.cancel()
+        self._spawned_tasks.clear()
 
         # Clear function registrations
         self._functions.clear()
@@ -527,11 +539,11 @@ class CapabilityLoader:
         # Also set callback if the capability uses an older pattern
         if hasattr(cap_instance, "set_event_callback"):
             cap_instance.set_event_callback(
-                lambda name, payload: asyncio.create_task(emit_event_internal(name, payload))
+                lambda name, payload: self._track_task(asyncio.create_task(emit_event_internal(name, payload)))
             )
         elif hasattr(cap_instance, "_event_callback"):
             cap_instance._event_callback = (
-                lambda name, payload: asyncio.create_task(emit_event_internal(name, payload))
+                lambda name, payload: self._track_task(asyncio.create_task(emit_event_internal(name, payload)))
             )
 
     def _collect_routines(self, loaded: LoadedCapability) -> None:
@@ -549,10 +561,12 @@ class CapabilityLoader:
                 attr = getattr(cap_instance, attr_name)
                 if callable(attr) and getattr(attr, "_is_device_routine", False):
                     interval = getattr(attr, "_routine_interval", 1.0)
+                    wait_for_completion = getattr(attr, "_routine_wait_for_completion", True)
                     loaded.routines.append(attr_name)
                     loaded.routine_configs[attr_name] = {
                         "callable": attr,
                         "interval": interval,
+                        "wait_for_completion": wait_for_completion,
                     }
                     logger.debug(f"Collected routine: {attr_name} (interval={interval}s)")
             except Exception as e:
@@ -594,8 +608,9 @@ class CapabilityLoader:
 
             routine = config["callable"]
             interval = config["interval"]
+            wait_for_completion = config.get("wait_for_completion", True)
             task = asyncio.create_task(
-                self._run_routine(cap_id, routine_name, routine, interval)
+                self._run_routine(cap_id, routine_name, routine, interval, wait_for_completion)
             )
             self._routines[key] = task
             count += 1
@@ -604,7 +619,8 @@ class CapabilityLoader:
         return count
 
     async def _run_routine(
-        self, cap_id: str, routine_name: str, routine: Callable, interval: float
+        self, cap_id: str, routine_name: str, routine: Callable, interval: float,
+        wait_for_completion: bool = True,
     ) -> None:
         """Run a capability's periodic routine.
 
@@ -613,11 +629,13 @@ class CapabilityLoader:
             routine_name: Name of the routine
             routine: The routine callable
             interval: Interval in seconds
+            wait_for_completion: If True, subtract elapsed time from sleep interval
         """
         from device_connect_edge.drivers.decorators import set_call_origin, reset_call_origin
 
         logger.debug(f"Starting routine {cap_id}.{routine_name} with interval {interval}s")
         while cap_id in self._capabilities:
+            start_time = asyncio.get_event_loop().time()
             # Set call origin to "routine" so RPC logs show LOCAL instead of EXEC
             token = set_call_origin("routine")
             try:
@@ -632,7 +650,13 @@ class CapabilityLoader:
                 logger.error(f"Routine error in {cap_id}.{routine_name}: {e}")
             finally:
                 reset_call_origin(token)
-            await asyncio.sleep(interval)
+
+            if wait_for_completion:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                sleep_time = max(0, interval - elapsed)
+                await asyncio.sleep(sleep_time)
+            else:
+                await asyncio.sleep(interval)
 
     async def _setup_subscriptions(self, loaded: LoadedCapability) -> None:
         """Set up event subscriptions for a capability's agentic pattern.
@@ -775,7 +799,10 @@ class CapabilityDriverMixin:
             True if loaded successfully
         """
         if self._capability_loader:
-            return await self._capability_loader.load_one(capability_id)
+            result = await self._capability_loader.load_one(capability_id)
+            if result:
+                self._invalidate_caches()
+            return result
         return False
 
     async def unload_capability(self, capability_id: str) -> bool:
@@ -788,7 +815,10 @@ class CapabilityDriverMixin:
             True if unloaded successfully
         """
         if self._capability_loader:
-            return await self._capability_loader.unload_one(capability_id)
+            result = await self._capability_loader.unload_one(capability_id)
+            if result:
+                self._invalidate_caches()
+            return result
         return False
 
     def _get_functions(self) -> Dict[str, Callable]:

@@ -169,6 +169,7 @@ class MCPBridgeServer:
             description=(
                 "Get a high-level summary of all available IoT devices. "
                 "Returns device counts grouped by type and location. "
+                "For small fleets, full device details are included automatically. "
                 "Call this first to understand what devices are available."
             ),
         )
@@ -219,8 +220,9 @@ class MCPBridgeServer:
             name="list_devices",
             description=(
                 "Browse available IoT devices with filtering and pagination. "
-                "Returns compact summaries WITHOUT function schemas. "
-                "Use get_device_functions(device_id) to see what a device can do."
+                "Returns compact summaries; for small fleets, full function "
+                "schemas are included automatically. "
+                "Use get_device_functions(device_id) for full schemas on larger fleets."
             ),
         )
         async def list_devices(
@@ -246,7 +248,8 @@ class MCPBridgeServer:
                 s = status.lower()
                 devices = [
                     d for d in devices
-                    if s in (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "").lower()
+                    if isinstance(d.get("status"), dict)
+                    and s in (d["status"].get("availability") or d["status"].get("state") or "").lower()
                 ]
 
             def _summary(d: dict, expand: bool) -> dict:

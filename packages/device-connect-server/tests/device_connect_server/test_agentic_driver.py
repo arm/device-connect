@@ -96,7 +96,7 @@ class TestDeviceDriver:
         # Verify trace metadata was injected
         assert "_dc_meta" in call_args[1]["params"]
         assert "trace_id" in call_args[1]["params"]["_dc_meta"]
-        assert "source_device" in call_args[1]
+        assert "source_device" in call_args[1]["params"]["_dc_meta"]
         assert result == {"result": "success"}
 
     @pytest.mark.asyncio

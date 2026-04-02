@@ -423,6 +423,15 @@ class TestGetDeviceHandler:
         response = json.loads(messaging.publish.call_args[0][1])
         assert response["result"]["device"] == SAMPLE_DEVICE
 
+    @pytest.mark.asyncio
+    async def test_discovery_malformed_json(self, messaging, mock_registry):
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(b"not valid json", "reply-sub")
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32000
+        mock_registry.list_devices.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # TestDescribeFleetHandler

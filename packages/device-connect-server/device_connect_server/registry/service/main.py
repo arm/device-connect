@@ -337,11 +337,17 @@ def _make_list_handler(
     """
 
     async def rpc_discovery(data: bytes, reply: Optional[str]):
-        payload = json.loads(data)
-        method = payload.get("method", "")
-        params = payload.get("params") or {}
-
+        # NOTE: ACL filtering is permissive by default.  When requester_id is
+        # omitted (empty string), filter_visible_devices passes all devices
+        # because the default visible_to=["*"] wildcard matches any requester.
+        # This is intentional — ACL is opt-in and requester_id is supplied by
+        # the caller, not extracted from authenticated credentials.
+        payload: dict[str, Any] = {}
         try:
+            payload = json.loads(data)
+            method = payload.get("method", "")
+            params = payload.get("params") or {}
+
             if method == "discovery/listDevices":
                 device_type = params.get("device_type")
                 location = params.get("location")
@@ -396,7 +402,7 @@ def _make_list_handler(
         except Exception as e:
             await messaging.publish(
                 reply,
-                build_rpc_error(payload.get("id"), -32000, str(e))
+                build_rpc_error(payload.get("id") if isinstance(payload, dict) else None, -32000, str(e))
             )
 
     return rpc_discovery
@@ -407,6 +413,7 @@ def _make_hb_handler(tenant: str):
 
     async def hb_handler(data_bytes: bytes, reply: Optional[str]):
         data: Any = None
+        device_id: str = "?"
         try:
             data = json.loads(data_bytes)
             device_id = data.pop("device_id")
@@ -417,8 +424,7 @@ def _make_hb_handler(tenant: str):
             await asyncio.to_thread(registry.update_status, tenant, device_id, data)
             logger.debug("[device-registry] heartbeat from %s (tenant=%s)", device_id, tenant)
         except Exception as e:
-            logger.exception("[device-registry] heartbeat error for %s: %s",
-                             data.get("device_id", "?") if isinstance(data, dict) else "?", e)
+            logger.exception("[device-registry] heartbeat error for %s: %s", device_id, e)
 
     return hb_handler
 
@@ -494,7 +500,7 @@ async def main() -> None:
                     _device_ttl.pop(compound_key, None)
             await asyncio.sleep(1)
 
-    asyncio.create_task(offline_monitor())
+    _monitor_task = asyncio.create_task(offline_monitor())
 
     # ----- Run forever -----
     while True:

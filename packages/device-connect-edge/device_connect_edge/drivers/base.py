@@ -274,6 +274,11 @@ class DeviceDriver(ABC):
         self._events_cache = self._collect_events()
         return self._events_cache
 
+    def _invalidate_caches(self) -> None:
+        """Reset cached function/event lists so they are rebuilt on next access."""
+        self._functions_cache = None
+        self._events_cache = None
+
     @property
     def identity(self) -> DeviceIdentity:
         """Get static device identity.
@@ -852,7 +857,6 @@ class DeviceDriver(ABC):
             kwargs = {"params": params_with_meta}
             if timeout is not None:
                 kwargs["timeout"] = timeout
-            kwargs["source_device"] = caller_id
 
             # Summarize params for logging (exclude _dc_meta)
             params_summary = ", ".join(f"{k}={repr(v)[:30]}" for k, v in params.items()) if params else "(none)"

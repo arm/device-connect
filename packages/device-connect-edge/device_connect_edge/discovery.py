@@ -218,6 +218,10 @@ class PresenceCollector:
         if not device_id:
             return
 
+        # Filter out our own presence announcements
+        if device_id == self._device_id:
+            return
+
         # Handle graceful departure announcements
         if payload.get("departing"):
             async with self._lock:
