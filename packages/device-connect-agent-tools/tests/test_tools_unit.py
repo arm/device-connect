@@ -22,15 +22,6 @@ SAMPLE_DEVICES = [
         "location": "lab-A",
         "status": {"state": "online"},
         "identity": {"device_type": "camera"},
-        "capabilities": {
-            "functions": [
-                {"name": "capture_image", "description": "Capture an image", "parameters": {"type": "object"}},
-            ],
-            "events": [
-                {"name": "state_change_detected"},
-                {"name": "object_detected"},
-            ],
-        },
         "functions": [
             {"name": "capture_image", "description": "Capture an image", "parameters": {"type": "object"}},
         ],
@@ -45,14 +36,6 @@ SAMPLE_DEVICES = [
         "location": "lab-A",
         "status": {"state": "idle"},
         "identity": {"device_type": "cleaning_robot"},
-        "capabilities": {
-            "functions": [
-                {"name": "dispatch_robot", "description": "Dispatch robot", "parameters": {}},
-            ],
-            "events": [
-                {"name": "cleaning_finished"},
-            ],
-        },
         "functions": [
             {"name": "dispatch_robot", "description": "Dispatch robot", "parameters": {}},
         ],
@@ -66,12 +49,6 @@ SAMPLE_DEVICES = [
         "location": "lab-B",
         "status": {"state": "online"},
         "identity": {"device_type": "environment_sensor"},
-        "capabilities": {
-            "functions": [
-                {"name": "get_reading", "description": "Get sensor reading", "parameters": {}},
-            ],
-            "events": [],
-        },
         "functions": [
             {"name": "get_reading", "description": "Get sensor reading", "parameters": {}},
         ],

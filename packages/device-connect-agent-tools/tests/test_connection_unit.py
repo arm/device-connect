@@ -201,6 +201,7 @@ class TestFlattenDevice:
         assert result["location"] == "lab-1"
         assert len(result["functions"]) == 1
         assert len(result["events"]) == 1
+        assert "capabilities" not in result
 
     def test_top_level_takes_precedence(self):
         raw = {
