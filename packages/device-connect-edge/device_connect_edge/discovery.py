@@ -30,6 +30,7 @@ Usage from DeviceRuntime (automatic when D2D mode is detected)::
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -169,7 +170,7 @@ class PresenceCollector:
         self,
         messaging,
         tenant: str,
-        on_new_peer: Optional[Callable[[str], None]] = None,
+        on_new_peer: Optional[Callable[[str], Any]] = None,
         device_id: str = "",
     ):
         self._messaging = messaging
@@ -240,7 +241,9 @@ class PresenceCollector:
             logger.info("%s: discovered peer %s", self._log_tag, device_id)
             if self._on_new_peer:
                 try:
-                    self._on_new_peer(device_id)
+                    result = self._on_new_peer(device_id)
+                    if inspect.isawaitable(result):
+                        await result
                 except Exception:
                     logger.warning("on_new_peer callback failed for device %s", device_id, exc_info=True)
 

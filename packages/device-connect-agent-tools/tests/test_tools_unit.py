@@ -13,7 +13,7 @@ from device_connect_agent_tools import tools as tools_mod
 
 # ── Fixtures ──────────────────────────────────────────────────────
 
-# Mock data matches the flattened format returned by _flatten_device
+# Mock data matches the flattened format returned by flatten_device
 # (device_type, location, functions, events all at top level).
 SAMPLE_DEVICES = [
     {

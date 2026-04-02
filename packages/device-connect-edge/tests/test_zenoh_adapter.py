@@ -261,10 +261,10 @@ class TestZenohClientConnect:
         mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
 
         from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
-        from device_connect_edge.messaging.exceptions import ConnectionError
+        from device_connect_edge.messaging.exceptions import MessagingConnectionError
 
         adapter = ZenohAdapter()
-        with pytest.raises(ConnectionError, match="Connection refused"):
+        with pytest.raises(MessagingConnectionError, match="Connection refused"):
             await adapter.connect(servers=["tcp/host:7447"])
 
 

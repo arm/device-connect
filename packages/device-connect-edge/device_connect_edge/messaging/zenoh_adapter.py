@@ -32,7 +32,7 @@ except ImportError:
 
 from device_connect_edge.messaging.base import MessagingClient, Subscription
 from device_connect_edge.messaging.exceptions import (
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -236,7 +236,7 @@ class ZenohAdapter(MessagingClient):
 
         except Exception as e:
             self._logger.error(f"Failed to connect to Zenoh: {e}")
-            raise ConnectionError(f"Failed to connect to Zenoh: {e}") from e
+            raise MessagingConnectionError(f"Failed to connect to Zenoh: {e}") from e
 
     def configure_d2d_retry(self, retries: int = 3, delay: float = 0.3) -> None:
         """Configure retry behavior for D2D mode request/reply.

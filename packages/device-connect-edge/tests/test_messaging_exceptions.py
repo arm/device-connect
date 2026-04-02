@@ -2,7 +2,7 @@
 
 from device_connect_edge.messaging.exceptions import (
     MessagingError,
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -18,7 +18,7 @@ class TestMessagingExceptionHierarchy:
         assert issubclass(MessagingError, Exception)
 
     def test_connection_error(self):
-        err = ConnectionError("cannot connect")
+        err = MessagingConnectionError("cannot connect")
         assert isinstance(err, MessagingError)
 
     def test_publish_error(self):
@@ -42,7 +42,7 @@ class TestMessagingExceptionHierarchy:
         assert isinstance(err, MessagingError)
 
     def test_catch_all(self):
-        for cls in (ConnectionError, PublishError, SubscribeError,
+        for cls in (MessagingConnectionError, PublishError, SubscribeError,
                     RequestTimeoutError, AuthenticationError, NotConnectedError):
             try:
                 raise cls("test")

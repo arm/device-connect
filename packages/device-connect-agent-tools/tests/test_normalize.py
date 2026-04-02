@@ -3,6 +3,7 @@ from device_connect_agent_tools._normalize import (
     _normalize_events,
     _normalize_functions,
     compact_device,
+    extract_status,
     full_device,
     fuzzy_filter_by_type,
 )
@@ -184,3 +185,30 @@ class TestCompactDevice:
         result = compact_device({"device_id": "x"})
         assert result["function_count"] == 0
         assert result["function_names"] == []
+
+
+class TestExtractStatus:
+
+    def test_availability(self):
+        d = {"status": {"availability": "idle"}}
+        assert extract_status(d) == "idle"
+
+    def test_state_fallback(self):
+        d = {"status": {"state": "online"}}
+        assert extract_status(d) == "online"
+
+    def test_availability_takes_precedence(self):
+        d = {"status": {"availability": "busy", "state": "online"}}
+        assert extract_status(d) == "busy"
+
+    def test_missing_status(self):
+        assert extract_status({}) == "unknown"
+
+    def test_non_dict_status(self):
+        assert extract_status({"status": "online"}) == "unknown"
+
+    def test_custom_default(self):
+        assert extract_status({}, default="n/a") == "n/a"
+
+    def test_empty_status_dict(self):
+        assert extract_status({"status": {}}) == "unknown"

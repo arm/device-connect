@@ -174,10 +174,10 @@ class TestMQTTClientConnect:
         mock_client.__aenter__ = AsyncMock(side_effect=Exception("refused"))
         MockClient.return_value = mock_client
         from device_connect_edge.messaging.mqtt_adapter import MQTTAdapter
-        from device_connect_edge.messaging.exceptions import ConnectionError
+        from device_connect_edge.messaging.exceptions import MessagingConnectionError
 
         adapter = MQTTAdapter()
-        with pytest.raises(ConnectionError, match="refused"):
+        with pytest.raises(MessagingConnectionError, match="refused"):
             await adapter.connect(servers=["mqtt://broker.local:1883"])
 
     @pytest.mark.asyncio

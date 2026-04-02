@@ -261,7 +261,7 @@ class TestRegisterHandler:
         await handler(_rpc_request("registerDevice", VALID_REGISTER_PARAMS), "reply-sub")
 
         response = json.loads(messaging.publish.call_args[0][1])
-        assert response["error"]["code"] == -32602
+        assert response["error"]["code"] == -32603
         assert "etcd timeout" in response["error"]["message"]
 
     @pytest.mark.asyncio

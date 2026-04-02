@@ -32,7 +32,7 @@ from collections import defaultdict
 from typing import Any
 
 from device_connect_agent_tools.connection import get_connection
-from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type
+from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type, extract_status
 
 logger = logging.getLogger(__name__)
 
@@ -171,17 +171,14 @@ def list_devices(
         # Status filter
         if status:
             s = status.lower()
-            devices = [
-                d for d in devices
-                if s in (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "").lower()
-            ]
+            devices = [d for d in devices if s in extract_status(d).lower()]
 
         total = len(devices)
 
         # Build device summaries — include schemas for small result sets
         def _summary(d: dict, expand: bool) -> dict:
             result = compact_device(d, expand)
-            result["status"] = (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "unknown") if isinstance(d.get("status"), dict) else "unknown"
+            result["status"] = extract_status(d)
             return result
 
         if group_by in ("location", "device_type"):

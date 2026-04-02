@@ -19,7 +19,7 @@ except ImportError:
 
 from device_connect_edge.messaging.base import MessagingClient, Subscription
 from device_connect_edge.messaging.exceptions import (
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -166,7 +166,7 @@ class MQTTAdapter(MessagingClient):
             self._logger.error(f"Failed to connect to MQTT: {e}")
             if "authentication" in str(e).lower() or "authorization" in str(e).lower():
                 raise AuthenticationError(f"Authentication failed: {e}") from e
-            raise ConnectionError(f"Failed to connect to MQTT: {e}") from e
+            raise MessagingConnectionError(f"Failed to connect to MQTT: {e}") from e
 
     def _build_tls_context(self, tls_config: Dict[str, Any]) -> ssl.SSLContext:
         """Build SSL context from TLS configuration."""
@@ -501,9 +501,10 @@ class MQTTAdapter(MessagingClient):
         # Replace dots with slashes
         topic = subject.replace(".", "/")
 
-        # Replace NATS wildcards with MQTT wildcards
-        topic = topic.replace("/*/", "/+/")  # Middle wildcards
-        topic = topic.replace("/*", "/+")     # End wildcards
+        # Replace NATS single-level wildcards (*) with MQTT equivalents (+)
+        parts = topic.split("/")
+        parts = ["+" if p == "*" else p for p in parts]
+        topic = "/".join(parts)
 
         # Multi-level wildcard (must be last)
         if topic.endswith("/>"):

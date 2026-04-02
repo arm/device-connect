@@ -32,8 +32,8 @@ from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
-from device_connect_agent_tools.connection import _flatten_device
-from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type
+from device_connect_agent_tools.connection import flatten_device
+from device_connect_agent_tools._normalize import full_device, compact_device, fuzzy_filter_by_type, extract_status
 
 logger = logging.getLogger(__name__)
 
@@ -140,15 +140,21 @@ class MCPBridgeServer:
                 cache_ttl=self.config.refresh_interval,
             )
 
-    async def _list_devices(self, **kwargs) -> list[dict]:
+    async def _list_devices(
+        self,
+        device_type: str | None = None,
+        location: str | None = None,
+    ) -> list[dict]:
         """List devices from registry and flatten to canonical shape."""
-        raw = await self._registry.list_devices(**kwargs)
-        return [_flatten_device(d) for d in raw]
+        raw = await self._registry.list_devices(
+            device_type=device_type, location=location,
+        )
+        return [flatten_device(d) for d in raw]
 
     async def _get_device(self, device_id: str) -> dict | None:
         """Get one device from registry and flatten to canonical shape."""
         raw = await self._registry.get_device(device_id)
-        return _flatten_device(raw) if raw else None
+        return flatten_device(raw) if raw else None
 
     async def _connect_messaging(self) -> None:
         backend = self.config.get_backend()
@@ -246,15 +252,11 @@ class MCPBridgeServer:
             # Client-side status filter
             if status:
                 s = status.lower()
-                devices = [
-                    d for d in devices
-                    if isinstance(d.get("status"), dict)
-                    and s in (d["status"].get("availability") or d["status"].get("state") or "").lower()
-                ]
+                devices = [d for d in devices if s in extract_status(d).lower()]
 
             def _summary(d: dict, expand: bool) -> dict:
                 result = compact_device(d, expand)
-                result["status"] = (d.get("status", {}).get("availability") or d.get("status", {}).get("state") or "unknown") if isinstance(d.get("status"), dict) else "unknown"
+                result["status"] = extract_status(d)
                 return result
 
             total = len(devices)

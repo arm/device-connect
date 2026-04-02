@@ -278,6 +278,7 @@ class DeviceDriver(ABC):
         """Reset cached function/event lists so they are rebuilt on next access."""
         self._functions_cache = None
         self._events_cache = None
+        self._function_methods = None
 
     @property
     def identity(self) -> DeviceIdentity:
@@ -311,7 +312,7 @@ class DeviceDriver(ABC):
         actuators, or other hardware.
 
         Raises:
-            ConnectionError: If connection fails
+            MessagingConnectionError: If connection fails
         """
 
     async def disconnect(self) -> None:
@@ -722,7 +723,7 @@ class DeviceDriver(ABC):
         wait_for_completion = config["wait_for_completion"]
 
         while True:
-            start_time = asyncio.get_event_loop().time()
+            start_time = asyncio.get_running_loop().time()
 
             # Set call origin to "routine" so RPC logs show LOCAL instead of EXEC
             token = set_call_origin("routine")
@@ -737,7 +738,7 @@ class DeviceDriver(ABC):
 
             if wait_for_completion:
                 # Wait remaining time (or 0 if routine took longer than interval)
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = asyncio.get_running_loop().time() - start_time
                 sleep_time = max(0, interval - elapsed)
                 await asyncio.sleep(sleep_time)
             else:

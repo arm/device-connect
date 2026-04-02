@@ -207,10 +207,10 @@ class TestNATSClientConnect:
         mock_nats.connect = AsyncMock(side_effect=Exception("refused"))
         MockNATS.return_value = mock_nats
         from device_connect_edge.messaging.nats_adapter import NATSAdapter
-        from device_connect_edge.messaging.exceptions import ConnectionError
+        from device_connect_edge.messaging.exceptions import MessagingConnectionError
 
         adapter = NATSAdapter()
-        with pytest.raises(ConnectionError, match="refused"):
+        with pytest.raises(MessagingConnectionError, match="refused"):
             await adapter.connect(servers=["nats://localhost:4222"])
 
     @pytest.mark.asyncio

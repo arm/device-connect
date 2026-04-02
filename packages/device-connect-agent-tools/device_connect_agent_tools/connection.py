@@ -109,7 +109,7 @@ def _auto_discover_tls() -> Optional[Dict[str, Any]]:
 # ── Device payload helper ──────────────────────────────────────────
 
 
-def _flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
+def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Flatten a raw registry payload into a consistent device dict.
 
     The registry stores device_type inside ``identity`` and location
@@ -298,7 +298,7 @@ class DeviceConnection:
         devices = await self._provider.list_devices(
             device_type=device_type, location=location,
         )
-        return [_flatten_device(d) for d in devices]
+        return [flatten_device(d) for d in devices]
 
     def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
         """Get a specific device by ID."""
@@ -309,7 +309,7 @@ class DeviceConnection:
             raise RuntimeError("Not connected — call connect() first")
         device = await self._provider.get_device(device_id)
         if device:
-            return _flatten_device(device)
+            return flatten_device(device)
         return None
 
     def invoke(

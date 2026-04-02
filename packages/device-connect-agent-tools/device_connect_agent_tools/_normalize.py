@@ -1,6 +1,6 @@
 """Shared device normalization helpers.
 
-Operates on flat device dicts (already run through ``connection._flatten_device``
+Operates on flat device dicts (already run through ``connection.flatten_device``
 or equivalent). All callers flatten at the boundary so there is only one shape.
 """
 from __future__ import annotations
@@ -29,6 +29,14 @@ def _normalize_events(events: list) -> list[str]:
         name for e in events
         if (name := (e.get("name") if isinstance(e, dict) else e))
     ]
+
+
+def extract_status(d: dict, default: str = "unknown") -> str:
+    """Extract device availability/state as a string."""
+    status = d.get("status")
+    if not isinstance(status, dict):
+        return default
+    return status.get("availability") or status.get("state") or default
 
 
 def fuzzy_filter_by_type(devices: list[dict], device_type: str) -> list[dict]:

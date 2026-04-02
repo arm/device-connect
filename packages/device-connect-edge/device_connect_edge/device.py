@@ -353,21 +353,7 @@ class DeviceRuntime:
         self._event_queue: asyncio.Queue[Tuple[str, bytes]] = asyncio.Queue(maxsize=10000)
         self._connection_callbacks: List[Callable[[bool], Awaitable[None]]] = []
         self._registration_callbacks: List[Callable[[], Awaitable[None]]] = []
-        self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
-
-        # Configure logger to output to console if no handlers are set
-        if not self._logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            self._logger.addHandler(handler)
-            # Set logger level from environment variable, default to INFO
-            log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
-            self._logger.setLevel(getattr(logging, log_level, logging.INFO))
-            # Prevent propagation to root logger to avoid duplicate logs
-            self._logger.propagate = False
+        self._setup_logger()
 
         # Handle factory identity and commissioning
         if factory_identity_file:
@@ -376,20 +362,7 @@ class DeviceRuntime:
             # Override device_id from factory identity if not explicitly provided
             if not device_id:
                 self.device_id = self._factory_identity['device_id']
-                # Update logger with correct device_id
-                self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
-                if not self._logger.handlers:
-                    handler = logging.StreamHandler()
-                    formatter = logging.Formatter(
-                        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                    )
-                    handler.setFormatter(formatter)
-                    self._logger.addHandler(handler)
-                    # Set logger level from environment variable, default to INFO
-                    log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
-                    self._logger.setLevel(getattr(logging, log_level, logging.INFO))
-                    # Prevent propagation to root logger to avoid duplicate logs
-                    self._logger.propagate = False
+                self._setup_logger()
 
             # Determine credentials file path
             inferred_creds_file = self._get_credentials_path_from_identity()
@@ -429,18 +402,7 @@ class DeviceRuntime:
             # and not from factory_identity
             if creds_device_id and not device_id and not factory_identity_file:
                 self.device_id = creds_device_id
-                # Update logger with correct device_id
-                self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
-                if not self._logger.handlers:
-                    handler = logging.StreamHandler()
-                    formatter = logging.Formatter(
-                        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                    )
-                    handler.setFormatter(formatter)
-                    self._logger.addHandler(handler)
-                    log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
-                    self._logger.setLevel(getattr(logging, log_level, logging.INFO))
-                    self._logger.propagate = False
+                self._setup_logger()
                 self._logger.info(f"Using device_id from credentials file: {self.device_id}")
 
         # ===== Messaging Configuration =====
@@ -561,6 +523,20 @@ class DeviceRuntime:
                 f"  export DEVICE_ID={creds_device_id}\n"
                 f"{'='*70}\n"
             )
+
+    def _setup_logger(self) -> None:
+        """Configure logger with console output if no handlers are set."""
+        self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
+        if not self._logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            self._logger.addHandler(handler)
+            log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
+            self._logger.setLevel(getattr(logging, log_level, logging.INFO))
+            self._logger.propagate = False
 
     def _load_credentials(self, credentials_file: str, messaging_urls: Optional[list[str]] = None) -> dict:
         """
@@ -1005,10 +981,15 @@ class DeviceRuntime:
             # Ensure messaging connectivity
             if not self.messaging.is_connected:
                 self._logger.info("Waiting for messaging reconnect")
-                if self.messaging.is_closed:
-                    await self._connect_messaging()
-                while not self.messaging.is_connected:
-                    await asyncio.sleep(1)
+                try:
+                    if self.messaging.is_closed:
+                        await self._connect_messaging()
+                    while not self.messaging.is_connected:
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    self._logger.error("Heartbeat reconnect failed: %s, will retry next interval", e)
+                    await asyncio.sleep(self._heartbeat_interval)
+                    continue
                 if not self._d2d_mode:
                     try:
                         await self._register(force=True)
@@ -1409,7 +1390,7 @@ class DeviceRuntime:
                     task.cancel()
 
             # Cancel dynamically-spawned tasks (reconnect registrations, callbacks)
-            for task in self._spawned_tasks:
+            for task in list(self._spawned_tasks):
                 if not task.done():
                     task.cancel()
 
@@ -1541,8 +1522,6 @@ class DeviceRuntime:
 
         # Pass device context to driver for capability runtime
         self._driver._device_id = self.device_id
-        self._driver._nats_url = self.messaging_urls[0] if self.messaging_urls else None
-
         # Create and set registry (RegistryClient or D2DRegistry)
         if self._d2d_mode:
             from device_connect_edge.discovery import D2DRegistry, PresenceCollector

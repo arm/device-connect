@@ -635,7 +635,7 @@ class CapabilityLoader:
 
         logger.debug(f"Starting routine {cap_id}.{routine_name} with interval {interval}s")
         while cap_id in self._capabilities:
-            start_time = asyncio.get_event_loop().time()
+            start_time = asyncio.get_running_loop().time()
             # Set call origin to "routine" so RPC logs show LOCAL instead of EXEC
             token = set_call_origin("routine")
             try:
@@ -652,7 +652,7 @@ class CapabilityLoader:
                 reset_call_origin(token)
 
             if wait_for_completion:
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = asyncio.get_running_loop().time() - start_time
                 sleep_time = max(0, interval - elapsed)
                 await asyncio.sleep(sleep_time)
             else:

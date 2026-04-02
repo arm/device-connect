@@ -195,7 +195,7 @@ class TestFlattenDevice:
                 "events": [{"name": "captured"}],
             },
         }
-        result = conn_mod._flatten_device(raw)
+        result = conn_mod.flatten_device(raw)
         assert result["device_id"] == "cam-001"
         assert result["device_type"] == "camera"
         assert result["location"] == "lab-1"
@@ -211,12 +211,12 @@ class TestFlattenDevice:
             "status": {"location": "nested-loc"},
             "capabilities": {},
         }
-        result = conn_mod._flatten_device(raw)
+        result = conn_mod.flatten_device(raw)
         assert result["device_type"] == "top-type"
         assert result["location"] == "top-loc"
 
     def test_empty_raw(self):
-        result = conn_mod._flatten_device({})
+        result = conn_mod.flatten_device({})
         assert result["device_id"] is None
         assert result["device_type"] is None
         assert result["functions"] == []

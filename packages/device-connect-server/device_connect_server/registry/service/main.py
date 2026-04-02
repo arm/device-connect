@@ -309,9 +309,10 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
             )
             logger.info("[device-registry] registered %s (tenant=%s) ttl=%s", params.device_id, tenant, ttl)
         except Exception as ex:
+            error_code = -32602 if isinstance(ex, (json.JSONDecodeError, ValueError)) else -32603
             await messaging.publish(
                 reply,
-                build_rpc_error(payload.get("id") if isinstance(payload, dict) else None, -32602, str(ex)),
+                build_rpc_error(payload.get("id") if isinstance(payload, dict) else None, error_code, str(ex)),
             )
             params_dict = payload.get("params") if isinstance(payload, dict) else {}
             device_id = params_dict.get("device_id") if isinstance(params_dict, dict) else None
@@ -500,6 +501,9 @@ async def main() -> None:
                     _device_ttl.pop(compound_key, None)
             await asyncio.sleep(1)
 
+    # NOTE: _monitor_task is intentionally a local variable.  The infinite
+    # loop below keeps main() (and therefore this frame) alive, so the task
+    # reference is never garbage-collected.
     _monitor_task = asyncio.create_task(offline_monitor())
 
     # ----- Run forever -----
