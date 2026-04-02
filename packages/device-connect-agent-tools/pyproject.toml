@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "device-connect-agent-tools"
-version = "0.1.1"
+version = "0.2.2"
 description = "Framework-agnostic tools for Device Connect — discover and invoke IoT devices over NATS/Zenoh"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -39,7 +39,7 @@ except ImportError:
 
 
 _TRACER_NAME = "device_connect"
-_TRACER_VERSION = "0.1.0"
+_TRACER_VERSION = "0.2.2"
 
 
 def get_tracer() -> Any:
