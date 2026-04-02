@@ -911,7 +911,10 @@ class DeviceRuntime:
                 self._event_queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            self._event_queue.put_nowait((subj, json.dumps(note).encode()))
+            try:
+                self._event_queue.put_nowait((subj, json.dumps(note).encode()))
+            except asyncio.QueueFull:
+                self._logger.error("Event queue still full after drop; event lost: %s", event)
 
 
     async def _register(self, force: bool = False) -> None:

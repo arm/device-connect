@@ -265,6 +265,9 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
     """Create a registerDevice RPC handler bound to ``tenant``."""
 
     async def rpc_register_device(data: bytes, reply: Optional[str]):
+        if not reply:
+            logger.debug("[device-registry] register request with no reply address; ignoring")
+            return
         payload: dict[str, Any] = {}
         try:
             payload = json.loads(data)
@@ -293,7 +296,7 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
                 "status": "registered",
                 "device_registration_id": registration_id,
             }
-            await messaging.publish(reply, build_rpc_response(payload["id"], response))
+            await messaging.publish(reply, build_rpc_response(payload.get("id"), response))
             # emit a device online event
             event_payload = {
                 "jsonrpc": "2.0",
@@ -338,6 +341,9 @@ def _make_list_handler(
     """
 
     async def rpc_discovery(data: bytes, reply: Optional[str]):
+        if not reply:
+            logger.debug("[device-registry] discovery request with no reply address; ignoring")
+            return
         # NOTE: ACL filtering is permissive by default.  When requester_id is
         # omitted (empty string), filter_visible_devices passes all devices
         # because the default visible_to=["*"] wildcard matches any requester.
@@ -363,7 +369,7 @@ def _make_list_handler(
                     )
                 await messaging.publish(
                     reply,
-                    build_rpc_response(payload["id"], {"devices": devs})
+                    build_rpc_response(payload.get("id"), {"devices": devs})
                 )
             elif method == "discovery/getDevice":
                 device_id = params.get("device_id")
@@ -384,7 +390,7 @@ def _make_list_handler(
                     device = visible[0] if visible else None
                 await messaging.publish(
                     reply,
-                    build_rpc_response(payload["id"], {"device": device})
+                    build_rpc_response(payload.get("id"), {"device": device})
                 )
             elif method == "discovery/describeFleet":
                 devs = await asyncio.to_thread(registry.list_devices, tenant)
@@ -396,7 +402,7 @@ def _make_list_handler(
                 summary = summarize_fleet(devs)
                 await messaging.publish(
                     reply,
-                    build_rpc_response(payload["id"], summary)
+                    build_rpc_response(payload.get("id"), summary)
                 )
             else:
                 return  # Not a discovery method — ignore

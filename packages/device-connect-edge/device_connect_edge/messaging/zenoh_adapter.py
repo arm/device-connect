@@ -16,6 +16,7 @@ Key characteristics:
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -120,6 +121,9 @@ class ZenohAdapter(MessagingClient):
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="zenoh")
         self._subscriptions: Dict[str, Dict[str, Any]] = {}
         self._pending_queries: Dict[str, Any] = {}  # reply_id -> Query object
+        # All current accesses are in the asyncio loop, but the lock is
+        # defensive in case the Zenoh callback model changes.
+        self._pending_queries_lock = threading.Lock()
         self._reconnect_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._disconnect_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._d2d_mode = False
@@ -301,7 +305,8 @@ class ZenohAdapter(MessagingClient):
         # Intercept query replies — these are responses to queryable hits
         if key.startswith(_QUERY_REPLY_PREFIX):
             query_id = key[len(_QUERY_REPLY_PREFIX):]
-            query = self._pending_queries.pop(query_id, None)
+            with self._pending_queries_lock:
+                query = self._pending_queries.pop(query_id, None)
             if query is not None:
                 try:
                     # Reply and drop must run in the Zenoh executor so
@@ -416,7 +421,8 @@ class ZenohAdapter(MessagingClient):
                                 await callback(bytes(obj.payload), None)
                             elif msg_type == "query":
                                 query_id = uuid.uuid4().hex
-                                self._pending_queries[query_id] = obj
+                                with self._pending_queries_lock:
+                                    self._pending_queries[query_id] = obj
                                 reply_subject = f"{_QUERY_REPLY_PREFIX}{query_id}"
                                 payload = bytes(obj.payload) if obj.payload else b""
                                 await callback(payload, reply_subject)
@@ -517,7 +523,8 @@ class ZenohAdapter(MessagingClient):
                                 await callback(bytes(obj.payload), matched_key, None)
                             elif msg_type == "query":
                                 query_id = uuid.uuid4().hex
-                                self._pending_queries[query_id] = obj
+                                with self._pending_queries_lock:
+                                    self._pending_queries[query_id] = obj
                                 reply_subject = f"{_QUERY_REPLY_PREFIX}{query_id}"
                                 matched_key = str(obj.key_expr)
                                 payload = bytes(obj.payload) if obj.payload else b""
@@ -738,7 +745,8 @@ class ZenohAdapter(MessagingClient):
                     pass
 
         self._subscriptions.clear()
-        self._pending_queries.clear()
+        with self._pending_queries_lock:
+            self._pending_queries.clear()
 
         # Phase 3: Close session
         if self._session is not None and not self._session.is_closed():

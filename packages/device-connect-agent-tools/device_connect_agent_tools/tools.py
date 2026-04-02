@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # so the agent can skip get_device_functions() and go straight to invoke.
 # Set to 0 to disable auto-expansion.
 try:
-    SMALL_FLEET_THRESHOLD = int(os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD", "5"))
+    SMALL_FLEET_THRESHOLD = min(max(int(os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD", "5")), 0), 100)
 except (ValueError, TypeError):
     logger.warning(
         "Invalid DEVICE_CONNECT_SMALL_FLEET_THRESHOLD value %r, defaulting to 5",

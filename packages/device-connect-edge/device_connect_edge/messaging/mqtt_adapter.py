@@ -209,8 +209,9 @@ class MQTTAdapter(MessagingClient):
                 # Check if it's a reply to a request
                 if topic.startswith("_reply/"):
                     request_id = topic.split("/")[1]
-                    if request_id in self._request_futures:
-                        self._request_futures[request_id].set_result(payload)
+                    fut = self._request_futures.get(request_id)
+                    if fut is not None and not fut.done():
+                        fut.set_result(payload)
                     continue
 
                 # Dispatch to subscriber
@@ -447,8 +448,7 @@ class MQTTAdapter(MessagingClient):
         finally:
             # Cleanup
             await self._client.unsubscribe(reply_topic)
-            if request_id in self._request_futures:
-                del self._request_futures[request_id]
+            self._request_futures.pop(request_id, None)
 
     async def close(self) -> None:
         """Close connection to MQTT broker."""

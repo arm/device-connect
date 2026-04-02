@@ -40,7 +40,15 @@ def extract_status(d: dict, default: str = "unknown") -> str:
 
 
 def fuzzy_filter_by_type(devices: list[dict], device_type: str) -> list[dict]:
-    """Filter devices by type using fuzzy matching (case-insensitive, ignores _/-)."""
+    """Filter devices whose type contains the given query as a substring.
+
+    Both the query and each device's ``device_type`` are normalised by
+    lower-casing and stripping ``_`` and ``-`` characters before the
+    substring check.  The query must be a substring of the device type,
+    not the other way around (e.g. ``"sensor"`` matches
+    ``"temperature_sensor"`` but ``"temperature_sensor"`` does not match
+    ``"sensor"``).
+    """
     t = device_type.lower().replace("_", "").replace("-", "")
     return [
         d for d in devices
