@@ -903,10 +903,16 @@ class DeviceRuntime:
 
     async def enqueue_event(self, event: str, payload: dict) -> None:
         """Enqueue a JSON-RPC notification for a custom event."""
-        #TODO: Modify to put events that are about to be emitted through a check for local recipes, that may or may not stop/modify the event before it leaves the device.
+        # Future: event pre-processing by local recipes before emission is a
+        # separate feature and not part of this code path.
 
         note = {"jsonrpc": "2.0", "method": event, "params": payload}
         subj = f"device-connect.{self.tenant}.{self.device_id}.event.{event}"
+        # Concurrency note: no TOCTOU race exists between get_nowait() and
+        # put_nowait() below — asyncio is single-threaded and there are no
+        # ``await`` points between them, so no other coroutine can interleave.
+        # The defensive try/except QueueFull is retained for clarity, not
+        # because the condition can actually occur.
         try:
             self._event_queue.put_nowait((subj, json.dumps(note).encode()))
         except asyncio.QueueFull:
@@ -1346,7 +1352,10 @@ class DeviceRuntime:
         if self._d2d_mode:
             from device_connect_edge.discovery import PresenceAnnouncer, PresenceCollector
             caps = self._driver.capabilities if self._driver else self.capabilities
-            # Create announcer first so the callback closure can reference it.
+            # Ordering contract: create announcer FIRST so the collector's
+            # on_new_peer lambda can safely reference self._d2d_announcer
+            # (late-binding).  The lambda won't fire until collector.start()
+            # is called below, by which point the announcer is fully initialized.
             self._d2d_announcer = PresenceAnnouncer(
                 self.messaging,
                 device_id=self.device_id,

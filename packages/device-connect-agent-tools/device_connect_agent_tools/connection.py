@@ -121,6 +121,10 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     status = raw.get("status") or {}
     caps = raw.get("capabilities") or {}
 
+    # NOTE: The raw ``capabilities`` dict is intentionally NOT included in
+    # the flattened output.  ``functions`` and ``events`` are extracted to
+    # the top level for direct access.  Including both would duplicate data
+    # and waste LLM context tokens.  (Tried and reverted — do not re-add.)
     return {
         "device_id": raw.get("device_id"),
         "device_type": raw.get("device_type") or identity.get("device_type"),

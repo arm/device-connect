@@ -145,13 +145,18 @@ class MCPBridgeServer:
 
     async def _list_devices(
         self,
-        device_type: str | None = None,
         location: str | None = None,
     ) -> list[dict]:
-        """List devices from registry and flatten to canonical shape."""
-        raw = await self._registry.list_devices(
-            device_type=device_type, location=location,
-        )
+        """List devices from registry and flatten to canonical shape.
+
+        Only *location* is passed server-side (exact-match filter).
+        ``device_type`` filtering is done client-side via
+        :func:`fuzzy_filter_by_type` — the provider's strict filter can
+        reject valid fuzzy matches (e.g. "environmentsensor" vs
+        "environment_sensor").  See ``tools.py:list_devices`` for the
+        same pattern and rationale.
+        """
+        raw = await self._registry.list_devices(location=location)
         return [flatten_device(d) for d in raw]
 
     async def _get_device(self, device_id: str) -> dict | None:
@@ -216,12 +221,10 @@ class MCPBridgeServer:
             limit: int = 20,
         ) -> str:
             """Paginated, filterable device list."""
-            devices = await self._list_devices(
-                device_type=device_type or None,
-                location=location or None,
-            )
+            devices = await self._list_devices(location=location or None)
 
-            # Client-side fuzzy type filter (server may not support fuzzy matching)
+            # Client-side fuzzy type filter — sole type filter; provider-level
+            # type filtering is intentionally skipped (see _list_devices docstring).
             if device_type:
                 devices = fuzzy_filter_by_type(devices, device_type)
 

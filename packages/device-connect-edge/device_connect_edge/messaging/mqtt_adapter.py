@@ -260,6 +260,10 @@ class MQTTAdapter(MessagingClient):
                 return False  # # must be last
             pattern_parts = pattern_parts[:hash_idx]
             topic_parts = topic_parts[:hash_idx]
+            # Truncation is correct: trim both arrays to the prefix before #,
+            # then the loop only checks prefix equality.  # implicitly matches
+            # all remaining topic levels.  The final length guard uses the
+            # original ``pattern`` (still contains #), so it skips correctly.
 
         if len(topic_parts) < len(pattern_parts):
             return False
