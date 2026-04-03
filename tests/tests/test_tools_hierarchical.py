@@ -58,9 +58,23 @@ async def test_describe_fleet_auto_expand_small(device_spawner, messaging_url):
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        # With threshold high enough, devices should be auto-included
-        with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
-            result = await asyncio.to_thread(tools_mod.describe_fleet)
+        # D2D discovery is eventually consistent — poll until peer visible
+        deadline = time.monotonic() + DISCOVERY_TIMEOUT
+        result = None
+        while True:
+            with patch.object(tools_mod, "SMALL_FLEET_THRESHOLD", 100):
+                result = await asyncio.to_thread(tools_mod.describe_fleet)
+            if (
+                "devices" in result
+                and any(
+                    d["device_id"] == "itest-fleet-expand-cam"
+                    for d in result.get("devices", [])
+                )
+            ):
+                break
+            if time.monotonic() > deadline:
+                break
+            await asyncio.sleep(0.25)
         assert "devices" in result, "Small fleet should auto-include devices"
         assert "hint" in result
         # Each device should have full function schemas
@@ -428,8 +442,7 @@ async def test_describe_fleet_function_count_matches_actual(device_spawner, mess
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         conn = get_connection()
-        if conn._provider and hasattr(conn._provider, "invalidate_cache"):
-            conn._provider.invalidate_cache()
+        conn.invalidate_cache()
 
         deadline = time.monotonic() + DISCOVERY_TIMEOUT
         fleet = None

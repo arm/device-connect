@@ -2,10 +2,12 @@
 from device_connect_agent_tools._normalize import (
     _normalize_events,
     _normalize_functions,
+    aggregate_fleet,
     compact_device,
     extract_status,
     full_device,
     fuzzy_filter_by_type,
+    group_devices,
 )
 
 
@@ -212,3 +214,132 @@ class TestExtractStatus:
 
     def test_empty_status_dict(self):
         assert extract_status({"status": {}}) == "unknown"
+
+
+# ── aggregate_fleet ───────────────────────────────────────────
+
+
+class TestAggregateFleet:
+
+    def test_empty_list(self):
+        result = aggregate_fleet([])
+        assert result["total_devices"] == 0
+        assert result["total_functions"] == 0
+        assert result["by_type"] == {}
+        assert result["by_location"] == {}
+
+    def test_single_device(self):
+        devices = [{"device_type": "camera", "location": "lobby", "functions": [{"name": "snap"}]}]
+        result = aggregate_fleet(devices)
+        assert result["total_devices"] == 1
+        assert result["total_functions"] == 1
+        assert result["by_type"] == {"camera": {"count": 1, "locations": ["lobby"]}}
+        assert result["by_location"] == {"lobby": {"count": 1, "types": ["camera"]}}
+
+    def test_multiple_devices(self):
+        devices = [
+            {"device_type": "camera", "location": "lobby", "functions": [{"name": "snap"}]},
+            {"device_type": "camera", "location": "lab", "functions": [{"name": "snap"}, {"name": "zoom"}]},
+            {"device_type": "robot", "location": "lab", "functions": [{"name": "move"}]},
+        ]
+        result = aggregate_fleet(devices)
+        assert result["total_devices"] == 3
+        assert result["total_functions"] == 4
+        assert result["by_type"]["camera"]["count"] == 2
+        assert sorted(result["by_type"]["camera"]["locations"]) == ["lab", "lobby"]
+        assert result["by_type"]["robot"]["count"] == 1
+        assert result["by_location"]["lab"]["count"] == 2
+        assert sorted(result["by_location"]["lab"]["types"]) == ["camera", "robot"]
+
+    def test_none_type_becomes_unknown(self):
+        devices = [{"device_type": None, "location": "lobby", "functions": []}]
+        result = aggregate_fleet(devices)
+        assert "unknown" in result["by_type"]
+
+    def test_none_location_becomes_unknown(self):
+        devices = [{"device_type": "camera", "location": None, "functions": []}]
+        result = aggregate_fleet(devices)
+        assert "unknown" in result["by_location"]
+
+    def test_missing_type_and_location(self):
+        devices = [{"functions": []}]
+        result = aggregate_fleet(devices)
+        assert "unknown" in result["by_type"]
+        assert "unknown" in result["by_location"]
+
+    def test_function_counting(self):
+        devices = [
+            {"device_type": "a", "location": "x", "functions": ["f1", "f2"]},
+            {"device_type": "b", "location": "y", "functions": ["f3"]},
+        ]
+        result = aggregate_fleet(devices)
+        assert result["total_functions"] == 3
+
+    def test_keys_are_sorted(self):
+        devices = [
+            {"device_type": "zebra", "location": "zoo", "functions": []},
+            {"device_type": "ant", "location": "farm", "functions": []},
+        ]
+        result = aggregate_fleet(devices)
+        assert list(result["by_type"].keys()) == ["ant", "zebra"]
+        assert list(result["by_location"].keys()) == ["farm", "zoo"]
+
+
+# ── group_devices ─────────────────────────────────────────────
+
+
+class TestGroupDevices:
+
+    DEVICES = [
+        {"device_id": "cam-1", "device_type": "camera", "location": "lobby",
+         "functions": [{"name": "snap"}], "status": {"availability": "idle"}},
+        {"device_id": "cam-2", "device_type": "camera", "location": "lab",
+         "functions": [{"name": "snap"}], "status": {"availability": "busy"}},
+        {"device_id": "robot-1", "device_type": "robot", "location": "lab",
+         "functions": [{"name": "move"}], "status": {"state": "online"}},
+    ]
+
+    def test_group_by_type(self):
+        result = group_devices(self.DEVICES, "device_type", expand=False)
+        assert result["total"] == 3
+        assert "camera" in result["groups"]
+        assert "robot" in result["groups"]
+        assert len(result["groups"]["camera"]) == 2
+        assert len(result["groups"]["robot"]) == 1
+
+    def test_group_by_location(self):
+        result = group_devices(self.DEVICES, "location", expand=False)
+        assert "lobby" in result["groups"]
+        assert "lab" in result["groups"]
+        assert len(result["groups"]["lab"]) == 2
+
+    def test_none_field_becomes_unknown(self):
+        devices = [{"device_id": "x", "device_type": None, "functions": []}]
+        result = group_devices(devices, "device_type", expand=False)
+        assert "unknown" in result["groups"]
+
+    def test_expand_true_includes_functions(self):
+        result = group_devices(self.DEVICES, "device_type", expand=True)
+        cam = result["groups"]["camera"][0]
+        assert "functions" in cam
+
+    def test_expand_false_excludes_functions(self):
+        result = group_devices(self.DEVICES, "device_type", expand=False)
+        cam = result["groups"]["camera"][0]
+        assert "functions" not in cam
+        assert "function_count" in cam
+
+    def test_empty_list(self):
+        result = group_devices([], "device_type", expand=False)
+        assert result["total"] == 0
+        assert result["groups"] == {}
+
+    def test_each_entry_has_status(self):
+        result = group_devices(self.DEVICES, "device_type", expand=False)
+        for group_entries in result["groups"].values():
+            for entry in group_entries:
+                assert "status" in entry
+
+    def test_groups_are_sorted(self):
+        result = group_devices(self.DEVICES, "device_type", expand=False)
+        assert list(result["groups"].keys()) == ["camera", "robot"]

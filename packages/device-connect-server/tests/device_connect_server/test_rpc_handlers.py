@@ -273,6 +273,15 @@ class TestRegisterHandler:
         assert response["error"]["code"] == -32602
         mock_registry.register.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_register_no_reply_returns_silently(self, messaging, mock_registry):
+        handler = _make_register_handler(TENANT, messaging)
+        data = _rpc_request("registerDevice", VALID_REGISTER_PARAMS)
+        await handler(data, None)
+
+        messaging.publish.assert_not_called()
+        mock_registry.register.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # TestListDevicesHandler
@@ -344,6 +353,15 @@ class TestListDevicesHandler:
 
         response = json.loads(messaging.publish.call_args[0][1])
         assert response["error"]["code"] == -32000
+
+    @pytest.mark.asyncio
+    async def test_discovery_no_reply_returns_silently(self, messaging, mock_registry):
+        handler = _make_list_handler(TENANT, messaging)
+        data = _rpc_request("discovery/listDevices", {})
+        await handler(data, None)
+
+        messaging.publish.assert_not_called()
+        mock_registry.list_devices.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

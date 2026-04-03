@@ -28,7 +28,7 @@ SAMPLE_DEVICES = [
         "device_id": "camera-001",
         "device_type": "camera",
         "location": "lab-A",
-        "base": {
+        "capabilities": {
             "functions": [{"name": "capture_image", "description": "Capture image"}],
             "events": [{"name": "state_change_detected"}],
         },
@@ -37,7 +37,7 @@ SAMPLE_DEVICES = [
         "device_id": "robot-001",
         "device_type": "robot",
         "location": "lab-B",
-        "base": {
+        "capabilities": {
             "functions": [{"name": "dispatch_robot"}],
             "events": [{"name": "cleaning_finished"}],
         },

@@ -241,7 +241,7 @@ class RegistryClient:
             )
             return result.get("device")
         except Exception:
-            self._logger.debug("get_device RPC failed for %s", device_id)
+            self._logger.debug("get_device RPC failed for %s", device_id, exc_info=True)
             return None
 
     async def get_device_functions(
@@ -267,12 +267,8 @@ class RegistryClient:
         if not device:
             return []
 
-        # Functions can be in base or static depending on registration format
-        base = device.get("base", {})
-        static = device.get("static", {})
-
-        functions = base.get("functions", []) or static.get("functions", [])
-        return functions
+        caps = device.get("capabilities", {})
+        return caps.get("functions", [])
 
     async def get_device_events(
         self,
@@ -297,12 +293,8 @@ class RegistryClient:
         if not device:
             return []
 
-        # Events can be in base or static depending on registration format
-        base = device.get("base", {})
-        static = device.get("static", {})
-
-        events = base.get("events", []) or static.get("events", [])
-        return events
+        caps = device.get("capabilities", {})
+        return caps.get("events", [])
 
     async def wait_for_device(
         self,
