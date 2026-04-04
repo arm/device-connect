@@ -326,6 +326,7 @@ class DeviceRuntime:
         self.capabilities = caps_obj
         self.identity = identity_payload
         self.status = status_payload
+        self._explicit_device_id = device_id is not None
         self.device_id = device_id or f"device-{uuid.uuid4().hex[:8]}"
         if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$', self.device_id):
             raise ValueError(
@@ -587,8 +588,9 @@ class DeviceRuntime:
         # Try to parse as JSON first
         try:
             creds = json.loads(content)
-            # Validate device_id matches (skip if allow_insecure)
-            if not self.allow_insecure:
+            # Validate device_id matches (skip if allow_insecure or
+            # device_id will be auto-detected from this file)
+            if not self.allow_insecure and self._explicit_device_id:
                 self._validate_device_id_from_creds(creds)
             return creds
         except json.JSONDecodeError:
