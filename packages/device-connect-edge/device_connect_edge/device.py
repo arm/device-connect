@@ -405,6 +405,12 @@ class DeviceRuntime:
                 self._setup_logger()
                 self._logger.info(f"Using device_id from credentials file: {self.device_id}")
 
+            # Override tenant from credentials file if caller used the default
+            creds_tenant = creds.get("tenant")
+            if creds_tenant and tenant == "default":
+                self.tenant = creds_tenant
+                self._logger.info(f"Using tenant from credentials file: {self.tenant}")
+
         # ===== Messaging Configuration =====
 
         # D2D mode: no infrastructure needed (Zenoh multicast scouting)

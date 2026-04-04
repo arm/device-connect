@@ -35,7 +35,7 @@ This is the recommended way to run the portal. It starts NATS, etcd, the registr
 cd packages/device-connect-server
 
 # 1. Start the full stack
-docker compose -f infra/docker-compose-multitenant.yml up -d
+docker compose -f infra/docker-compose-multitenant.yml up -d --build portal
 
 # 2. Open the portal
 open http://localhost:8080

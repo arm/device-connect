@@ -25,6 +25,7 @@
           {% if user.role == 'admin' %}
           <a href="/admin" class="text-sm {% if nav == 'admin' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Dashboard</a>
           <a href="/admin/health" class="text-sm {% if nav == 'health' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Health</a>
+          <a href="/admin/setup" class="text-sm {% if nav == 'setup' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Setup</a>
           {% else %}
           <a href="/dashboard" class="text-sm {% if nav == 'dashboard' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Dashboard</a>
           <a href="/devices" class="text-sm {% if nav == 'devices' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">My Devices</a>

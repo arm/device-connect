@@ -60,9 +60,13 @@
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <h3 class="text-sm font-semibold text-gray-900 mb-4">Connection Instructions</h3>
     <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-xs">export NATS_CREDENTIALS_FILE=./{{ device.device_id }}.creds.json
-export NATS_URL=nats://{{ nats_host }}:{{ nats_port }}
-export DEVICE_CONNECT_ALLOW_INSECURE=true
-python your_device.py</pre>
+export NATS_URL=nats://{{ public_host }}:{{ nats_port }}
+python my_device.py</pre>
+    <a href="/api/devices/starter-script"
+       class="mt-3 inline-flex items-center text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+      <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Download starter script (my_device.py)
+    </a>
 
     {% if cred_filename %}
     <a href="/api/devices/{{ device.device_id }}/creds"

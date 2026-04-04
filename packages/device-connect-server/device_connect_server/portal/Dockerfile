@@ -1,9 +1,14 @@
 FROM python:3.11-slim
 
-# Install nsc and nats CLI
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl unzip docker.io \
+    curl unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI (for SIGHUP to NATS container)
+RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz -o /tmp/docker.tgz \
+    && tar xzf /tmp/docker.tgz --strip-components=1 -C /usr/local/bin docker/docker \
+    && rm /tmp/docker.tgz
 
 # Install nsc
 RUN curl -fsSL https://github.com/nats-io/nsc/releases/download/v2.12.2/nsc-linux-amd64.zip -o /tmp/nsc.zip \
