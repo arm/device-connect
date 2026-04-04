@@ -39,6 +39,7 @@ services:
     container_name: dc-etcd
     environment:
       ETCD_NAME: etcd0
+      ETCD_DATA_DIR: /etcd-data
       ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
       ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
       ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
@@ -46,6 +47,8 @@ services:
       ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
       ETCD_INITIAL_CLUSTER_STATE: new
       ETCD_INITIAL_CLUSTER_TOKEN: dc-cluster
+    volumes:
+      - etcd-data:/etcd-data
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 5s
@@ -77,6 +80,39 @@ services:
     networks:
       - dc-net
     restart: unless-stopped
+
+  portal:
+    build:
+      context: ../../..
+      dockerfile: packages/device-connect-server/device_connect_server/portal/Dockerfile
+    container_name: dc-portal
+    ports:
+      - "8080:8080"
+    environment:
+      NATS_HOST: ${NATS_HOST:-nats}
+      NATS_PORT: "4222"
+      NATS_CONTAINER: dc-nats
+      ETCD_HOST: etcd
+      ETCD_PORT: "2379"
+      ADMIN_USER: ${ADMIN_USER:-admin}
+      ADMIN_PASS: ${ADMIN_PASS:-qwe123}
+      SECURITY_INFRA_DIR: /app/security_infra
+      CREDS_DIR: /root/.device-connect/credentials
+    volumes:
+      - ~/.device-connect/credentials:/root/.device-connect/credentials
+      - ../security_infra:/app/security_infra
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      nats:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    networks:
+      - dc-net
+    restart: unless-stopped
+
+volumes:
+  etcd-data:
 
 networks:
   dc-net:

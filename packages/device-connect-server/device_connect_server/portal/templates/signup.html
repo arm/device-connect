@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up — Device Connect Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body class="h-full flex items-center justify-center">
+  <div class="w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-12 h-12 bg-indigo-600 rounded-xl mb-4">
+        <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <h1 class="text-2xl font-bold text-gray-900">Device Connect</h1>
+      <p class="text-sm text-gray-500 mt-1">Create your account</p>
+    </div>
+
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+      <h2 class="text-lg font-semibold text-gray-900 mb-1">Sign up</h2>
+      <p class="text-sm text-gray-500 mb-4">You'll get your own isolated tenant namespace</p>
+
+      <div id="error-msg">
+        {% if error %}
+        <div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{{ error }}</div>
+        {% endif %}
+      </div>
+
+      <form method="POST" action="/signup"
+            hx-post="/signup" hx-target="#error-msg" hx-swap="innerHTML">
+        <div class="space-y-4">
+          <div>
+            <label for="username" class="block text-sm font-medium text-gray-700 mb-1">Username</label>
+            <input type="text" name="username" id="username" required autofocus
+                   pattern="[a-zA-Z0-9_-]+"
+                   title="Letters, numbers, hyphens, and underscores only"
+                   class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+            <p class="text-xs text-gray-400 mt-1">This will also be your tenant name</p>
+          </div>
+          <div>
+            <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <input type="password" name="password" id="password" required minlength="4"
+                   class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+          </div>
+          <div>
+            <label for="confirm" class="block text-sm font-medium text-gray-700 mb-1">Confirm password</label>
+            <input type="password" name="confirm" id="confirm" required minlength="4"
+                   class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+          </div>
+          <button type="submit"
+                  class="w-full bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors">
+            Create account
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <p class="text-center text-sm text-gray-500 mt-4">
+      Already have an account?
+      <a href="/login" class="text-indigo-600 hover:text-indigo-700 font-medium">Sign in</a>
+    </p>
+  </div>
+</body>
+</html>

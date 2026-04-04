@@ -1,0 +1,26 @@
+/* Portal custom styles */
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Smooth htmx transitions */
+.htmx-settling {
+  opacity: 0.8;
+}
+
+.htmx-swapping {
+  opacity: 0.5;
+  transition: opacity 0.15s ease-out;
+}
+
+/* Code blocks */
+.code-block {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 0.8125rem;
+}

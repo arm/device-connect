@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Setup{% endblock %}
+{% block content %}
+<div class="max-w-lg mx-auto">
+  <div class="mb-8 text-center">
+    <div class="inline-flex items-center justify-center w-12 h-12 bg-indigo-100 rounded-xl mb-4">
+      <svg class="w-7 h-7 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+    </div>
+    <h1 class="text-2xl font-bold text-gray-900">Platform Setup</h1>
+    <p class="text-sm text-gray-500 mt-1">One-time bootstrap of the NATS JWT infrastructure</p>
+  </div>
+
+  {% if bootstrapped %}
+  <div class="bg-green-50 border border-green-200 rounded-xl p-5 text-center">
+    <svg class="w-8 h-8 text-green-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <p class="text-sm font-semibold text-green-800">Platform is already bootstrapped</p>
+    <a href="/admin" class="text-sm text-green-700 hover:underline mt-2 inline-block">Back to dashboard</a>
+  </div>
+  {% else %}
+  <div class="bg-white rounded-xl border border-gray-200 p-6">
+    <div id="setup-error"></div>
+
+    <form hx-post="/api/admin/setup" hx-target="#setup-result" hx-swap="innerHTML" hx-indicator="#setup-spinner">
+      <div class="space-y-4">
+        <div>
+          <label for="nats_host" class="block text-sm font-medium text-gray-700 mb-1">NATS Server Host</label>
+          <input type="text" name="nats_host" id="nats_host" required
+                 value="{{ nats_host }}"
+                 placeholder="e.g., dc.example.com or 192.168.1.100"
+                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+          <p class="text-xs text-gray-400 mt-1">Public hostname or IP that devices will use to connect</p>
+        </div>
+        <div>
+          <label for="nats_port" class="block text-sm font-medium text-gray-700 mb-1">NATS Port</label>
+          <input type="text" name="nats_port" id="nats_port" value="4222"
+                 class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+        </div>
+        <button type="submit"
+                class="w-full bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors">
+          Bootstrap Platform
+        </button>
+        <span id="setup-spinner" class="htmx-indicator text-sm text-gray-400">Setting up infrastructure...</span>
+      </div>
+    </form>
+  </div>
+
+  <div id="setup-result" class="mt-6"></div>
+  {% endif %}
+</div>
+{% endblock %}

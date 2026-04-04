@@ -1,0 +1,13 @@
+<div class="px-5 py-4 border-b border-gray-100 hover:bg-gray-50 flex items-center justify-between bg-green-50" style="transition: background-color 2s ease-out">
+  <div>
+    <div class="text-sm font-medium text-gray-900">{{ cred.device_id }}</div>
+    <div class="text-xs text-gray-400 mt-0.5">{{ cred.filename }}</div>
+  </div>
+  <div class="flex items-center gap-3">
+    <a href="/api/devices/{{ cred.device_id }}/creds"
+       class="inline-flex items-center px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors">
+      <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Download
+    </a>
+  </div>
+</div>

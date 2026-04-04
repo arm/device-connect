@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard{% endblock %}
+{% block content %}
+<div class="mb-8 flex items-center justify-between">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
+    <p class="text-sm text-gray-500 mt-1">Manage tenants, check health, and configure the platform</p>
+  </div>
+  <div class="flex gap-3">
+    {% if bootstrapped %}
+    <button hx-post="/api/admin/nats/reload" hx-target="#status-msg" hx-swap="innerHTML"
+            class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+      Reload NATS
+    </button>
+    {% endif %}
+    <a href="/admin/health"
+       class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      Health Check
+    </a>
+  </div>
+</div>
+
+<div id="status-msg" class="mb-4"></div>
+
+<!-- System status -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Bootstrap Status</div>
+    {% if bootstrapped %}
+    <div class="flex items-center mt-1">
+      <span class="w-2.5 h-2.5 bg-green-500 rounded-full mr-2"></span>
+      <span class="text-sm font-semibold text-green-700">Ready</span>
+    </div>
+    {% else %}
+    <div class="flex items-center mt-1">
+      <span class="w-2.5 h-2.5 bg-yellow-500 rounded-full mr-2"></span>
+      <a href="/admin/setup" class="text-sm font-semibold text-yellow-700 hover:underline">Setup Required</a>
+    </div>
+    {% endif %}
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">NATS Server</div>
+    <div class="text-sm font-semibold text-gray-900 mt-1">{{ nats_host }}:{{ nats_port }}</div>
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Total Tenants</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1">{{ tenant_count }}</div>
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Total Users</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1">{{ user_count }}</div>
+  </div>
+</div>
+
+<!-- Tenants table -->
+<div class="bg-white rounded-xl border border-gray-200">
+  <div class="px-5 py-4 border-b border-gray-200">
+    <h2 class="text-lg font-semibold text-gray-900">Tenants</h2>
+  </div>
+  {% if tenants %}
+  <table class="w-full">
+    <thead>
+      <tr class="text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+        <th class="px-5 py-3">Tenant / User</th>
+        <th class="px-5 py-3">Credentials</th>
+        <th class="px-5 py-3">Live Devices</th>
+        <th class="px-5 py-3">Created</th>
+        <th class="px-5 py-3">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for tenant in tenants %}
+      <tr class="hover:bg-gray-50">
+        <td class="px-5 py-3">
+          <div class="text-sm font-medium text-gray-900">{{ tenant.name }}</div>
+          <div class="text-xs text-gray-400">device-connect.{{ tenant.name }}.&gt;</div>
+        </td>
+        <td class="px-5 py-3 text-sm text-gray-600">{{ tenant.cred_count }}</td>
+        <td class="px-5 py-3">
+          {% if tenant.online > 0 %}
+          <span class="inline-flex items-center text-sm text-green-700">
+            <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 pulse-dot"></span>
+            {{ tenant.online }} / {{ tenant.total }}
+          </span>
+          {% else %}
+          <span class="text-sm text-gray-400">{{ tenant.total }} registered</span>
+          {% endif %}
+        </td>
+        <td class="px-5 py-3 text-sm text-gray-400">{{ tenant.created_at | default("—", true) }}</td>
+        <td class="px-5 py-3">
+          <a href="/admin/tenants/{{ tenant.name }}"
+             class="text-sm text-indigo-600 hover:text-indigo-800 font-medium">View as User</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="px-5 py-8 text-center text-gray-400 text-sm">
+    No tenants yet. Users will appear here when they sign up.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
