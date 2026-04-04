@@ -6,6 +6,10 @@
 #   ./setup_jwt_auth.sh dev     # Development setup (no TLS)
 #   ./setup_jwt_auth.sh prod    # Production setup (TLS enabled)
 #
+# Environment:
+#   DC_NSC_OPERATOR  — Operator name  (default: device-connect-operator)
+#   DC_NSC_ACCOUNT   — Account name   (default: DEVICE_CONNECT)
+#
 # Prerequisites:
 #   - nsc (brew install nsc OR go install github.com/nats-io/nsc/v2@latest)
 #
@@ -18,8 +22,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV="${1:-dev}"
 
-OPERATOR_NAME="fabric-operator"
-ACCOUNT_NAME="FABRIC"
+OPERATOR_NAME="${DC_NSC_OPERATOR:-device-connect-operator}"
+ACCOUNT_NAME="${DC_NSC_ACCOUNT:-DEVICE_CONNECT}"
 SYS_ACCOUNT_NAME="SYS"
 
 NSC_HOME="${SCRIPT_DIR}/.nsc"
@@ -28,6 +32,7 @@ export NSC_HOME
 
 echo "==> Setting up NATS JWT auth (env=${ENV})"
 echo "    NSC_HOME=${NSC_HOME}"
+echo "    Operator=${OPERATOR_NAME}  Account=${ACCOUNT_NAME}"
 
 # Clean previous state
 rm -rf "${NSC_HOME}"
@@ -41,7 +46,7 @@ export XDG_CONFIG_HOME="${NSC_HOME}/config"
 echo "==> Creating operator: ${OPERATOR_NAME}"
 nsc add operator "${OPERATOR_NAME}" --sys
 
-# Create the main FABRIC account
+# Create the main account
 echo "==> Creating account: ${ACCOUNT_NAME}"
 nsc add account "${ACCOUNT_NAME}"
 
@@ -49,7 +54,7 @@ nsc add account "${ACCOUNT_NAME}"
 echo "==> Adding signing key to ${ACCOUNT_NAME}"
 nsc edit account "${ACCOUNT_NAME}" --sk generate
 
-# Allow all subjects for the FABRIC account
+# Allow all subjects for the account (user-level JWTs restrict per-team)
 nsc edit account "${ACCOUNT_NAME}" \
   --js-mem-storage -1 \
   --js-disk-storage -1 \
@@ -63,10 +68,11 @@ rm -f "${OUTPUT_CONF}"
 
 nsc generate config --mem-resolver --config-file "${OUTPUT_CONF}"
 
-# Append monitoring and listen directives
+# Append monitoring, listen, and remote-access directives
 cat >> "${OUTPUT_CONF}" <<EOF
 
-# Fabric additions
+# Device Connect additions
+listen: 0.0.0.0:4222
 http_port: 8222
 
 EOF
