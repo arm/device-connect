@@ -22,7 +22,7 @@ async def dashboard_page(request: web.Request):
     except Exception:
         pass
 
-    online_count = sum(1 for d in live_devices if d.get("status") == "online")
+    online_count = sum(1 for d in live_devices if d.get("status") == "available")
 
     return aiohttp_jinja2.render_template("dashboard.html", request, {
         "user": user,

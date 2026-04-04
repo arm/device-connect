@@ -100,10 +100,12 @@ def create_app() -> web.Application:
     app = web.Application(middlewares=[auth_middleware, admin_middleware])
 
     # Setup Jinja2 templates
-    aiohttp_jinja2.setup(
+    import json as _json
+    env = aiohttp_jinja2.setup(
         app,
         loader=jinja2.FileSystemLoader(str(TEMPLATE_DIR)),
     )
+    env.filters["tojson_pretty"] = lambda v: _json.dumps(v, indent=2, default=str)
 
     # Static files
     app.router.add_static("/static", STATIC_DIR, name="static")

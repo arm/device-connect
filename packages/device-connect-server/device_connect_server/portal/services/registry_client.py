@@ -30,13 +30,17 @@ def list_live_devices(tenant: str) -> list[dict]:
             if isinstance(raw, bytes):
                 raw = raw.decode()
             data = json.loads(raw)
+            status = data.get("status") or {}
+            identity = data.get("identity") or {}
+            reg = data.get("registry") or {}
             devices.append({
                 "device_id": data.get("device_id", "unknown"),
-                "device_type": data.get("device_type", "unknown"),
-                "status": data.get("status", "unknown"),
-                "location": data.get("location", ""),
-                "last_seen": data.get("last_heartbeat", data.get("registered_at", "")),
-                "capabilities": data.get("capabilities", []),
+                "device_type": identity.get("device_type", "unknown"),
+                "status": status.get("availability", "unknown"),
+                "location": status.get("location", ""),
+                "last_seen": reg.get("registered_at", ""),
+                "capabilities": data.get("capabilities", {}),
+                "_raw": data,
             })
         except (json.JSONDecodeError, TypeError):
             continue
@@ -78,7 +82,8 @@ def count_all_devices() -> dict[str, dict]:
             if tenant not in counts:
                 counts[tenant] = {"total": 0, "online": 0}
             counts[tenant]["total"] += 1
-            if data.get("status") == "online":
+            status = data.get("status") or {}
+            if status.get("availability") == "available":
                 counts[tenant]["online"] += 1
         except (json.JSONDecodeError, TypeError):
             continue
