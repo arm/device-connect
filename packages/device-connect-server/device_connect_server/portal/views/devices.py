@@ -11,8 +11,14 @@ def setup_routes(app: web.Application):
     app.router.add_get("/devices", devices_page)
     app.router.add_get("/devices/{name}", device_detail_page)
     app.router.add_post("/api/devices", create_device)
+    app.router.add_get("/api/devices/starter-script", download_starter_script)
     app.router.add_get("/api/devices/{name}/creds", download_credential)
     app.router.add_get("/api/devices/bundle", download_bundle)
+
+
+def _public_host(request: web.Request) -> str:
+    """Extract the public hostname/IP from the request (strip port)."""
+    return request.host.rsplit(":", 1)[0]
 
 
 async def devices_page(request: web.Request):
@@ -25,7 +31,7 @@ async def devices_page(request: web.Request):
         "nav": "devices",
         "tenant": tenant,
         "credentials": creds,
-        "nats_host": config.NATS_HOST,
+        "public_host": _public_host(request),
         "nats_port": config.NATS_PORT,
         "readonly": False,
     })
@@ -63,7 +69,7 @@ async def device_detail_page(request: web.Request):
         "nav": "devices",
         "device": device,
         "cred_filename": cred_file.name if cred_file else None,
-        "nats_host": config.NATS_HOST,
+        "public_host": _public_host(request),
         "nats_port": config.NATS_PORT,
     })
 
@@ -143,5 +149,116 @@ async def download_bundle(request: web.Request):
         content_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{tenant}-credentials.zip"',
+        },
+    )
+
+
+STARTER_SCRIPT = '''\
+#!/usr/bin/env python3
+"""Device Connect — starter device script.
+
+Usage:
+    export NATS_CREDENTIALS_FILE=./your-device.creds.json
+    export NATS_URL=nats://your-server:4222
+    python my_device.py
+
+The device ID and tenant are read automatically from the credentials file.
+"""
+
+import asyncio
+import logging
+import signal
+
+from device_connect_edge import DeviceRuntime
+from device_connect_edge.drivers import DeviceDriver, rpc, periodic
+from device_connect_edge.types import DeviceIdentity, DeviceStatus
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)-28s  %(levelname)-7s  %(message)s",
+)
+log = logging.getLogger("my-device")
+
+
+class MyDeviceDriver(DeviceDriver):
+    """Replace with your own device logic."""
+
+    device_type = "my_device"
+
+    @property
+    def identity(self) -> DeviceIdentity:
+        return DeviceIdentity(
+            device_type="my_device",
+            manufacturer="My Company",
+            model="v1",
+            firmware_version="0.1.0",
+            description="My custom device",
+        )
+
+    @property
+    def status(self) -> DeviceStatus:
+        return DeviceStatus(location="lab", availability="available")
+
+    # ── RPC functions (uncomment to enable) ──────────────────────
+    #
+    # @rpc()
+    # async def hello(self, name: str = "world") -> dict:
+    #     """Example RPC — callable by agents or other devices."""
+    #     return {"message": f"Hello, {name}!"}
+    #
+    # @rpc()
+    # async def get_status(self) -> dict:
+    #     """Return device status."""
+    #     return {"status": "ok"}
+
+    # ── Periodic events (uncomment to enable) ────────────────────
+    #
+    # @periodic(interval=10.0)
+    # async def heartbeat(self):
+    #     """Emit a heartbeat every 10 seconds."""
+    #     log.info("heartbeat")
+
+    async def connect(self) -> None:
+        log.info("Device connected")
+
+    async def disconnect(self) -> None:
+        log.info("Device disconnecting")
+
+
+async def run():
+    driver = MyDeviceDriver()
+
+    # device_id and tenant are auto-detected from NATS_CREDENTIALS_FILE
+    device = DeviceRuntime(driver=driver)
+
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+
+    log.info("Starting device %s …", device.device_id)
+    task = asyncio.create_task(device.run())
+    await stop.wait()
+    await device.stop()
+    if not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
+if __name__ == "__main__":
+    asyncio.run(run())
+'''
+
+
+async def download_starter_script(request: web.Request):
+    """Download a blank starter device script."""
+    return web.Response(
+        text=STARTER_SCRIPT,
+        content_type="text/x-python",
+        headers={
+            "Content-Disposition": 'attachment; filename="my_device.py"',
         },
     )

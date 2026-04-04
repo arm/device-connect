@@ -48,8 +48,15 @@ async def _run_nsc(*args: str) -> str:
 
 
 def is_bootstrapped() -> bool:
-    """Check if the NATS JWT infrastructure has been set up."""
-    return config.NSC_HOME.exists() and (config.NSC_HOME / "nkeys").exists()
+    """Check if the NATS JWT infrastructure has been fully set up.
+
+    Requires both the nsc state AND privileged credentials to exist.
+    """
+    if not config.NSC_HOME.exists() or not (config.NSC_HOME / "nkeys").exists():
+        return False
+    # Also verify privileged creds were generated
+    registry_creds = config.CREDS_DIR / "registry.creds.json"
+    return registry_creds.exists()
 
 
 async def bootstrap(nats_host: str, nats_port: str = "4222") -> dict:
@@ -104,6 +111,9 @@ async def bootstrap(nats_host: str, nats_port: str = "4222") -> dict:
 async def _regenerate_config_unlocked():
     """Regenerate NATS server config from nsc state (caller holds lock)."""
     output_conf = config.SECURITY_INFRA_DIR / "nats-jwt-generated.conf"
+    # nsc won't overwrite existing files, so remove first
+    if output_conf.exists():
+        output_conf.unlink()
     await _run_nsc("generate", "config", "--mem-resolver",
                    "--config-file", str(output_conf))
     # Append listen directives

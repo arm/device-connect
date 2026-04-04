@@ -43,14 +43,21 @@ async def login_submit(request: web.Request):
 
     # Set session and redirect
     redirect_url = "/admin" if user["role"] == "admin" else "/dashboard"
+    if _is_htmx(request):
+        response = web.Response(status=200)
+        response.headers["HX-Redirect"] = redirect_url
+        set_session(response, {
+            "username": user["username"],
+            "role": user["role"],
+            "tenant": user["tenant"],
+        })
+        return response
     response = web.HTTPFound(redirect_url)
     set_session(response, {
         "username": user["username"],
         "role": user["role"],
         "tenant": user["tenant"],
     })
-    if _is_htmx(request):
-        response.headers["HX-Redirect"] = redirect_url
     raise response
 
 
@@ -106,14 +113,21 @@ async def signup_submit(request: web.Request):
             pass  # Tenant creation is best-effort during signup
 
     # Log in
+    if _is_htmx(request):
+        response = web.Response(status=200)
+        response.headers["HX-Redirect"] = "/dashboard"
+        set_session(response, {
+            "username": user["username"],
+            "role": user["role"],
+            "tenant": user["tenant"],
+        })
+        return response
     response = web.HTTPFound("/dashboard")
     set_session(response, {
         "username": user["username"],
         "role": user["role"],
         "tenant": user["tenant"],
     })
-    if _is_htmx(request):
-        response.headers["HX-Redirect"] = "/dashboard"
     raise response
 
 
