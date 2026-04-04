@@ -9,11 +9,12 @@ from .. import config
 from . import credentials
 
 
-def create_bundle(tenant: str) -> bytes:
+def create_bundle(tenant: str, public_host: str = "") -> bytes:
     """Create a zip bundle with all credentials for a tenant.
 
     Returns the zip file as bytes.
     """
+    nats_host = public_host or config.NATS_HOST
     buf = io.BytesIO()
     creds = credentials.list_credentials(tenant=tenant)
 
@@ -29,7 +30,7 @@ def create_bundle(tenant: str) -> bytes:
             f"# Device Connect — Tenant: {tenant}\n"
             f"# Source this file: source tenant-config.env\n\n"
             f"export TENANT={tenant}\n"
-            f"export NATS_URL=nats://{config.NATS_HOST}:{config.NATS_PORT}\n"
+            f"export NATS_URL=nats://{nats_host}:{config.NATS_PORT}\n"
             f"export MESSAGING_BACKEND=nats\n\n"
             f"# Set this to the credentials file for your device:\n"
             f"# export NATS_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
