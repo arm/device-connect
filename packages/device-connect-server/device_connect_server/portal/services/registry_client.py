@@ -2,12 +2,30 @@
 
 import json
 import logging
+import time
 
 from .. import config
 
 logger = logging.getLogger(__name__)
 
 _DEVICES_PREFIX = "/device-connect/"
+
+
+def _format_ts(ts) -> str:
+    """Format a unix timestamp as a relative 'ago' string, or empty if missing."""
+    if not ts:
+        return ""
+    try:
+        delta = int(time.time() - float(ts))
+        if delta < 5:
+            return "just now"
+        if delta < 60:
+            return f"{delta}s ago"
+        if delta < 3600:
+            return f"{delta // 60}m ago"
+        return f"{delta // 3600}h ago"
+    except (ValueError, TypeError):
+        return ""
 
 
 def _etcd_client():
@@ -38,7 +56,7 @@ def list_live_devices(tenant: str) -> list[dict]:
                 "device_type": identity.get("device_type", "unknown"),
                 "status": status.get("availability", "unknown"),
                 "location": status.get("location", ""),
-                "last_seen": reg.get("registered_at", ""),
+                "last_seen": _format_ts(status.get("ts")) or reg.get("registered_at", ""),
                 "capabilities": data.get("capabilities", {}),
                 "_raw": data,
             })
