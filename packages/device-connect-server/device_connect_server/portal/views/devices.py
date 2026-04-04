@@ -170,7 +170,7 @@ import logging
 import signal
 
 from device_connect_edge import DeviceRuntime
-from device_connect_edge.drivers import DeviceDriver, rpc, periodic
+from device_connect_edge.drivers import DeviceDriver, rpc, emit, periodic
 from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
 logging.basicConfig(
@@ -211,12 +211,22 @@ class MyDeviceDriver(DeviceDriver):
     #     """Return device status."""
     #     return {"status": "ok"}
 
-    # ── Periodic events (uncomment to enable) ────────────────────
+    # ── Events (uncomment to enable) ───────────────────────────────
+    #
+    # @emit()
+    # async def measurement_taken(self, value: float, unit: str):
+    #     """Emitted when a new measurement is taken."""
+    #     pass  # framework broadcasts the event automatically
+    #
+    # Then call it from any method:  await self.measurement_taken(value=23.5, unit="C")
+
+    # ── Periodic tasks (uncomment to enable) ─────────────────────
     #
     # @periodic(interval=10.0)
     # async def heartbeat(self):
-    #     """Emit a heartbeat every 10 seconds."""
+    #     """Runs every 10 seconds."""
     #     log.info("heartbeat")
+    #     # await self.measurement_taken(value=23.5, unit="C")  # emit an event
 
     async def connect(self) -> None:
         log.info("Device connected")

@@ -1,14 +1,17 @@
-"""User dashboard with live device polling."""
+"""User dashboard with live device polling and RPC invocation."""
+
+import json
 
 import aiohttp_jinja2
 from aiohttp import web
 
-from ..services import credentials, registry_client
+from ..services import credentials, registry_client, nats_rpc
 
 
 def setup_routes(app: web.Application):
     app.router.add_get("/dashboard", dashboard_page)
     app.router.add_get("/api/devices/live", live_devices_fragment)
+    app.router.add_post("/api/devices/{device_id}/invoke", invoke_device_rpc)
 
 
 async def dashboard_page(request: web.Request):
@@ -53,3 +56,24 @@ async def live_devices_fragment(request: web.Request):
         "devices": devices,
         "user": request.get("user", {}),
     })
+
+
+async def invoke_device_rpc(request: web.Request):
+    """Invoke an RPC function on a device via NATS."""
+    user = request["user"]
+    tenant = user["tenant"]
+    device_id = request.match_info["device_id"]
+
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": {"message": "Invalid JSON"}}, status=400)
+
+    function = body.get("function", "")
+    params = body.get("params", {})
+
+    if not function:
+        return web.json_response({"error": {"message": "function is required"}}, status=400)
+
+    result = await nats_rpc.invoke(tenant, device_id, function, params)
+    return web.json_response(result)
