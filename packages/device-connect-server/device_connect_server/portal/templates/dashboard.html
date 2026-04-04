@@ -52,4 +52,26 @@
     <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
   </div>
 </div>
+
+<script>
+window._expandedDevices = window._expandedDevices || new Set();
+
+function toggleDetail(deviceId) {
+  var row = document.getElementById('detail-' + deviceId);
+  var chevron = document.getElementById('chevron-' + deviceId);
+  if (!row) return;
+  var opening = row.classList.contains('hidden');
+  row.classList.toggle('hidden');
+  if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
+  if (opening) window._expandedDevices.add(deviceId);
+  else window._expandedDevices.delete(deviceId);
+}
+
+// Pause auto-refresh while any detail row is expanded
+document.getElementById('live-devices').addEventListener('htmx:beforeRequest', function(evt) {
+  if (window._expandedDevices.size > 0) {
+    evt.preventDefault();
+  }
+});
+</script>
 {% endblock %}

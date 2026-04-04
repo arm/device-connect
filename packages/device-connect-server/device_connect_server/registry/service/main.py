@@ -460,23 +460,43 @@ async def main() -> None:
     # ACL enforcement (permissive by default — no ACL = visible to all)
     acl_manager = ACLManager()
 
-    # Subscribe per-tenant
-    for tenant in tenants:
-        await messaging.subscribe(
-            f"device-connect.{tenant}.registry",
-            queue="registry",
-            callback=_make_register_handler(tenant, messaging),
-        )
-        await messaging.subscribe(
-            f"device-connect.{tenant}.discovery",
-            queue="orch",
-            callback=_make_list_handler(tenant, messaging, acl_manager),
-        )
-        await messaging.subscribe(
-            f"device-connect.{tenant}.*.heartbeat",
-            callback=_make_hb_handler(tenant),
-        )
-        logger.info("[device-registry] listening on tenant=%s", tenant)
+    # Subscribe using wildcard subjects so new tenants work without restart.
+    # The registry credentials are privileged (device-connect.>), so this is safe.
+    # The tenant is extracted from the subject at runtime.
+
+    def _extract_tenant(subject: str) -> str:
+        """Extract tenant from subject like 'device-connect.{tenant}.registry'."""
+        parts = subject.split(".")
+        return parts[1] if len(parts) >= 3 else "default"
+
+    # subscribe_with_subject passes (data, subject, reply) to the callback
+    async def _wildcard_register(data: bytes, subject: str, reply):
+        tenant = _extract_tenant(subject)
+        await _make_register_handler(tenant, messaging)(data, reply)
+
+    async def _wildcard_discovery(data: bytes, subject: str, reply):
+        tenant = _extract_tenant(subject)
+        await _make_list_handler(tenant, messaging, acl_manager)(data, reply)
+
+    async def _wildcard_heartbeat(data: bytes, subject: str, reply):
+        tenant = _extract_tenant(subject)
+        await _make_hb_handler(tenant)(data, reply)
+
+    await messaging.subscribe_with_subject(
+        "device-connect.*.registry",
+        queue="registry",
+        callback=_wildcard_register,
+    )
+    await messaging.subscribe_with_subject(
+        "device-connect.*.discovery",
+        queue="orch",
+        callback=_wildcard_discovery,
+    )
+    await messaging.subscribe_with_subject(
+        "device-connect.*.*.heartbeat",
+        callback=_wildcard_heartbeat,
+    )
+    logger.info("[device-registry] listening on all tenants (wildcard)")
 
     # ---- Watch for device deletes ----
     async def offline_monitor():
