@@ -51,10 +51,14 @@
             <div class="space-y-1.5">
               {% for fn in caps.functions %}
               <div class="bg-white rounded-lg border border-gray-200 px-3 py-2">
-                <code class="text-xs font-medium text-indigo-700">{{ fn.name }}({% for p in fn.parameters %}{{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %})</code>
+                <code class="text-xs font-medium text-indigo-700">{{ fn.name }}({% for pname, pspec in (fn.parameters.properties or {}).items() %}{{ pname }}{% if pspec.default is defined %}={{ pspec.default | tojson }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %})</code>
                 {% if fn.description %}
                 <p class="text-xs text-gray-500 mt-0.5">{{ fn.description }}</p>
                 {% endif %}
+                <button onclick="event.stopPropagation(); openInvoke('{{ device.device_id }}', '{{ fn.name }}', {{ fn.parameters | tojson_pretty | e }})"
+                        class="mt-1.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+                  Try &rarr;
+                </button>
               </div>
               {% endfor %}
             </div>
@@ -100,6 +104,26 @@
             </div>
           </div>
 
+        </div>
+
+        {# Invoke panel (shown by Try button) #}
+        <div id="invoke-{{ device.device_id }}" class="hidden mt-4 bg-white rounded-lg border border-indigo-200 p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-xs font-semibold text-indigo-700 uppercase tracking-wider">
+              Invoke <code id="invoke-fn-{{ device.device_id }}" class="text-sm normal-case"></code>
+            </h4>
+            <button onclick="event.stopPropagation(); closeInvoke('{{ device.device_id }}')"
+                    class="text-gray-400 hover:text-gray-600 text-xs">&times; Close</button>
+          </div>
+          <div id="invoke-params-{{ device.device_id }}" class="space-y-2 mb-3"></div>
+          <div class="flex items-center gap-3">
+            <button onclick="event.stopPropagation(); submitInvoke('{{ device.device_id }}')"
+                    class="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+              Run
+            </button>
+            <span id="invoke-status-{{ device.device_id }}" class="text-xs text-gray-400"></span>
+          </div>
+          <pre id="invoke-result-{{ device.device_id }}" class="hidden mt-3 bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-xs max-h-48 overflow-y-auto"></pre>
         </div>
 
         {# Collapsible raw JSON #}

@@ -73,5 +73,84 @@ document.getElementById('live-devices').addEventListener('htmx:beforeRequest', f
     evt.preventDefault();
   }
 });
+
+// --- RPC Invoke ---
+window._invokeState = {};
+
+function openInvoke(deviceId, fnName, schema) {
+  var panel = document.getElementById('invoke-' + deviceId);
+  var fnLabel = document.getElementById('invoke-fn-' + deviceId);
+  var paramsDiv = document.getElementById('invoke-params-' + deviceId);
+  var resultPre = document.getElementById('invoke-result-' + deviceId);
+  var statusEl = document.getElementById('invoke-status-' + deviceId);
+
+  fnLabel.textContent = fnName;
+  paramsDiv.innerHTML = '';
+  resultPre.classList.add('hidden');
+  statusEl.textContent = '';
+  window._invokeState[deviceId] = { fn: fnName, params: {} };
+
+  var props = (schema && schema.properties) || {};
+  var keys = Object.keys(props);
+  if (keys.length === 0) {
+    paramsDiv.innerHTML = '<p class="text-xs text-gray-400">No parameters</p>';
+  } else {
+    keys.forEach(function(pname) {
+      var pspec = props[pname];
+      var defaultVal = pspec['default'] !== undefined ? pspec['default'] : '';
+      var row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      row.innerHTML =
+        '<label class="text-xs text-gray-600 w-24 shrink-0">' + pname +
+        ' <span class="text-gray-400">(' + (pspec.type || '?') + ')</span></label>' +
+        '<input type="text" data-param="' + pname + '" value="' + defaultVal + '"' +
+        ' class="flex-1 rounded border border-gray-300 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">';
+      paramsDiv.appendChild(row);
+    });
+  }
+  panel.classList.remove('hidden');
+}
+
+function closeInvoke(deviceId) {
+  document.getElementById('invoke-' + deviceId).classList.add('hidden');
+}
+
+function submitInvoke(deviceId) {
+  var state = window._invokeState[deviceId];
+  if (!state) return;
+  var statusEl = document.getElementById('invoke-status-' + deviceId);
+  var resultPre = document.getElementById('invoke-result-' + deviceId);
+  var paramsDiv = document.getElementById('invoke-params-' + deviceId);
+
+  // Collect params from inputs
+  var params = {};
+  paramsDiv.querySelectorAll('input[data-param]').forEach(function(input) {
+    var val = input.value.trim();
+    if (val === '') return;
+    // Try to parse as JSON (number, bool, etc), fall back to string
+    try { params[input.dataset.param] = JSON.parse(val); }
+    catch(e) { params[input.dataset.param] = val; }
+  });
+
+  statusEl.textContent = 'Sending…';
+  resultPre.classList.add('hidden');
+
+  fetch('/api/devices/' + deviceId + '/invoke', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ function: state.fn, params: params })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    statusEl.textContent = data.error ? 'Error' : 'OK';
+    resultPre.textContent = JSON.stringify(data, null, 2);
+    resultPre.classList.remove('hidden');
+  })
+  .catch(function(err) {
+    statusEl.textContent = 'Failed';
+    resultPre.textContent = err.toString();
+    resultPre.classList.remove('hidden');
+  });
+}
 </script>
 {% endblock %}
