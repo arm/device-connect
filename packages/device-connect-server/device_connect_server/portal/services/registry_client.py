@@ -88,15 +88,30 @@ def count_all_devices() -> dict[str, dict]:
     Returns: {tenant: {total: N, online: N}}
     """
     client = _etcd_client()
-    results = client.get_prefix(_DEVICES_PREFIX)
+    # Only query device keys, not portal/users or other data
+    device_prefix = f"{_DEVICES_PREFIX}"
+    results = client.get_prefix(device_prefix)
     counts: dict[str, dict] = {}
 
     for raw, meta in results:
+        # Filter to device keys by checking the key path
+        key = ""
+        if hasattr(meta, "key"):
+            key = meta.key if isinstance(meta.key, str) else meta.key.decode()
+        elif isinstance(meta, dict):
+            k = meta.get("key", b"")
+            key = k if isinstance(k, str) else k.decode()
+        if "/devices/" not in key:
+            continue
+
         try:
             if isinstance(raw, bytes):
                 raw = raw.decode()
             data = json.loads(raw)
-            tenant = data.get("tenant", "unknown")
+            # Extract tenant from the key path: /device-connect/{tenant}/devices/{id}
+            parts = key.split("/")
+            # ['', 'device-connect', '{tenant}', 'devices', '{id}']
+            tenant = parts[2] if len(parts) >= 4 else data.get("tenant", "unknown")
             if tenant not in counts:
                 counts[tenant] = {"total": 0, "online": 0}
             counts[tenant]["total"] += 1

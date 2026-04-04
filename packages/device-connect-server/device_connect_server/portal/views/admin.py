@@ -23,13 +23,34 @@ def setup_routes(app: web.Application):
     app.router.add_post("/api/admin/setup", admin_setup_submit)
     app.router.add_post("/api/admin/nats/reload", admin_nats_reload)
     app.router.add_post("/api/admin/health/verify", admin_health_verify)
+    app.router.add_get("/api/admin/tenants-table", admin_tenants_table_fragment)
 
 
 async def admin_dashboard(request: web.Request):
     user = request["user"]
     bootstrapped = nsc.is_bootstrapped()
+    tenants = _build_tenants_list()
 
-    # Get tenant data
+    user_list = []
+    try:
+        user_list = users.list_users()
+    except Exception:
+        pass
+
+    return aiohttp_jinja2.render_template("admin/dashboard.html", request, {
+        "user": user,
+        "nav": "admin",
+        "bootstrapped": bootstrapped,
+        "nats_host": config.NATS_HOST,
+        "nats_port": config.NATS_PORT,
+        "tenant_count": len(tenants),
+        "user_count": len([u for u in user_list if u.get("role") != "admin"]),
+        "tenants": tenants,
+    })
+
+
+def _build_tenants_list() -> list[dict]:
+    """Build tenant display data for the admin dashboard."""
     tenants_summary = credentials.get_tenants_summary()
     live_counts = {}
     try:
@@ -37,21 +58,18 @@ async def admin_dashboard(request: web.Request):
     except Exception:
         pass
 
-    # Get user list
     user_list = []
     try:
         user_list = users.list_users()
     except Exception:
         pass
 
-    # Build tenant display data
-    tenants = []
     all_tenant_names = set(tenants_summary.keys())
-    # Include users who are tenants even if they have no creds yet
     for u in user_list:
         if u["role"] != "admin":
             all_tenant_names.add(u["tenant"])
 
+    tenants = []
     for name in sorted(all_tenant_names):
         summary = tenants_summary.get(name, {})
         live = live_counts.get(name, {})
@@ -63,16 +81,15 @@ async def admin_dashboard(request: web.Request):
             "online": live.get("online", 0),
             "created_at": user_info.get("created_at", "")[:10] if user_info else "",
         })
+    return tenants
 
-    return aiohttp_jinja2.render_template("admin/dashboard.html", request, {
-        "user": user,
-        "nav": "admin",
-        "bootstrapped": bootstrapped,
-        "nats_host": config.NATS_HOST,
-        "nats_port": config.NATS_PORT,
-        "tenant_count": len(tenants),
-        "user_count": len([u for u in user_list if u.get("role") != "admin"]),
+
+async def admin_tenants_table_fragment(request: web.Request):
+    """Return the tenants table as an HTML fragment for htmx polling."""
+    tenants = _build_tenants_list()
+    return aiohttp_jinja2.render_template("admin/_tenants_table.html", request, {
         "tenants": tenants,
+        "user": request["user"],
     })
 
 
@@ -88,7 +105,7 @@ async def admin_view_as_user(request: web.Request):
     except Exception:
         pass
 
-    online_count = sum(1 for d in live_devices if d.get("status") == "online")
+    online_count = sum(1 for d in live_devices if d.get("status") == "available")
 
     return aiohttp_jinja2.render_template("admin/tenant_detail.html", request, {
         "user": user,
