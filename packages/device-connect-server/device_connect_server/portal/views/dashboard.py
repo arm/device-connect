@@ -1,6 +1,8 @@
-"""User dashboard with live device polling and RPC invocation."""
+"""User dashboard with live device polling, RPC invocation, and event streaming."""
 
+import asyncio
 import json
+import time
 
 import aiohttp_jinja2
 from aiohttp import web
@@ -12,6 +14,7 @@ def setup_routes(app: web.Application):
     app.router.add_get("/dashboard", dashboard_page)
     app.router.add_get("/api/devices/live", live_devices_fragment)
     app.router.add_post("/api/devices/{device_id}/invoke", invoke_device_rpc)
+    app.router.add_get("/api/devices/{device_id}/events/{event_name}/stream", event_stream)
 
 
 async def dashboard_page(request: web.Request):
@@ -77,3 +80,63 @@ async def invoke_device_rpc(request: web.Request):
 
     result = await nats_rpc.invoke(tenant, device_id, function, params)
     return web.json_response(result)
+
+
+async def event_stream(request: web.Request):
+    """SSE endpoint: stream device events in real-time via NATS subscription."""
+    user = request["user"]
+    tenant = user["tenant"]
+    device_id = request.match_info["device_id"]
+    event_name = request.match_info["event_name"]
+
+    response = web.StreamResponse(
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await response.prepare(request)
+
+    nc = None
+    sub = None
+    try:
+        nc = await nats_rpc.connect()
+        subject = f"device-connect.{tenant}.{device_id}.event.{event_name}"
+        queue = asyncio.Queue()
+
+        async def on_msg(msg):
+            await queue.put(msg)
+
+        sub = await nc.subscribe(subject, cb=on_msg)
+
+        # Send initial keepalive
+        await response.write(b": connected\n\n")
+
+        while True:
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=15)
+                try:
+                    payload = json.loads(msg.data)
+                except (json.JSONDecodeError, TypeError):
+                    payload = {"raw": msg.data.decode(errors="replace")}
+
+                event_data = {
+                    "ts": time.strftime("%H:%M:%S"),
+                    "params": payload.get("params", payload),
+                }
+                line = f"data: {json.dumps(event_data)}\n\n"
+                await response.write(line.encode())
+            except asyncio.TimeoutError:
+                # Send keepalive comment to prevent browser timeout
+                await response.write(b": keepalive\n\n")
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    finally:
+        if sub:
+            await sub.unsubscribe()
+        if nc:
+            await nc.close()
+
+    return response

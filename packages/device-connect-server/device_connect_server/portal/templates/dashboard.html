@@ -152,5 +152,76 @@ function submitInvoke(deviceId) {
     resultPre.classList.remove('hidden');
   });
 }
+
+// --- Event Log (SSE) ---
+window._eventSources = {};
+
+function openEventLog(deviceId, eventName) {
+  // Close existing stream for this device
+  closeEventLog(deviceId);
+
+  var panel = document.getElementById('eventlog-' + deviceId);
+  var nameEl = document.getElementById('eventlog-name-' + deviceId);
+  var entries = document.getElementById('eventlog-entries-' + deviceId);
+
+  nameEl.textContent = eventName;
+  entries.innerHTML = '<p class="text-gray-400 italic">Listening for events...</p>';
+  panel.classList.remove('hidden');
+
+  var es = new EventSource('/api/devices/' + deviceId + '/events/' + eventName + '/stream');
+  window._eventSources[deviceId] = es;
+
+  es.onmessage = function(e) {
+    // Remove placeholder
+    var placeholder = entries.querySelector('p.italic');
+    if (placeholder) placeholder.remove();
+
+    var data = JSON.parse(e.data);
+    var row = document.createElement('div');
+    row.className = 'cursor-pointer hover:bg-gray-50 rounded px-2 py-1 border-b border-gray-100';
+
+    var summary = JSON.stringify(data.params);
+    if (summary.length > 80) summary = summary.substring(0, 80) + '…';
+
+    row.innerHTML =
+      '<div class="flex items-center justify-between">' +
+        '<span class="text-gray-400 font-mono">' + data.ts + '</span>' +
+        '<span class="text-gray-600 ml-2 truncate">' + summary + '</span>' +
+      '</div>' +
+      '<pre class="hidden mt-1 bg-gray-900 text-gray-100 rounded p-2 overflow-x-auto text-xs">' +
+        JSON.stringify(data.params, null, 2) +
+      '</pre>';
+
+    row.onclick = function(evt) {
+      evt.stopPropagation();
+      row.querySelector('pre').classList.toggle('hidden');
+    };
+
+    entries.appendChild(row);
+
+    // Cap at 100 entries
+    while (entries.children.length > 100) entries.removeChild(entries.firstChild);
+
+    // Auto-scroll
+    entries.scrollTop = entries.scrollHeight;
+  };
+
+  es.onerror = function() {
+    var msg = document.createElement('p');
+    msg.className = 'text-red-400 italic';
+    msg.textContent = 'Stream disconnected.';
+    entries.appendChild(msg);
+  };
+}
+
+function closeEventLog(deviceId) {
+  var es = window._eventSources[deviceId];
+  if (es) {
+    es.close();
+    delete window._eventSources[deviceId];
+  }
+  var panel = document.getElementById('eventlog-' + deviceId);
+  if (panel) panel.classList.add('hidden');
+}
 </script>
 {% endblock %}

@@ -1,4 +1,4 @@
-"""Invoke device RPC functions via NATS request-reply."""
+"""NATS helpers: RPC invocation and event streaming."""
 
 import json
 import logging
@@ -23,12 +23,11 @@ def _load_creds() -> dict:
     return {}
 
 
-async def invoke(tenant: str, device_id: str, function: str, params: dict, timeout: float = 5.0) -> dict:
-    """Send a JSON-RPC request to a device and return the response."""
+async def connect():
+    """Return a connected NATS client using registry credentials."""
     creds = _load_creds()
     nats_cfg = creds.get("nats", {})
 
-    # Build connection options
     servers = nats_cfg.get("urls", [f"nats://{config.NATS_HOST}:{config.NATS_PORT}"])
     connect_opts = {"servers": servers}
 
@@ -47,7 +46,12 @@ async def invoke(tenant: str, device_id: str, function: str, params: dict, timeo
         connect_opts["user_jwt_cb"] = lambda: jwt_token.encode()
         connect_opts["signature_cb"] = _sign
 
-    nc = await nats.connect(**connect_opts)
+    return await nats.connect(**connect_opts)
+
+
+async def invoke(tenant: str, device_id: str, function: str, params: dict, timeout: float = 5.0) -> dict:
+    """Send a JSON-RPC request to a device and return the response."""
+    nc = await connect()
     try:
         subject = f"device-connect.{tenant}.{device_id}.cmd"
         payload = {

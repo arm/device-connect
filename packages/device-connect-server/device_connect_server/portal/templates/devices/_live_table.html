@@ -78,6 +78,10 @@
                 {% if ev.description %}
                 <p class="text-xs text-gray-500 mt-0.5">{{ ev.description }}</p>
                 {% endif %}
+                <button onclick="event.stopPropagation(); openEventLog('{{ device.device_id }}', '{{ ev.name }}')"
+                        class="mt-1.5 text-xs text-green-600 hover:text-green-800 font-medium">
+                  Live log &rarr;
+                </button>
               </div>
               {% endfor %}
             </div>
@@ -124,6 +128,23 @@
             <span id="invoke-status-{{ device.device_id }}" class="text-xs text-gray-400"></span>
           </div>
           <pre id="invoke-result-{{ device.device_id }}" class="hidden mt-3 bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-xs max-h-48 overflow-y-auto"></pre>
+        </div>
+
+        {# Event log panel (shown by Live log button) #}
+        <div id="eventlog-{{ device.device_id }}" class="hidden mt-4 bg-white rounded-lg border border-green-200 p-4">
+          <div class="flex items-center justify-between mb-3">
+            <h4 class="text-xs font-semibold text-green-700 uppercase tracking-wider">
+              <span class="inline-flex items-center">
+                <span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>
+                Event log: <code id="eventlog-name-{{ device.device_id }}" class="text-sm normal-case ml-1"></code>
+              </span>
+            </h4>
+            <button onclick="event.stopPropagation(); closeEventLog('{{ device.device_id }}')"
+                    class="text-gray-400 hover:text-gray-600 text-xs">&times; Close</button>
+          </div>
+          <div id="eventlog-entries-{{ device.device_id }}" class="space-y-1 max-h-64 overflow-y-auto text-xs">
+            <p class="text-gray-400 italic">Listening for events...</p>
+          </div>
         </div>
 
         {# Collapsible raw JSON #}
