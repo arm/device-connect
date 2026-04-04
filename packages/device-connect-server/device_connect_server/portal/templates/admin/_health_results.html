@@ -1,0 +1,35 @@
+<div class="space-y-3">
+  {% set pass_count = results | selectattr("status", "equalto", "pass") | list | length %}
+  {% set fail_count = results | selectattr("status", "equalto", "fail") | list | length %}
+  {% set skip_count = results | selectattr("status", "equalto", "skip") | list | length %}
+
+  <div class="flex gap-4 mb-4">
+    <span class="text-sm font-medium">
+      <span class="text-green-600">{{ pass_count }} passed</span>
+      {% if fail_count %}<span class="text-red-600 ml-3">{{ fail_count }} failed</span>{% endif %}
+      {% if skip_count %}<span class="text-gray-400 ml-3">{{ skip_count }} skipped</span>{% endif %}
+    </span>
+  </div>
+
+  {% for result in results %}
+  <div class="bg-white rounded-xl border {% if result.status == 'pass' %}border-green-200{% elif result.status == 'fail' %}border-red-200{% else %}border-gray-200{% endif %} p-4 flex items-start gap-3">
+    {% if result.status == "pass" %}
+    <span class="flex-shrink-0 w-6 h-6 rounded-full bg-green-100 flex items-center justify-center">
+      <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+    </span>
+    {% elif result.status == "fail" %}
+    <span class="flex-shrink-0 w-6 h-6 rounded-full bg-red-100 flex items-center justify-center">
+      <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </span>
+    {% else %}
+    <span class="flex-shrink-0 w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center">
+      <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
+    </span>
+    {% endif %}
+    <div>
+      <div class="text-sm font-medium text-gray-900">{{ result.name }}</div>
+      <div class="text-xs text-gray-500 mt-0.5">{{ result.detail }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>

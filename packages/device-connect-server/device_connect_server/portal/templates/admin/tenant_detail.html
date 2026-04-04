@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Viewing {{ viewing_as }}{% endblock %}
+{% block content %}
+<!-- This is the "View as User" page for admin — reuses dashboard layout -->
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">{{ viewing_as }}'s Dashboard</h1>
+  <p class="text-sm text-gray-500 mt-1">Tenant: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700">{{ viewing_as }}</code> — Namespace: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">device-connect.{{ viewing_as }}.&gt;</code></p>
+</div>
+
+<!-- Stats -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Credentials Created</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1">{{ creds_count }}</div>
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Devices Online</div>
+    <div class="text-3xl font-bold text-green-600 mt-1">{{ online_count }}</div>
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Devices Registered</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1">{{ registered_count }}</div>
+  </div>
+</div>
+
+<!-- Credentials table -->
+<div class="bg-white rounded-xl border border-gray-200 mb-6">
+  <div class="px-5 py-4 border-b border-gray-200">
+    <h2 class="text-lg font-semibold text-gray-900">Device Credentials</h2>
+  </div>
+  {% if credentials %}
+  {% for cred in credentials %}
+  <div class="px-5 py-4 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 flex items-center justify-between">
+    <div>
+      <div class="text-sm font-medium text-gray-900">{{ cred.device_id }}</div>
+      <div class="text-xs text-gray-400 mt-0.5">{{ cred.filename }}</div>
+    </div>
+  </div>
+  {% endfor %}
+  {% else %}
+  <div class="px-5 py-8 text-center text-gray-400 text-sm">No credentials</div>
+  {% endif %}
+</div>
+
+<!-- Live devices -->
+<div class="bg-white rounded-xl border border-gray-200">
+  <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-gray-900">Live Devices</h2>
+    <span class="inline-flex items-center text-xs text-gray-400">
+      <span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>
+      Auto-refreshing
+    </span>
+  </div>
+  <div id="live-devices"
+       hx-get="/api/devices/live?tenant={{ viewing_as }}"
+       hx-trigger="load, every 3s"
+       hx-swap="innerHTML">
+    <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
+  </div>
+</div>
+{% endblock %}

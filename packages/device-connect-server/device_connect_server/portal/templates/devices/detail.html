@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ device.device_id }}{% endblock %}
+{% block content %}
+<div class="mb-6">
+  <a href="/devices" class="text-sm text-indigo-600 hover:text-indigo-700">&larr; Back to devices</a>
+</div>
+
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">{{ device.device_id }}</h1>
+  <p class="text-sm text-gray-500 mt-1">Tenant: {{ device.tenant }}</p>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  <!-- Device info -->
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <h3 class="text-sm font-semibold text-gray-900 mb-4">Device Information</h3>
+    <dl class="space-y-3">
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-500">Device ID</dt>
+        <dd class="text-sm font-medium text-gray-900">{{ device.device_id }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-500">Type</dt>
+        <dd class="text-sm text-gray-900">{{ device.device_type | default("—", true) }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-500">Status</dt>
+        <dd>
+          {% if device.status == "online" %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+            <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 pulse-dot"></span>online
+          </span>
+          {% else %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">{{ device.status | default("unknown", true) }}</span>
+          {% endif %}
+        </dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-500">Location</dt>
+        <dd class="text-sm text-gray-900">{{ device.location | default("—", true) }}</dd>
+      </div>
+      <div class="flex justify-between">
+        <dt class="text-sm text-gray-500">Last Seen</dt>
+        <dd class="text-sm text-gray-900">{{ device.last_seen | default("—", true) }}</dd>
+      </div>
+    </dl>
+    {% if device.capabilities %}
+    <div class="mt-4 pt-4 border-t border-gray-100">
+      <h4 class="text-xs font-medium text-gray-500 mb-2">Capabilities</h4>
+      <div class="flex flex-wrap gap-1.5">
+        {% for cap in device.capabilities %}
+        <span class="inline-flex px-2 py-0.5 rounded text-xs bg-indigo-50 text-indigo-700">{{ cap }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Connection instructions -->
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <h3 class="text-sm font-semibold text-gray-900 mb-4">Connection Instructions</h3>
+    <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-xs">export NATS_CREDENTIALS_FILE=./{{ device.device_id }}.creds.json
+export NATS_URL=nats://{{ nats_host }}:{{ nats_port }}
+export DEVICE_CONNECT_ALLOW_INSECURE=true
+python your_device.py</pre>
+
+    {% if cred_filename %}
+    <a href="/api/devices/{{ device.device_id }}/creds"
+       class="mt-4 inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Download Credential
+    </a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

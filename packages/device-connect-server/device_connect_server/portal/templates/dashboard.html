@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">Dashboard</h1>
+  <p class="text-sm text-gray-500 mt-1">Tenant: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700">{{ tenant }}</code> — Namespace: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">device-connect.{{ tenant }}.&gt;</code></p>
+</div>
+
+<!-- Stats -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Credentials Created</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1">{{ creds_count }}</div>
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Devices Online</div>
+    <div class="text-3xl font-bold text-green-600 mt-1">{{ online_count }}</div>
+  </div>
+  <div class="bg-white rounded-xl border border-gray-200 p-5">
+    <div class="text-sm font-medium text-gray-500">Devices Registered</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1">{{ registered_count }}</div>
+  </div>
+</div>
+
+<!-- Quick actions -->
+<div class="flex flex-wrap gap-3 mb-8">
+  {% if not readonly %}
+  <a href="/devices" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Create Device
+  </a>
+  <a href="/api/devices/bundle?tenant={{ tenant }}" class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+    Download All Credentials
+  </a>
+  {% endif %}
+</div>
+
+<!-- Live devices -->
+<div class="bg-white rounded-xl border border-gray-200">
+  <div class="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+    <h2 class="text-lg font-semibold text-gray-900">Live Devices</h2>
+    <span class="inline-flex items-center text-xs text-gray-400">
+      <span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>
+      Auto-refreshing
+    </span>
+  </div>
+  <div id="live-devices"
+       hx-get="/api/devices/live?tenant={{ tenant }}"
+       hx-trigger="load, every 3s"
+       hx-swap="innerHTML">
+    <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
+  </div>
+</div>
+{% endblock %}

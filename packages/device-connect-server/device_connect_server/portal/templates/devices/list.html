@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}My Devices{% endblock %}
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">My Devices</h1>
+  <p class="text-sm text-gray-500 mt-1">Manage device credentials for tenant <code class="bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700">{{ tenant }}</code></p>
+</div>
+
+<!-- Create device form -->
+{% if not readonly %}
+<div class="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+  <h3 class="text-sm font-semibold text-gray-900 mb-3">Create New Device</h3>
+  <form hx-post="/api/devices" hx-target="#device-list" hx-swap="afterbegin" hx-on::after-request="if(event.detail.successful) this.reset()">
+    <div class="flex gap-3">
+      <input type="text" name="device_name" required
+             placeholder="e.g., robot-arm-01"
+             pattern="[a-zA-Z0-9_-]+"
+             title="Letters, numbers, hyphens, underscores only"
+             class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+      <button type="submit"
+              class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+        Create
+      </button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<!-- Download bundle -->
+{% if credentials %}
+<div class="flex gap-3 mb-6">
+  <a href="/api/devices/bundle?tenant={{ tenant }}"
+     class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+    Download All as Bundle (.zip)
+  </a>
+</div>
+{% endif %}
+
+<!-- Credentials table -->
+<div class="bg-white rounded-xl border border-gray-200">
+  <div class="px-5 py-4 border-b border-gray-200">
+    <h2 class="text-lg font-semibold text-gray-900">Device Credentials</h2>
+  </div>
+  <div id="device-list">
+    {% if credentials %}
+    {% for cred in credentials %}
+    <div class="px-5 py-4 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 flex items-center justify-between">
+      <div>
+        <div class="text-sm font-medium text-gray-900">{{ cred.device_id }}</div>
+        <div class="text-xs text-gray-400 mt-0.5">{{ cred.filename }}</div>
+      </div>
+      <div class="flex items-center gap-3">
+        <button onclick="toggleInstructions('{{ cred.device_id }}')"
+                class="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
+          Instructions
+        </button>
+        <a href="/api/devices/{{ cred.device_id }}/creds"
+           class="inline-flex items-center px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors">
+          <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download
+        </a>
+      </div>
+    </div>
+    <div id="instructions-{{ cred.device_id }}" class="hidden bg-gray-50 px-5 py-4 border-b border-gray-100">
+      <p class="text-xs font-medium text-gray-500 mb-2">Connection Instructions</p>
+      <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto">export NATS_CREDENTIALS_FILE=./{{ cred.filename }}
+export NATS_URL=nats://{{ nats_host }}:{{ nats_port }}
+export DEVICE_CONNECT_ALLOW_INSECURE=true
+python your_device.py</pre>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="px-5 py-8 text-center">
+      <p class="text-sm text-gray-500">No device credentials yet</p>
+      <p class="text-xs text-gray-400 mt-1">Create a device above to get started</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function toggleInstructions(deviceId) {
+  const el = document.getElementById('instructions-' + deviceId);
+  el.classList.toggle('hidden');
+}
+</script>
+{% endblock %}

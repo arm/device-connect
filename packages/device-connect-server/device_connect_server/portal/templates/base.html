@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-50">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Device Connect{% endblock %} — Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <link rel="stylesheet" href="/static/portal.css">
+</head>
+<body class="h-full">
+  {% if user %}
+  <nav class="bg-white shadow-sm border-b border-gray-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-14">
+        <div class="flex items-center space-x-8">
+          <a href="{% if user.role == 'admin' %}/admin{% else %}/dashboard{% endif %}" class="flex items-center space-x-2">
+            <div class="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
+              <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+              </svg>
+            </div>
+            <span class="font-semibold text-gray-900">Device Connect</span>
+          </a>
+          {% if user.role == 'admin' %}
+          <a href="/admin" class="text-sm {% if nav == 'admin' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Dashboard</a>
+          <a href="/admin/health" class="text-sm {% if nav == 'health' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Health</a>
+          {% else %}
+          <a href="/dashboard" class="text-sm {% if nav == 'dashboard' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Dashboard</a>
+          <a href="/devices" class="text-sm {% if nav == 'devices' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">My Devices</a>
+          {% endif %}
+        </div>
+        <div class="flex items-center space-x-4">
+          <span class="text-sm text-gray-500">
+            {% if user.role == 'admin' %}
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">admin</span>
+            {% endif %}
+            {{ user.username }}
+          </span>
+          <form method="POST" action="/logout" class="inline">
+            <button type="submit" class="text-sm text-gray-500 hover:text-gray-700">Logout</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </nav>
+  {% endif %}
+
+  {% if viewing_as %}
+  <div class="bg-yellow-50 border-b border-yellow-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex items-center justify-between">
+      <span class="text-sm text-yellow-800">
+        Viewing as <strong>{{ viewing_as }}</strong> (read-only)
+      </span>
+      <a href="/admin" class="text-sm text-yellow-700 hover:text-yellow-900 font-medium">Back to Admin</a>
+    </div>
+  </div>
+  {% endif %}
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% if flash_message %}
+    <div class="mb-6 rounded-lg p-4 {% if flash_type == 'error' %}bg-red-50 text-red-800 border border-red-200{% elif flash_type == 'success' %}bg-green-50 text-green-800 border border-green-200{% else %}bg-blue-50 text-blue-800 border border-blue-200{% endif %}">
+      {{ flash_message }}
+    </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
