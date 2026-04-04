@@ -61,10 +61,18 @@ async def live_devices_fragment(request: web.Request):
     })
 
 
+def _resolve_tenant(request: web.Request) -> str:
+    """Get tenant from query param (admin override) or session."""
+    user = request["user"]
+    tenant_override = request.query.get("tenant")
+    if tenant_override and user.get("role") == "admin":
+        return tenant_override
+    return user["tenant"]
+
+
 async def invoke_device_rpc(request: web.Request):
     """Invoke an RPC function on a device via NATS."""
-    user = request["user"]
-    tenant = user["tenant"]
+    tenant = _resolve_tenant(request)
     device_id = request.match_info["device_id"]
 
     try:
@@ -84,8 +92,7 @@ async def invoke_device_rpc(request: web.Request):
 
 async def event_stream(request: web.Request):
     """SSE endpoint: stream device events in real-time via NATS subscription."""
-    user = request["user"]
-    tenant = user["tenant"]
+    tenant = _resolve_tenant(request)
     device_id = request.match_info["device_id"]
     event_name = request.match_info["event_name"]
 

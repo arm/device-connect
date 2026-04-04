@@ -58,4 +58,155 @@
     <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
   </div>
 </div>
+
+<script>
+var _tenantParam = '?tenant={{ viewing_as }}';
+window._expandedDevices = window._expandedDevices || new Set();
+
+function toggleDetail(deviceId) {
+  var row = document.getElementById('detail-' + deviceId);
+  var chevron = document.getElementById('chevron-' + deviceId);
+  if (!row) return;
+  var opening = row.classList.contains('hidden');
+  row.classList.toggle('hidden');
+  if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
+  if (opening) window._expandedDevices.add(deviceId);
+  else window._expandedDevices.delete(deviceId);
+}
+
+document.getElementById('live-devices').addEventListener('htmx:beforeRequest', function(evt) {
+  if (window._expandedDevices.size > 0) {
+    evt.preventDefault();
+  }
+});
+
+// --- RPC Invoke ---
+window._invokeState = {};
+
+function openInvoke(deviceId, fnName, schema) {
+  var panel = document.getElementById('invoke-' + deviceId);
+  var fnLabel = document.getElementById('invoke-fn-' + deviceId);
+  var paramsDiv = document.getElementById('invoke-params-' + deviceId);
+  var resultPre = document.getElementById('invoke-result-' + deviceId);
+  var statusEl = document.getElementById('invoke-status-' + deviceId);
+
+  fnLabel.textContent = fnName;
+  paramsDiv.innerHTML = '';
+  resultPre.classList.add('hidden');
+  statusEl.textContent = '';
+  window._invokeState[deviceId] = { fn: fnName, params: {} };
+
+  var props = (schema && schema.properties) || {};
+  var keys = Object.keys(props);
+  if (keys.length === 0) {
+    paramsDiv.innerHTML = '<p class="text-xs text-gray-400">No parameters</p>';
+  } else {
+    keys.forEach(function(pname) {
+      var pspec = props[pname];
+      var defaultVal = pspec['default'] !== undefined ? pspec['default'] : '';
+      var row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      row.innerHTML =
+        '<label class="text-xs text-gray-600 w-24 shrink-0">' + pname +
+        ' <span class="text-gray-400">(' + (pspec.type || '?') + ')</span></label>' +
+        '<input type="text" data-param="' + pname + '" value="' + defaultVal + '"' +
+        ' class="flex-1 rounded border border-gray-300 px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">';
+      paramsDiv.appendChild(row);
+    });
+  }
+  panel.classList.remove('hidden');
+}
+
+function closeInvoke(deviceId) {
+  document.getElementById('invoke-' + deviceId).classList.add('hidden');
+}
+
+function submitInvoke(deviceId) {
+  var state = window._invokeState[deviceId];
+  if (!state) return;
+  var statusEl = document.getElementById('invoke-status-' + deviceId);
+  var resultPre = document.getElementById('invoke-result-' + deviceId);
+  var paramsDiv = document.getElementById('invoke-params-' + deviceId);
+
+  var params = {};
+  paramsDiv.querySelectorAll('input[data-param]').forEach(function(input) {
+    var val = input.value.trim();
+    if (val === '') return;
+    try { params[input.dataset.param] = JSON.parse(val); }
+    catch(e) { params[input.dataset.param] = val; }
+  });
+
+  statusEl.textContent = 'Sending…';
+  resultPre.classList.add('hidden');
+
+  fetch('/api/devices/' + deviceId + '/invoke' + _tenantParam, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ function: state.fn, params: params })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    statusEl.textContent = data.error ? 'Error' : 'OK';
+    resultPre.textContent = JSON.stringify(data, null, 2);
+    resultPre.classList.remove('hidden');
+  })
+  .catch(function(err) {
+    statusEl.textContent = 'Failed';
+    resultPre.textContent = err.toString();
+    resultPre.classList.remove('hidden');
+  });
+}
+
+// --- Event Log (SSE) ---
+window._eventSources = {};
+
+function openEventLog(deviceId, eventName) {
+  closeEventLog(deviceId);
+  var panel = document.getElementById('eventlog-' + deviceId);
+  var nameEl = document.getElementById('eventlog-name-' + deviceId);
+  var entries = document.getElementById('eventlog-entries-' + deviceId);
+
+  nameEl.textContent = eventName;
+  entries.innerHTML = '<p class="text-gray-400 italic">Listening for events...</p>';
+  panel.classList.remove('hidden');
+
+  var es = new EventSource('/api/devices/' + deviceId + '/events/' + eventName + '/stream' + _tenantParam);
+  window._eventSources[deviceId] = es;
+
+  es.onmessage = function(e) {
+    var placeholder = entries.querySelector('p.italic');
+    if (placeholder) placeholder.remove();
+    var data = JSON.parse(e.data);
+    var row = document.createElement('div');
+    row.className = 'cursor-pointer hover:bg-gray-50 rounded px-2 py-1 border-b border-gray-100';
+    var summary = JSON.stringify(data.params);
+    if (summary.length > 80) summary = summary.substring(0, 80) + '…';
+    row.innerHTML =
+      '<div class="flex items-center justify-between">' +
+        '<span class="text-gray-400 font-mono">' + data.ts + '</span>' +
+        '<span class="text-gray-600 ml-2 truncate">' + summary + '</span>' +
+      '</div>' +
+      '<pre class="hidden mt-1 bg-gray-900 text-gray-100 rounded p-2 overflow-x-auto text-xs">' +
+        JSON.stringify(data.params, null, 2) + '</pre>';
+    row.onclick = function(evt) { evt.stopPropagation(); row.querySelector('pre').classList.toggle('hidden'); };
+    entries.appendChild(row);
+    while (entries.children.length > 100) entries.removeChild(entries.firstChild);
+    entries.scrollTop = entries.scrollHeight;
+  };
+
+  es.onerror = function() {
+    var msg = document.createElement('p');
+    msg.className = 'text-red-400 italic';
+    msg.textContent = 'Stream disconnected.';
+    entries.appendChild(msg);
+  };
+}
+
+function closeEventLog(deviceId) {
+  var es = window._eventSources[deviceId];
+  if (es) { es.close(); delete window._eventSources[deviceId]; }
+  var panel = document.getElementById('eventlog-' + deviceId);
+  if (panel) panel.classList.add('hidden');
+}
+</script>
 {% endblock %}
