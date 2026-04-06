@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"captureImage","id":"req-002","params":{"resolution":"1080p","format":"jpeg"}}

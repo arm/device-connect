@@ -86,6 +86,68 @@ jobs:
           ruff check packages/device-connect-agent-tools/
           ruff check tests/
 
+  # ── Fuzz tests ─────────────────────────────────────────────────
+  fuzz-tests-hypothesis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev,fuzz]"
+      - name: Run hypothesis fuzz tests
+        working-directory: packages/device-connect-edge
+        env:
+          HYPOTHESIS_PROFILE: ci
+        run: pytest fuzz/test_fuzz_*.py -v --timeout=120 --tb=short --junitxml=fuzz-hypothesis-results.xml
+      - name: Publish hypothesis findings summary
+        if: always()
+        working-directory: packages/device-connect-edge
+        run: python fuzz/report_hypothesis.py fuzz-hypothesis-results.xml >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload hypothesis report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-hypothesis-results
+          path: packages/device-connect-edge/fuzz-hypothesis-results.xml
+          retention-days: 30
+
+  fuzz-tests-atheris:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev,fuzz]"
+          pip install atheris
+      - name: Run atheris fuzz targets
+        working-directory: packages/device-connect-edge
+        run: python fuzz/run_atheris.py --iterations=50000
+      - name: Publish atheris findings summary
+        if: always()
+        working-directory: packages/device-connect-edge
+        run: cat atheris-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload atheris crashes and report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-atheris-results
+          path: |
+            packages/device-connect-edge/crash-*
+            packages/device-connect-edge/atheris-report.md
+          retention-days: 30
+
   # ── Tier 1: Integration tests (no LLM) ────────────────────────
   integration-tests:
     runs-on: ubuntu-latest

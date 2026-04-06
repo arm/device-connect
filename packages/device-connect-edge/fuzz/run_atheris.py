@@ -1,0 +1,172 @@
+"""Runner for all atheris fuzz targets with markdown report generation.
+
+Runs each fuzz target, captures results, and writes a summary report
+to atheris-report.md.
+
+Usage:
+    python fuzz/run_atheris.py --iterations=50000
+"""
+
+import argparse
+import glob
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+FUZZ_DIR = Path(__file__).parent
+PROJECT_DIR = FUZZ_DIR.parent
+
+TARGETS = [
+    {
+        "name": "JSON-RPC Commands",
+        "script": "fuzz/fuzz_jsonrpc_cmd.py",
+        "corpus": "fuzz/corpus/jsonrpc_cmd/",
+    },
+    {
+        "name": "NATS Credentials",
+        "script": "fuzz/fuzz_nats_creds.py",
+        "corpus": "fuzz/corpus/nats_creds/",
+    },
+    {
+        "name": "Pydantic Models",
+        "script": "fuzz/fuzz_pydantic_models.py",
+        "corpus": "fuzz/corpus/pydantic_models/",
+    },
+    {
+        "name": "Credentials JSON",
+        "script": "fuzz/fuzz_credentials_json.py",
+        "corpus": "fuzz/corpus/credentials_json/",
+    },
+]
+
+
+def run_target(target, iterations):
+    """Run a single fuzz target. Returns dict with results."""
+    cmd = [
+        sys.executable,
+        str(PROJECT_DIR / target["script"]),
+        str(PROJECT_DIR / target["corpus"]),
+        f"-atheris_runs={iterations}",
+    ]
+
+    start = time.time()
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=str(PROJECT_DIR),
+    )
+    elapsed = time.time() - start
+
+    # Check for crash files created during this run
+    crashes = glob.glob(str(PROJECT_DIR / "crash-*"))
+
+    return {
+        "name": target["name"],
+        "script": target["script"],
+        "returncode": result.returncode,
+        "elapsed": elapsed,
+        "iterations": iterations,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "crashes": crashes,
+    }
+
+
+def extract_crash_info(stdout, stderr):
+    """Extract crash details from atheris output.
+
+    The Python traceback goes to stdout, while libFuzzer summary
+    and artifact paths go to stderr.
+    """
+    combined = stdout + "\n" + stderr
+    lines = combined.strip().split("\n")
+    crash_lines = []
+    capture = False
+    for line in lines:
+        if "Uncaught Python exception" in line:
+            capture = True
+        if capture:
+            # Skip noisy instrumentation/libfuzzer info/stats lines
+            if line.startswith(("INFO:", "WARNING:", "#")):
+                continue
+            crash_lines.append(line)
+            if line.startswith("artifact_prefix"):
+                break
+    return "\n".join(crash_lines) if crash_lines else None
+
+
+def generate_report(results, report_path):
+    """Generate markdown report from all target results."""
+    total_crashes = sum(len(r["crashes"]) for r in results)
+    icon = "\u2705" if total_crashes == 0 else "\u274c"
+
+    lines = []
+    lines.append(f"## {icon} Atheris Fuzz Tests\n")
+    lines.append("| Target | Iterations | Duration | Result |")
+    lines.append("|--------|-----------|----------|--------|")
+
+    for r in results:
+        status = "\u274c Crash" if r["returncode"] != 0 else "\u2705 Clean"
+        duration = f"{r['elapsed']:.1f}s"
+        lines.append(f"| {r['name']} | {r['iterations']:,} | {duration} | {status} |")
+
+    lines.append("")
+
+    # Detail any crashes
+    findings = [r for r in results if r["returncode"] != 0]
+    if findings:
+        lines.append("### Findings\n")
+        for i, r in enumerate(findings, 1):
+            lines.append(f"#### {i}. `{r['script']}`\n")
+
+            crash_info = extract_crash_info(r["stdout"], r["stderr"])
+            if crash_info:
+                lines.append("<details><summary>Crash details</summary>\n")
+                lines.append(f"```\n{crash_info}\n```\n")
+                lines.append("</details>\n")
+
+            if r["crashes"]:
+                crash_files = ", ".join(f"`{Path(c).name}`" for c in r["crashes"])
+                lines.append(f"**Crash artifacts**: {crash_files}\n")
+    else:
+        lines.append("> No findings — all fuzz targets completed cleanly.\n")
+
+    report = "\n".join(lines)
+    report_path.write_text(report)
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Run atheris fuzz targets")
+    parser.add_argument("--iterations", type=int, default=50000, help="Iterations per target")
+    args = parser.parse_args()
+
+    # Clean old crash files
+    for f in glob.glob(str(PROJECT_DIR / "crash-*")):
+        Path(f).unlink()
+
+    results = []
+    exit_code = 0
+
+    for target in TARGETS:
+        print(f"Running {target['name']}...", flush=True)
+        result = run_target(target, args.iterations)
+        results.append(result)
+
+        if result["returncode"] != 0:
+            exit_code = 1
+            print(f"  CRASH found in {target['name']}", flush=True)
+        else:
+            print(f"  Clean ({result['elapsed']:.1f}s)", flush=True)
+
+    report_path = PROJECT_DIR / "atheris-report.md"
+    generate_report(results, report_path)
+    print(f"\nReport written to {report_path}")
+
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()

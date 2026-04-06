@@ -10,3 +10,11 @@ build/
 .env
 .pytest_cache/
 .mypy_cache/
+
+# Fuzz testing artifacts
+crash-*
+timeout-*
+htmlcov/
+.hypothesis/
+atheris-report.md
+fuzz-hypothesis-results.xml
