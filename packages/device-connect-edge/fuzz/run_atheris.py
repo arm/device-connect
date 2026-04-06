@@ -9,8 +9,10 @@ Usage:
 
 import argparse
 import glob
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -42,11 +44,24 @@ TARGETS = [
 
 
 def run_target(target, iterations):
-    """Run a single fuzz target. Returns dict with results."""
+    """Run a single fuzz target. Returns dict with results.
+
+    Uses a temporary directory for the live corpus so atheris doesn't
+    write auto-generated entries into the seed corpus directory.
+    Seeds are copied in, and the temp dir is cleaned up after the run.
+    """
+    seed_dir = PROJECT_DIR / target["corpus"]
+    tmp_corpus = tempfile.mkdtemp(prefix=f"fuzz-corpus-{target['script'].split('/')[-1]}-")
+
+    # Copy seed files into the temp corpus
+    for f in seed_dir.iterdir():
+        if f.is_file():
+            shutil.copy2(f, tmp_corpus)
+
     cmd = [
         sys.executable,
         str(PROJECT_DIR / target["script"]),
-        str(PROJECT_DIR / target["corpus"]),
+        tmp_corpus,
         f"-atheris_runs={iterations}",
     ]
 
@@ -58,6 +73,9 @@ def run_target(target, iterations):
         cwd=str(PROJECT_DIR),
     )
     elapsed = time.time() - start
+
+    # Clean up temp corpus
+    shutil.rmtree(tmp_corpus, ignore_errors=True)
 
     # Check for crash files created during this run
     crashes = glob.glob(str(PROJECT_DIR / "crash-*"))

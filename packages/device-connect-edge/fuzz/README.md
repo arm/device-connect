@@ -153,6 +153,22 @@ open htmlcov/index.html
 - **Timeouts** are saved as `timeout-<hash>` files
 - **Reproduce** a crash: `python fuzz/fuzz_jsonrpc_cmd.py crash-<hash>`
 
+### Auto-generated corpus cleanup
+
+Atheris writes new corpus entries into the corpus directory as it discovers new
+coverage paths. When using `fuzz/run_atheris.py`, this is handled automatically —
+seeds are copied into a temp directory that is cleaned up after each target runs.
+
+When running atheris harnesses directly, pass a **temporary directory** instead of the
+seed corpus to avoid polluting it:
+
+```bash
+# Copy seeds to a temp dir, run against it, then delete
+cp -r fuzz/corpus/jsonrpc_cmd/ /tmp/fuzz-corpus
+python fuzz/fuzz_jsonrpc_cmd.py /tmp/fuzz-corpus -max_total_time=300
+rm -rf /tmp/fuzz-corpus
+```
+
 ---
 
 ## Seed Corpus
