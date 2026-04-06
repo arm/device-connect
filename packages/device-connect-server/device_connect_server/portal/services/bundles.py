@@ -90,6 +90,13 @@ def _generate_env(tenant: str, backend: str, host: str, port: str) -> str:
             f"# export MESSAGING_TLS_CERT_FILE=./certs/{tenant}-device-001-cert.pem",
             f"# export MESSAGING_TLS_KEY_FILE=./certs/{tenant}-device-001-key.pem",
         ]
+    elif backend == "mqtt":
+        lines += [
+            f"export MQTT_URL=mqtt://{host}:{port}",
+            "",
+            "# Set this to the credentials file for your device:",
+            f"# export MQTT_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
+        ]
     else:
         lines += [
             f"export NATS_URL=nats://{host}:{port}",
@@ -115,6 +122,23 @@ def _generate_readme(tenant: str, backend: str) -> str:
             f"   ```bash\n"
             f"   export MESSAGING_TLS_CERT_FILE=./certs/{tenant}-device-001-cert.pem\n"
             f"   export MESSAGING_TLS_KEY_FILE=./certs/{tenant}-device-001-key.pem\n"
+            f"   ```\n\n"
+            f"3. Run your device:\n"
+            f"   ```bash\n"
+            f"   python your_device.py\n"
+            f"   ```\n"
+        )
+    elif backend == "mqtt":
+        return (
+            f"# {tenant} — Device Connect Credentials (MQTT)\n\n"
+            f"## Quick Start\n\n"
+            f"1. Source the environment:\n"
+            f"   ```bash\n"
+            f"   source tenant-config.env\n"
+            f"   ```\n\n"
+            f"2. Set your device credential:\n"
+            f"   ```bash\n"
+            f"   export MQTT_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
             f"   ```\n\n"
             f"3. Run your device:\n"
             f"   ```bash\n"

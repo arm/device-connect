@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Install system dependencies (openssl for Zenoh PKI certificate generation)
+# Install system dependencies (openssl for Zenoh PKI, mosquitto-clients for MQTT passwd)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl unzip openssl \
+    curl unzip openssl mosquitto-clients \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI (for SIGHUP to NATS container)
@@ -31,7 +31,7 @@ COPY packages/device-connect-edge /app/packages/device-connect-edge
 RUN pip install --no-cache-dir --only-binary eclipse-zenoh /app/packages/device-connect-edge
 
 COPY packages/device-connect-server /app/packages/device-connect-server
-RUN pip install --no-cache-dir "/app/packages/device-connect-server[portal]"
+RUN pip install --no-cache-dir "/app/packages/device-connect-server[portal,mqtt]"
 
 # Create credential and security dirs
 RUN mkdir -p /root/.device-connect/credentials

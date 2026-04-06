@@ -1,4 +1,4 @@
-"""Messaging backend abstraction — strategy pattern for NATS vs Zenoh.
+"""Messaging backend abstraction — strategy pattern for NATS, Zenoh, and MQTT.
 
 The admin selects a backend during bootstrap. All portal services
 (tenant creation, device provisioning, RPC, verification) dispatch
@@ -27,7 +27,7 @@ class MessagingBackendService(ABC):
 
     @abstractmethod
     def backend_name(self) -> str:
-        """Return the backend identifier ('nats' or 'zenoh')."""
+        """Return the backend identifier ('nats', 'zenoh', or 'mqtt')."""
 
     @abstractmethod
     def is_bootstrapped(self) -> bool:
@@ -139,6 +139,9 @@ def _create_backend(name: str) -> MessagingBackendService:
     elif name == "zenoh":
         from .zenoh_backend import ZenohBackend
         return ZenohBackend()
+    elif name == "mqtt":
+        from .mqtt_backend import MqttBackend
+        return MqttBackend()
     else:
         raise ValueError(f"Unknown messaging backend: {name}")
 
@@ -170,7 +173,12 @@ def get_backend(name: str | None = None) -> MessagingBackendService:
         _active_backend = _create_backend(choice["backend"])
         return _active_backend
 
-    # 3. Auto-detect: if Zenoh PKI exists, use Zenoh; otherwise NATS
+    # 3. Auto-detect from backend-specific files
+    mosquitto_conf = config.SECURITY_INFRA_DIR / "mosquitto.conf"
+    if mosquitto_conf.exists():
+        _active_backend = _create_backend("mqtt")
+        return _active_backend
+
     zenoh_ca = config.SECURITY_INFRA_DIR / "ca.pem"
     if zenoh_ca.exists() and not (config.NSC_HOME / "nkeys").exists():
         _active_backend = _create_backend("zenoh")
