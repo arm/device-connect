@@ -17,6 +17,7 @@ from device_connect_edge.discovery import (
     PresenceAnnouncer,
     PresenceCollector,
     D2DRegistry,
+    _device_has_capabilities,
 )
 
 
@@ -566,3 +567,92 @@ class TestPresenceCollectorWait:
         result = await collector.wait_for_device_id("nonexistent", timeout=0.3)
         assert result is None
         await collector.stop()
+
+
+# ── Self-filtering ──────────────────────────────────────────────
+
+class TestSelfFiltering:
+    """Verify that a collector ignores its own presence announcements."""
+
+    @pytest.mark.asyncio
+    async def test_own_device_id_not_tracked(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default", device_id="my-device")
+        await collector.start()
+
+        await collector._on_presence(_make_presence_payload("my-device", "camera"))
+
+        devices = await collector.list_devices()
+        assert len(devices) == 0
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_other_device_still_tracked(self):
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default", device_id="my-device")
+        await collector.start()
+
+        await collector._on_presence(_make_presence_payload("my-device", "camera"))
+        await collector._on_presence(_make_presence_payload("other-device", "robot"))
+
+        devices = await collector.list_devices()
+        assert len(devices) == 1
+        assert devices[0]["device_id"] == "other-device"
+        await collector.stop()
+
+    @pytest.mark.asyncio
+    async def test_no_device_id_does_not_self_filter(self):
+        """Collector without device_id should not filter anything."""
+        messaging = _make_messaging()
+        collector = PresenceCollector(messaging, "default")
+        await collector.start()
+
+        await collector._on_presence(_make_presence_payload("camera-01", "camera"))
+
+        devices = await collector.list_devices()
+        assert len(devices) == 1
+        await collector.stop()
+
+
+# ── _device_has_capabilities ────────────────────────────────────
+
+class TestDeviceHasCapabilities:
+
+    def test_dict_functions_match(self):
+        device = {"capabilities": {"functions": [{"name": "snap"}, {"name": "zoom"}]}}
+        assert _device_has_capabilities(device, ["snap"]) is True
+        assert _device_has_capabilities(device, ["snap", "zoom"]) is True
+
+    def test_string_functions_match(self):
+        device = {"capabilities": {"functions": ["snap", "zoom"]}}
+        assert _device_has_capabilities(device, ["snap"]) is True
+        assert _device_has_capabilities(device, ["snap", "zoom"]) is True
+
+    def test_mixed_functions_match(self):
+        device = {"capabilities": {"functions": [{"name": "snap"}, "zoom"]}}
+        assert _device_has_capabilities(device, ["snap", "zoom"]) is True
+
+    def test_missing_capability(self):
+        device = {"capabilities": {"functions": [{"name": "snap"}]}}
+        assert _device_has_capabilities(device, ["zoom"]) is False
+
+    def test_partial_match_returns_false(self):
+        device = {"capabilities": {"functions": [{"name": "snap"}]}}
+        assert _device_has_capabilities(device, ["snap", "zoom"]) is False
+
+    def test_empty_required_returns_true(self):
+        device = {"capabilities": {"functions": [{"name": "snap"}]}}
+        assert _device_has_capabilities(device, []) is True
+
+    def test_no_capabilities_key(self):
+        device = {}
+        assert _device_has_capabilities(device, ["snap"]) is False
+
+    def test_none_capabilities(self):
+        device = {"capabilities": None}
+        assert _device_has_capabilities(device, ["snap"]) is False
+
+    def test_empty_functions_list(self):
+        device = {"capabilities": {"functions": []}}
+        assert _device_has_capabilities(device, ["snap"]) is False
+        assert _device_has_capabilities(device, []) is True

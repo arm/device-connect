@@ -405,7 +405,7 @@ class TestModuleLevelHelpers:
     def test_module_list_devices(self, mock_reg):
         mock_reg.list_devices.return_value = [{"id": "cam-001"}]
         result = list_devices("default")
-        mock_reg.list_devices.assert_called_once_with("default")
+        mock_reg.list_devices.assert_called_once_with("default", device_type=None, location=None)
         assert result == [{"id": "cam-001"}]
 
     @patch("device_connect_server.registry.service.registry._REGISTRY")

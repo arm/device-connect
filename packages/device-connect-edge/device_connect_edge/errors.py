@@ -88,7 +88,7 @@ class ValidationError(DeviceConnectError):
         self.errors = errors or []
 
 
-class ConnectionError(DeviceConnectError):
+class DeviceConnectionError(DeviceConnectError):
     """Error establishing or maintaining connection.
 
     Raised when the device cannot connect to the messaging backend

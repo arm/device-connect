@@ -24,14 +24,9 @@ Bridge-side usage (Claude Desktop):
 from device_connect_agent_tools.mcp.device_connect_mcp import DeviceConnectMCP
 from device_connect_agent_tools.mcp.bridge import MCPBridgeServer, run_bridge
 from device_connect_agent_tools.mcp.config import BridgeConfig
-from device_connect_agent_tools.mcp.discovery import DeviceDiscoveryClient, DiscoveryError
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError, ToolNotFoundError
-from device_connect_agent_tools.mcp.schema import (
-    MCPToolDefinition,
-    function_to_mcp_tool,
-    parse_tool_name,
-    devices_to_mcp_tools,
-)
+from device_connect_agent_tools.mcp.schema import parse_tool_name
+
 __all__ = [
     # Device-side API
     "DeviceConnectMCP",
@@ -39,18 +34,12 @@ __all__ = [
     "MCPBridgeServer",
     "run_bridge",
     "BridgeConfig",
-    # Discovery
-    "DeviceDiscoveryClient",
-    "DiscoveryError",
     # Routing
     "ToolRouter",
     "ToolInvocationError",
     "ToolNotFoundError",
-    # Schema
-    "MCPToolDefinition",
-    "function_to_mcp_tool",
+    # Schema utilities
     "parse_tool_name",
-    "devices_to_mcp_tools",
 ]
 
 

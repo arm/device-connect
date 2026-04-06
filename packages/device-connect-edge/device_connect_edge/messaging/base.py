@@ -50,7 +50,7 @@ class MessagingClient(ABC):
             **kwargs: Additional backend-specific options
 
         Raises:
-            ConnectionError: If connection fails
+            MessagingConnectionError: If connection fails
             AuthenticationError: If authentication fails
         """
         pass

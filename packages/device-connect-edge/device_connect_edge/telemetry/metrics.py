@@ -17,7 +17,7 @@ except ImportError:
 
 
 _METER_NAME = "device_connect"
-_METER_VERSION = "0.1.0"
+_METER_VERSION = "0.2.2"
 
 # Singleton instance
 _metrics_instance: Optional["MetricsClient"] = None

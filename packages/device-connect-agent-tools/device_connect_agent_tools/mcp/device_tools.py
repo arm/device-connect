@@ -45,7 +45,7 @@ DEVICE_CONNECT_ALLOW_INSECURE = os.getenv("DEVICE_CONNECT_ALLOW_INSECURE", "fals
 
 # Configurable path to reference capability packs.
 # Defaults to the device-connect-capability-agent repo next to device-connect-agent-tools,
-# or falls back to the legacy core/ location.
+# or checks well-known sibling directory locations.
 CAPABILITY_PACKS_PATH = os.getenv("DEVICE_CONNECT_CAPABILITY_PACKS_PATH")
 
 # MCP protocol types
@@ -173,7 +173,7 @@ class DeviceToolsServer:
                     if "device_id" in result and result.get("device_id") != "unknown":
                         devices.append(result)
                 except Exception:
-                    pass
+                    logger.warning("Failed to parse discovery response", exc_info=True)
 
             # Subscribe to inbox to collect responses
             sub = await self._messaging.subscribe(inbox, callback=on_response)

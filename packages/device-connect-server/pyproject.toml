@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "device-connect-server"
-version = "0.1.1"
+version = "0.2.2"
 description = "Device Connect — edge device runtime with Zenoh/NATS messaging, D2D communication, and IoT orchestration"
 readme = "README.md"
 requires-python = ">=3.11"

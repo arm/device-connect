@@ -19,7 +19,7 @@ except ImportError:
 
 from device_connect_edge.messaging.base import MessagingClient, Subscription
 from device_connect_edge.messaging.exceptions import (
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -166,7 +166,7 @@ class MQTTAdapter(MessagingClient):
             self._logger.error(f"Failed to connect to MQTT: {e}")
             if "authentication" in str(e).lower() or "authorization" in str(e).lower():
                 raise AuthenticationError(f"Authentication failed: {e}") from e
-            raise ConnectionError(f"Failed to connect to MQTT: {e}") from e
+            raise MessagingConnectionError(f"Failed to connect to MQTT: {e}") from e
 
     def _build_tls_context(self, tls_config: Dict[str, Any]) -> ssl.SSLContext:
         """Build SSL context from TLS configuration."""
@@ -174,7 +174,7 @@ class MQTTAdapter(MessagingClient):
         cert_file = tls_config.get("cert_file")
         key_file = tls_config.get("key_file")
 
-        tls_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
 
         # Load CA certificate
         if ca_file:
@@ -209,8 +209,9 @@ class MQTTAdapter(MessagingClient):
                 # Check if it's a reply to a request
                 if topic.startswith("_reply/"):
                     request_id = topic.split("/")[1]
-                    if request_id in self._request_futures:
-                        self._request_futures[request_id].set_result(payload)
+                    fut = self._request_futures.get(request_id)
+                    if fut is not None and not fut.done():
+                        fut.set_result(payload)
                     continue
 
                 # Dispatch to subscriber
@@ -218,7 +219,7 @@ class MQTTAdapter(MessagingClient):
                 for pattern, callback in self._subscriptions.items():
                     if self._topic_matches(topic, pattern):
                         try:
-                            await callback(payload, None)
+                            await callback(payload, topic, None)
                         except Exception as e:
                             self._logger.error(f"Error in subscriber callback: {e}")
 
@@ -259,6 +260,10 @@ class MQTTAdapter(MessagingClient):
                 return False  # # must be last
             pattern_parts = pattern_parts[:hash_idx]
             topic_parts = topic_parts[:hash_idx]
+            # Truncation is correct: trim both arrays to the prefix before #,
+            # then the loop only checks prefix equality.  # implicitly matches
+            # all remaining topic levels.  The final length guard uses the
+            # original ``pattern`` (still contains #), so it skips correctly.
 
         if len(topic_parts) < len(pattern_parts):
             return False
@@ -330,10 +335,52 @@ class MQTTAdapter(MessagingClient):
             self._logger.debug(f"Subscribing to {topic}")
 
         try:
+            # Wrap 2-arg user callback to match 3-arg internal format (data, topic, reply)
+            async def _topic_wrapper(data: bytes, _topic: str, reply: Optional[str]):
+                await callback(data, reply)
+
+            await self._client.subscribe(subscribe_topic, qos=self._qos)
+            self._subscriptions[subscribe_topic] = _topic_wrapper
+            return MQTTSubscriptionWrapper(self._client, subscribe_topic)
+
+        except Exception as e:
+            self._logger.error(f"Failed to subscribe to {topic}: {e}")
+            raise SubscribeError(f"Failed to subscribe: {e}") from e
+
+    async def subscribe_with_subject(
+        self,
+        subject: str,
+        callback: Callable[[bytes, str, Optional[str]], Awaitable[None]],
+        queue: Optional[str] = None,
+        subscribe_only: bool = False,
+    ) -> Subscription:
+        """Subscribe to MQTT topic, passing the matched topic to the callback.
+
+        Args:
+            subject: Subject pattern (NATS-style, will be converted to MQTT).
+            callback: Async callback ``(data, matched_topic, reply)``.
+            queue: Queue group name for load balancing (``$share/group/topic``).
+            subscribe_only: Ignored for MQTT (always subscribe-only).
+
+        Returns:
+            Subscription handle.
+        """
+        if not self.is_connected:
+            raise NotConnectedError("Not connected to MQTT broker")
+
+        topic = self.convert_subject_syntax(subject)
+
+        subscribe_topic = topic
+        if queue:
+            subscribe_topic = f"$share/{queue}/{topic}"
+            self._logger.debug(f"Subscribing to {topic} with subject callback (shared group: {queue})")
+        else:
+            self._logger.debug(f"Subscribing to {topic} with subject callback")
+
+        try:
             await self._client.subscribe(subscribe_topic, qos=self._qos)
             self._subscriptions[subscribe_topic] = callback
             return MQTTSubscriptionWrapper(self._client, subscribe_topic)
-
         except Exception as e:
             self._logger.error(f"Failed to subscribe to {topic}: {e}")
             raise SubscribeError(f"Failed to subscribe: {e}") from e
@@ -405,8 +452,7 @@ class MQTTAdapter(MessagingClient):
         finally:
             # Cleanup
             await self._client.unsubscribe(reply_topic)
-            if request_id in self._request_futures:
-                del self._request_futures[request_id]
+            self._request_futures.pop(request_id, None)
 
     async def close(self) -> None:
         """Close connection to MQTT broker."""
@@ -423,6 +469,18 @@ class MQTTAdapter(MessagingClient):
 
         self._connected = False
         self._closed = True
+
+    async def disconnect(self) -> None:
+        """Alias for close() — disconnect from MQTT."""
+        await self.close()
+
+    async def flush(self) -> None:
+        """No-op for MQTT — publishes are immediate."""
+        pass
+
+    async def drain(self) -> None:
+        """No-op for MQTT — no buffering concept."""
+        pass
 
     @property
     def is_connected(self) -> bool:
@@ -459,9 +517,10 @@ class MQTTAdapter(MessagingClient):
         # Replace dots with slashes
         topic = subject.replace(".", "/")
 
-        # Replace NATS wildcards with MQTT wildcards
-        topic = topic.replace("/*/", "/+/")  # Middle wildcards
-        topic = topic.replace("/*", "/+")     # End wildcards
+        # Replace NATS single-level wildcards (*) with MQTT equivalents (+)
+        parts = topic.split("/")
+        parts = ["+" if p == "*" else p for p in parts]
+        topic = "/".join(parts)
 
         # Multi-level wildcard (must be last)
         if topic.endswith("/>"):

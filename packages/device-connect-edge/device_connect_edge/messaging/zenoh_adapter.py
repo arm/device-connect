@@ -16,6 +16,7 @@ Key characteristics:
 import asyncio
 import json
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -32,7 +33,7 @@ except ImportError:
 
 from device_connect_edge.messaging.base import MessagingClient, Subscription
 from device_connect_edge.messaging.exceptions import (
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -47,6 +48,8 @@ _QUERY_REPLY_PREFIX = "_zenoh_query/"
 # Seconds for routing-table updates to propagate through D2D mesh
 # after undeclaring queryables during graceful shutdown.
 _D2D_QUERYABLE_PROPAGATION_DELAY = 0.5
+
+logger = logging.getLogger(__name__)
 
 
 class ZenohSubscriptionWrapper(Subscription):
@@ -75,17 +78,17 @@ class ZenohSubscriptionWrapper(Subscription):
             except asyncio.CancelledError:
                 pass
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         if self._subscriber is not None:
             try:
                 await loop.run_in_executor(None, self._subscriber.undeclare)
             except Exception:
-                pass
+                logger.debug("cleanup error undeclaring subscriber", exc_info=True)
         if self._queryable is not None:
             try:
                 await loop.run_in_executor(None, self._queryable.undeclare)
             except Exception:
-                pass
+                logger.debug("cleanup error undeclaring queryable", exc_info=True)
 
         if self._adapter and self._key_expr:
             self._adapter._subscriptions.pop(self._key_expr, None)
@@ -117,7 +120,11 @@ class ZenohAdapter(MessagingClient):
         self._closed = False
         self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="zenoh")
         self._subscriptions: Dict[str, Dict[str, Any]] = {}
-        self._pending_queries: Dict[str, Any] = {}  # reply_id -> Query object
+        self._pending_queries: Dict[str, tuple] = {}  # reply_id -> (Query, timestamp)
+        # All current accesses are in the asyncio loop, but the lock is
+        # defensive in case the Zenoh callback model changes.
+        self._pending_queries_lock = threading.Lock()
+        self._query_ttl = 30.0  # seconds before stale queries are evicted
         self._reconnect_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._disconnect_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._d2d_mode = False
@@ -219,7 +226,7 @@ class ZenohAdapter(MessagingClient):
             config = zenoh.Config.from_json5(json.dumps(config_dict))
 
             # Open session in executor (blocking call)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self._session = await loop.run_in_executor(
                 self._executor, zenoh.open, config
             )
@@ -234,7 +241,7 @@ class ZenohAdapter(MessagingClient):
 
         except Exception as e:
             self._logger.error(f"Failed to connect to Zenoh: {e}")
-            raise ConnectionError(f"Failed to connect to Zenoh: {e}") from e
+            raise MessagingConnectionError(f"Failed to connect to Zenoh: {e}") from e
 
     def configure_d2d_retry(self, retries: int = 3, delay: float = 0.3) -> None:
         """Configure retry behavior for D2D mode request/reply.
@@ -245,6 +252,15 @@ class ZenohAdapter(MessagingClient):
         """
         self._d2d_retry_count = retries
         self._d2d_retry_delay = delay
+
+    def _evict_stale_queries(self) -> None:
+        """Remove pending queries older than _query_ttl. Must be called under _pending_queries_lock."""
+        cutoff = time.monotonic() - self._query_ttl
+        stale = [qid for qid, (_, ts) in self._pending_queries.items() if ts < cutoff]
+        for qid in stale:
+            self._pending_queries.pop(qid, None)
+        if stale:
+            logger.debug("Evicted %d stale pending queries", len(stale))
 
     def _parse_server_url(self, url: str) -> Optional[str]:
         """Convert various URL formats to Zenoh endpoint format.
@@ -299,13 +315,15 @@ class ZenohAdapter(MessagingClient):
         # Intercept query replies — these are responses to queryable hits
         if key.startswith(_QUERY_REPLY_PREFIX):
             query_id = key[len(_QUERY_REPLY_PREFIX):]
-            query = self._pending_queries.pop(query_id, None)
+            with self._pending_queries_lock:
+                entry = self._pending_queries.pop(query_id, None)
+            query = entry[0] if entry is not None else None
             if query is not None:
                 try:
                     # Reply and drop must run in the Zenoh executor so
                     # that the finalisation signal reaches the router
                     # promptly (zenoh#1409).
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     def _reply_and_drop():
                         query.reply(query.key_expr, data)
                         query.drop()
@@ -328,7 +346,7 @@ class ZenohAdapter(MessagingClient):
         ) as span:
             try:
                 t0 = time.monotonic()
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(
                     self._executor,
                     lambda: self._session.put(key, data),
@@ -387,7 +405,7 @@ class ZenohAdapter(MessagingClient):
         key = self.convert_subject_syntax(subject)
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             sample_queue: asyncio.Queue = asyncio.Queue()
 
             # Zenoh subscriber callback (runs in Zenoh's thread — must not block)
@@ -414,7 +432,9 @@ class ZenohAdapter(MessagingClient):
                                 await callback(bytes(obj.payload), None)
                             elif msg_type == "query":
                                 query_id = uuid.uuid4().hex
-                                self._pending_queries[query_id] = obj
+                                with self._pending_queries_lock:
+                                    self._pending_queries[query_id] = (obj, time.monotonic())
+                                    self._evict_stale_queries()
                                 reply_subject = f"{_QUERY_REPLY_PREFIX}{query_id}"
                                 payload = bytes(obj.payload) if obj.payload else b""
                                 await callback(payload, reply_subject)
@@ -490,7 +510,7 @@ class ZenohAdapter(MessagingClient):
         key = self.convert_subject_syntax(subject)
 
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             sample_queue: asyncio.Queue = asyncio.Queue()
 
             def on_sample(sample):
@@ -515,7 +535,9 @@ class ZenohAdapter(MessagingClient):
                                 await callback(bytes(obj.payload), matched_key, None)
                             elif msg_type == "query":
                                 query_id = uuid.uuid4().hex
-                                self._pending_queries[query_id] = obj
+                                with self._pending_queries_lock:
+                                    self._pending_queries[query_id] = (obj, time.monotonic())
+                                    self._evict_stale_queries()
                                 reply_subject = f"{_QUERY_REPLY_PREFIX}{query_id}"
                                 matched_key = str(obj.key_expr)
                                 payload = bytes(obj.payload) if obj.payload else b""
@@ -599,7 +621,7 @@ class ZenohAdapter(MessagingClient):
         ) as span:
             try:
                 t0 = time.monotonic()
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
 
                 def _do_get():
                     # CancellationToken aborts the receiver as soon as
@@ -698,7 +720,7 @@ class ZenohAdapter(MessagingClient):
 
     async def close(self) -> None:
         """Close connection to Zenoh and cleanup all resources."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         has_queryables = False
 
         # Phase 1: Undeclare queryables first so peers update routing
@@ -710,7 +732,7 @@ class ZenohAdapter(MessagingClient):
                 try:
                     await loop.run_in_executor(self._executor, queryable.undeclare)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error undeclaring queryable during close", exc_info=True)
                 info["queryable"] = None
 
         # Brief delay for queryable undeclaration to propagate in D2D mesh
@@ -725,7 +747,7 @@ class ZenohAdapter(MessagingClient):
                 try:
                     await loop.run_in_executor(self._executor, subscriber.undeclare)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error undeclaring subscriber during close", exc_info=True)
 
             drain_task = info.get("drain_task")
             if drain_task and not drain_task.done():
@@ -736,7 +758,8 @@ class ZenohAdapter(MessagingClient):
                     pass
 
         self._subscriptions.clear()
-        self._pending_queries.clear()
+        with self._pending_queries_lock:
+            self._pending_queries.clear()
 
         # Phase 3: Close session
         if self._session is not None and not self._session.is_closed():

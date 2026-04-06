@@ -26,8 +26,8 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, Dict, List, Optional
 
-from device_connect_server.messaging import MessagingClient, create_client
-from device_connect_server.messaging.config import MessagingConfig
+from device_connect_edge.messaging import MessagingClient, create_client
+from device_connect_edge.messaging.config import MessagingConfig
 
 # Optional dependencies
 try:

@@ -81,11 +81,8 @@ from device_connect_edge.telemetry.metrics import get_metrics
 from device_connect_edge.telemetry.propagation import inject_into_meta
 
 if TYPE_CHECKING:
-    from device_connect_edge.device import DeviceRuntime, _D2DRouter as DeviceRouter
-    try:
-        from device_connect_server.registry.client import RegistryClient
-    except ImportError:
-        pass
+    from device_connect_edge.device import DeviceRuntime, _RemoteInvoker as DeviceRouter
+    from device_connect_edge.discovery_provider import DiscoveryProvider
 
 
 logger = logging.getLogger("device_connect.drivers.base")
@@ -150,11 +147,14 @@ class DeviceDriver(ABC):
 
         # D2D: Router and registry (set by DeviceRuntime)
         self._router: Optional[DeviceRouter] = None
-        self._registry: Optional[RegistryClient] = None
+        self._registry: Optional[DiscoveryProvider] = None
 
         # D2D: Event subscriptions (@on decorated methods)
         self._subscriptions: List[Any] = []
         self._subscription_tasks: List[asyncio.Task] = []
+
+        # Device identity (set by DeviceRuntime via _setup_agentic_driver)
+        self._device_id: Optional[str] = None
 
         # Raw transport for hardware-native topic access
         self._transport: Optional["DriverTransport"] = None  # noqa: F821
@@ -274,6 +274,12 @@ class DeviceDriver(ABC):
         self._events_cache = self._collect_events()
         return self._events_cache
 
+    def _invalidate_caches(self) -> None:
+        """Reset cached function/event lists so they are rebuilt on next access."""
+        self._functions_cache = None
+        self._events_cache = None
+        self._function_methods = None
+
     @property
     def identity(self) -> DeviceIdentity:
         """Get static device identity.
@@ -306,7 +312,7 @@ class DeviceDriver(ABC):
         actuators, or other hardware.
 
         Raises:
-            ConnectionError: If connection fails
+            MessagingConnectionError: If connection fails
         """
 
     async def disconnect(self) -> None:
@@ -433,36 +439,21 @@ class DeviceDriver(ABC):
         """
         from device_connect_edge.errors import FunctionInvocationError
 
-        # Find the method with matching function name
-        for attr_name in dir(self):
-            if attr_name.startswith("_"):
-                continue
-
-            if attr_name in self._SKIP_ATTRS:
-                continue
-
-            attr = getattr(self, attr_name, None)
-            if attr is None or not callable(attr):
-                continue
-
-            if not getattr(attr, "_is_device_function", False):
-                continue
-
-            func_name = getattr(attr, "_function_name", attr_name)
-            if func_name == function_name:
-                try:
-                    return await attr(**params)
-                except Exception as e:
-                    raise FunctionInvocationError(
-                        f"Error invoking {function_name}: {e}",
-                        function_name=function_name,
-                        original_error=e
-                    ) from e
-
-        raise FunctionInvocationError(
-            f"Function '{function_name}' not found",
-            function_name=function_name
-        )
+        funcs = self._get_functions()
+        method = funcs.get(function_name)
+        if method is None:
+            raise FunctionInvocationError(
+                f"Function '{function_name}' not found",
+                function_name=function_name
+            )
+        try:
+            return await method(**params)
+        except Exception as e:
+            raise FunctionInvocationError(
+                f"Error invoking {function_name}: {e}",
+                function_name=function_name,
+                original_error=e
+            ) from e
 
     async def _emit_event_internal(self, event_name: str, payload: Dict[str, Any]) -> None:
         """Internal event emission - called by @emit decorator.
@@ -732,7 +723,7 @@ class DeviceDriver(ABC):
         wait_for_completion = config["wait_for_completion"]
 
         while True:
-            start_time = asyncio.get_event_loop().time()
+            start_time = asyncio.get_running_loop().time()
 
             # Set call origin to "routine" so RPC logs show LOCAL instead of EXEC
             token = set_call_origin("routine")
@@ -747,7 +738,7 @@ class DeviceDriver(ABC):
 
             if wait_for_completion:
                 # Wait remaining time (or 0 if routine took longer than interval)
-                elapsed = asyncio.get_event_loop().time() - start_time
+                elapsed = asyncio.get_running_loop().time() - start_time
                 sleep_time = max(0, interval - elapsed)
                 await asyncio.sleep(sleep_time)
             else:
@@ -788,12 +779,12 @@ class DeviceDriver(ABC):
         self._router = value
 
     @property
-    def registry(self) -> Optional[RegistryClient]:
+    def registry(self) -> Optional[DiscoveryProvider]:
         """Get the registry client for device discovery."""
         return self._registry
 
     @registry.setter
-    def registry(self, value: RegistryClient) -> None:
+    def registry(self, value: DiscoveryProvider) -> None:
         """Set the registry client."""
         self._registry = value
 
@@ -867,7 +858,6 @@ class DeviceDriver(ABC):
             kwargs = {"params": params_with_meta}
             if timeout is not None:
                 kwargs["timeout"] = timeout
-            kwargs["source_device"] = caller_id
 
             # Summarize params for logging (exclude _dc_meta)
             params_summary = ", ".join(f"{k}={repr(v)[:30]}" for k, v in params.items()) if params else "(none)"
@@ -1084,7 +1074,15 @@ class DeviceDriver(ABC):
         logger.info("Setting up %d event subscriptions", len(subscriptions))
 
         for sub in subscriptions:
-            await self._setup_subscription(sub)
+            try:
+                await self._setup_subscription(sub)
+            except Exception as e:
+                handler = sub.get("handler")
+                name = getattr(handler, "__name__", str(handler)) if callable(handler) else str(handler)
+                logger.error(
+                    "Failed to set up subscription %s (device_type=%s, event=%s): %s",
+                    name, sub.get("device_type"), sub.get("event_name"), e,
+                )
 
     async def _setup_subscription(self, sub: Dict[str, Any]) -> None:
         """Set up a single event subscription.
@@ -1131,13 +1129,38 @@ class DeviceDriver(ABC):
                 # Zenoh delivers key expressions with slashes; NATS uses dots — handle both.
                 sep = "/" if "/" in matched_subject else "."
                 parts = matched_subject.split(sep)
-                source_device_id = parts[2] if len(parts) > 2 else "unknown"
+                # Parse from the end for robustness: {prefix}.{tenant}.{device_id}.event.{name}
+                # This handles device IDs that might contain the separator.
+                if len(parts) >= 5 and parts[-2] == "event":
+                    source_device_id = sep.join(parts[2:-2])
+                elif len(parts) > 2:
+                    source_device_id = parts[2]
+                else:
+                    source_device_id = "unknown"
                 source_event_name = parsed.get("method", event_name)
                 payload = parsed.get("params", {})
 
-                # Filter by device_type if specified (check device_id prefix)
-                if device_type and not source_device_id.startswith(f"{device_type}-"):
-                    return  # Skip events from non-matching device types
+                # Filter by device_type if specified
+                if device_type:
+                    # Try to resolve type from D2D peer cache
+                    source_type = ""
+                    collector = getattr(self._device, '_d2d_collector', None) if self._device else None
+                    if collector is not None:
+                        peer = await collector.get_device(source_device_id)
+                        if peer:
+                            source_type = (peer.get("identity") or {}).get("device_type", "")
+                    if source_type:
+                        if source_type.lower() != device_type.lower():
+                            return
+                    else:
+                        # Cannot resolve device_type from D2D peer cache.
+                        # Don't filter — false negatives (dropping valid events)
+                        # are worse than false positives (passing extra events).
+                        logger.debug(
+                            "[%s] Cannot resolve device_type for %s, "
+                            "allowing event through (wanted type=%s)",
+                            self_id, source_device_id, device_type,
+                        )
 
                 await handler(source_device_id, source_event_name, payload)
             except Exception as e:

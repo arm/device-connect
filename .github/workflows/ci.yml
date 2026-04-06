@@ -18,7 +18,7 @@ env:
 
 jobs:
   # ── Unit tests (parallel, no Docker) ──────────────────────────
-  unit-tests-sdk:
+  unit-tests-edge:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -90,7 +90,7 @@ jobs:
   integration-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [unit-tests-sdk, unit-tests-server, unit-tests-agent-tools]
+    needs: [unit-tests-edge, unit-tests-server, unit-tests-agent-tools]
     env:
       DEVICE_CONNECT_ALLOW_INSECURE: 'true'
       NATS_URL: 'nats://localhost:4222'

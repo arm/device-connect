@@ -37,6 +37,12 @@ from device_connect_edge.drivers.decorators import (
     build_event_schema,
 )
 from device_connect_edge.drivers.transport import DriverTransport
+from device_connect_edge.drivers.capability_loader import (
+    CapabilityLoader,
+    CapabilityDriverMixin,
+    LoadedCapability,
+    EventSubscription,
+)
 
 __all__ = [
     "DeviceDriver",
@@ -48,4 +54,9 @@ __all__ = [
     "on",
     "build_function_schema",
     "build_event_schema",
+    # Capability loading
+    "CapabilityLoader",
+    "CapabilityDriverMixin",
+    "LoadedCapability",
+    "EventSubscription",
 ]

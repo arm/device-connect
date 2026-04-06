@@ -2,9 +2,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from device_connect_server.drivers.base import DeviceDriver, on
-from device_connect_server.drivers.decorators import rpc
-from device_connect_server.types import DeviceIdentity, DeviceStatus
+from device_connect_edge.drivers.base import DeviceDriver, on
+from device_connect_edge.drivers.decorators import rpc
+from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
 
 class TestDeviceDriver:
@@ -96,7 +96,7 @@ class TestDeviceDriver:
         # Verify trace metadata was injected
         assert "_dc_meta" in call_args[1]["params"]
         assert "trace_id" in call_args[1]["params"]["_dc_meta"]
-        assert "source_device" in call_args[1]
+        assert "source_device" in call_args[1]["params"]["_dc_meta"]
         assert result == {"result": "success"}
 
     @pytest.mark.asyncio

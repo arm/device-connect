@@ -14,7 +14,7 @@ from nats.aio.subscription import Subscription as NATSSubscription
 
 from device_connect_edge.messaging.base import MessagingClient, Subscription
 from device_connect_edge.messaging.exceptions import (
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -185,7 +185,7 @@ class NATSAdapter(MessagingClient):
             self._logger.error(f"Failed to connect to NATS: {e}")
             if "authorization" in str(e).lower():
                 raise AuthenticationError(f"Authentication failed: {e}") from e
-            raise ConnectionError(f"Failed to connect to NATS: {e}") from e
+            raise MessagingConnectionError(f"Failed to connect to NATS: {e}") from e
 
     def _build_tls_context(self, tls_config: Dict[str, Any]) -> ssl.SSLContext:
         """Build SSL context from TLS configuration."""

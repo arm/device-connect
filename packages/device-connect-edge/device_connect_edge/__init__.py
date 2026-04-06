@@ -1,4 +1,4 @@
-"""Device Connect SDK — lightweight runtime for edge devices.
+"""Device Connect Edge — lightweight runtime for edge devices.
 
 Build IoT devices with Python. Connect them over Zenoh or NATS. Communicate
 device-to-device using RPC and events. This is the only package a
@@ -39,10 +39,13 @@ from device_connect_edge.types import (
     FunctionDef,
     EventDef,
 )
+from device_connect_edge.discovery_provider import DiscoveryProvider
+from device_connect_edge.registry_client import RegistryClient
 from device_connect_edge.errors import (
     DeviceConnectError,
     DeviceError,
     DeviceDependencyError,
+    DeviceConnectionError,
     RegistrationError,
     FunctionInvocationError,
     ValidationError,
@@ -59,9 +62,12 @@ __all__ = [
     "DeviceStatus",
     "FunctionDef",
     "EventDef",
+    "DiscoveryProvider",
+    "RegistryClient",
     "DeviceConnectError",
     "DeviceError",
     "DeviceDependencyError",
+    "DeviceConnectionError",
     "RegistrationError",
     "FunctionInvocationError",
     "ValidationError",

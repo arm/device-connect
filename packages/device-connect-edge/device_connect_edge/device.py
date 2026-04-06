@@ -57,6 +57,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -90,8 +91,8 @@ def build_rpc_response(id_: str, result: Any) -> bytes:
     return json.dumps({"jsonrpc": "2.0", "id": id_, "result": result}).encode()
 
 
-class _D2DRouter:
-    """Minimal JSON-RPC router for device-to-device invocation.
+class _RemoteInvoker:
+    """Minimal JSON-RPC invoker for remote device calls.
 
     Provides the same interface as the device_connect_server orchestration router
     but without telemetry, retries, or the orchestration dependency.
@@ -326,7 +327,6 @@ class DeviceRuntime:
         self.identity = identity_payload
         self.status = status_payload
         self.device_id = device_id or f"device-{uuid.uuid4().hex[:8]}"
-        import re
         if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$', self.device_id):
             raise ValueError(
                 f"Invalid device_id {self.device_id!r}. Must match "
@@ -353,21 +353,7 @@ class DeviceRuntime:
         self._event_queue: asyncio.Queue[Tuple[str, bytes]] = asyncio.Queue(maxsize=10000)
         self._connection_callbacks: List[Callable[[bool], Awaitable[None]]] = []
         self._registration_callbacks: List[Callable[[], Awaitable[None]]] = []
-        self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
-
-        # Configure logger to output to console if no handlers are set
-        if not self._logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            self._logger.addHandler(handler)
-            # Set logger level from environment variable, default to INFO
-            log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
-            self._logger.setLevel(getattr(logging, log_level, logging.INFO))
-            # Prevent propagation to root logger to avoid duplicate logs
-            self._logger.propagate = False
+        self._setup_logger()
 
         # Handle factory identity and commissioning
         if factory_identity_file:
@@ -376,20 +362,7 @@ class DeviceRuntime:
             # Override device_id from factory identity if not explicitly provided
             if not device_id:
                 self.device_id = self._factory_identity['device_id']
-                # Update logger with correct device_id
-                self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
-                if not self._logger.handlers:
-                    handler = logging.StreamHandler()
-                    formatter = logging.Formatter(
-                        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                    )
-                    handler.setFormatter(formatter)
-                    self._logger.addHandler(handler)
-                    # Set logger level from environment variable, default to INFO
-                    log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
-                    self._logger.setLevel(getattr(logging, log_level, logging.INFO))
-                    # Prevent propagation to root logger to avoid duplicate logs
-                    self._logger.propagate = False
+                self._setup_logger()
 
             # Determine credentials file path
             inferred_creds_file = self._get_credentials_path_from_identity()
@@ -429,18 +402,7 @@ class DeviceRuntime:
             # and not from factory_identity
             if creds_device_id and not device_id and not factory_identity_file:
                 self.device_id = creds_device_id
-                # Update logger with correct device_id
-                self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
-                if not self._logger.handlers:
-                    handler = logging.StreamHandler()
-                    formatter = logging.Formatter(
-                        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                    )
-                    handler.setFormatter(formatter)
-                    self._logger.addHandler(handler)
-                    log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
-                    self._logger.setLevel(getattr(logging, log_level, logging.INFO))
-                    self._logger.propagate = False
+                self._setup_logger()
                 self._logger.info(f"Using device_id from credentials file: {self.device_id}")
 
         # ===== Messaging Configuration =====
@@ -528,14 +490,16 @@ class DeviceRuntime:
         self._registration_id: Optional[str] = None
         self._registration_expires_at: float = 0.0
         self._heartbeat_interval: float = heartbeat_interval or max(1.0, self.ttl / 3)
-        self._registration_lock: Optional[asyncio.Lock] = None  # Initialized in run()
+        self._registration_lock: asyncio.Lock = asyncio.Lock()
 
-        # Messaging client (initialized in run())
-        self.messaging: Optional[MessagingClient] = None
+        # Messaging client (initialized in run(); first assignment at line 350)
+
 
         # Run state (for stop())
         self._run_future: Optional[asyncio.Future] = None
+        self._stopped: Optional[asyncio.Event] = None
         self._background_tasks: List[asyncio.Task] = []
+        self._spawned_tasks: set[asyncio.Task] = set()
 
     def _validate_device_id_from_creds(self, creds: dict) -> None:
         """
@@ -559,6 +523,20 @@ class DeviceRuntime:
                 f"  export DEVICE_ID={creds_device_id}\n"
                 f"{'='*70}\n"
             )
+
+    def _setup_logger(self) -> None:
+        """Configure logger with console output if no handlers are set."""
+        self._logger = logging.getLogger(f"{__name__}.{self.device_id}")
+        if not self._logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            )
+            handler.setFormatter(formatter)
+            self._logger.addHandler(handler)
+            log_level = os.getenv('DEVICE_CONNECT_LOG_LEVEL', 'INFO').upper()
+            self._logger.setLevel(getattr(logging, log_level, logging.INFO))
+            self._logger.propagate = False
 
     def _load_credentials(self, credentials_file: str, messaging_urls: Optional[list[str]] = None) -> dict:
         """
@@ -728,6 +706,10 @@ class DeviceRuntime:
                 "Running in INSECURE mode (DEVICE_CONNECT_ALLOW_INSECURE=true). "
                 "Do NOT use this in production!"
             )
+            return
+
+        # Only validate NATS-specific config when using NATS backend (or unknown/default)
+        if self._messaging_backend not in (None, "nats"):
             return
 
         issues = []
@@ -921,10 +903,16 @@ class DeviceRuntime:
 
     async def enqueue_event(self, event: str, payload: dict) -> None:
         """Enqueue a JSON-RPC notification for a custom event."""
-        #TODO: Modify to put events that are about to be emitted through a check for local recipes, that may or may not stop/modify the event before it leaves the device.
+        # Future: event pre-processing by local recipes before emission is a
+        # separate feature and not part of this code path.
 
         note = {"jsonrpc": "2.0", "method": event, "params": payload}
         subj = f"device-connect.{self.tenant}.{self.device_id}.event.{event}"
+        # Concurrency note: no TOCTOU race exists between get_nowait() and
+        # put_nowait() below — asyncio is single-threaded and there are no
+        # ``await`` points between them, so no other coroutine can interleave.
+        # The defensive try/except QueueFull is retained for clarity, not
+        # because the condition can actually occur.
         try:
             self._event_queue.put_nowait((subj, json.dumps(note).encode()))
         except asyncio.QueueFull:
@@ -933,7 +921,10 @@ class DeviceRuntime:
                 self._event_queue.get_nowait()
             except asyncio.QueueEmpty:
                 pass
-            self._event_queue.put_nowait((subj, json.dumps(note).encode()))
+            try:
+                self._event_queue.put_nowait((subj, json.dumps(note).encode()))
+            except asyncio.QueueFull:
+                self._logger.error("Event queue still full after drop; event lost: %s", event)
 
 
     async def _register(self, force: bool = False) -> None:
@@ -945,14 +936,6 @@ class DeviceRuntime:
                 self._registration_id,
                 self._registration_expires_at - time.time(),
             )
-            return
-
-        # Use lock to prevent duplicate concurrent registrations
-        if self._registration_lock is None:
-            self._registration_lock = asyncio.Lock()
-
-        if self._registration_lock.locked():
-            self._logger.debug("Registration already in progress, skipping")
             return
 
         async with self._registration_lock:
@@ -1011,10 +994,15 @@ class DeviceRuntime:
             # Ensure messaging connectivity
             if not self.messaging.is_connected:
                 self._logger.info("Waiting for messaging reconnect")
-                if self.messaging.is_closed:
-                    await self._connect_messaging()
-                while not self.messaging.is_connected:
-                    await asyncio.sleep(1)
+                try:
+                    if self.messaging.is_closed:
+                        await self._connect_messaging()
+                    while not self.messaging.is_connected:
+                        await asyncio.sleep(1)
+                except Exception as e:
+                    self._logger.error("Heartbeat reconnect failed: %s, will retry next interval", e)
+                    await asyncio.sleep(self._heartbeat_interval)
+                    continue
                 if not self._d2d_mode:
                     try:
                         await self._register(force=True)
@@ -1140,6 +1128,12 @@ class DeviceRuntime:
             self._event_queue.task_done()
 
 
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Register a dynamically-spawned task for lifecycle tracking."""
+        self._spawned_tasks.add(task)
+        task.add_done_callback(self._spawned_tasks.discard)
+        return task
+
     async def _notify_conn_state(self, state: bool) -> None:
         """Notify registered callbacks of a connection state change."""
 
@@ -1160,7 +1154,7 @@ class DeviceRuntime:
         async def on_reconnect():
             self._logger.info(f"{self._messaging_backend.upper()} reconnected")
             if not self._d2d_mode:
-                asyncio.create_task(self._register(force=True))
+                self._track_task(asyncio.create_task(self._register(force=True)))
             await self._notify_conn_state(True)
 
         # Create messaging client based on backend
@@ -1262,6 +1256,8 @@ class DeviceRuntime:
             2. Register with registry
             3. Start heartbeat, command subscription, event dispatch
         """
+        self._stopped = asyncio.Event()
+
         # Handle commissioning if needed
         entering_commissioning = False
         if self.factory_identity_file and self.auto_commission:
@@ -1356,8 +1352,10 @@ class DeviceRuntime:
         if self._d2d_mode:
             from device_connect_edge.discovery import PresenceAnnouncer, PresenceCollector
             caps = self._driver.capabilities if self._driver else self.capabilities
-            if self._d2d_collector is None:
-                self._d2d_collector = PresenceCollector(self.messaging, self.tenant, device_id=self.device_id)
+            # Ordering contract: create announcer FIRST so the collector's
+            # on_new_peer lambda can safely reference self._d2d_announcer
+            # (late-binding).  The lambda won't fire until collector.start()
+            # is called below, by which point the announcer is fully initialized.
             self._d2d_announcer = PresenceAnnouncer(
                 self.messaging,
                 device_id=self.device_id,
@@ -1366,9 +1364,17 @@ class DeviceRuntime:
                 identity=self.identity,
                 status=self.status,
             )
-            # Wire up burst trigger BEFORE starting the collector so that
-            # peers discovered immediately on start already trigger bursts.
-            self._d2d_collector._on_new_peer = lambda _pid: self._d2d_announcer.trigger_burst()
+            if self._d2d_collector is None:
+                self._d2d_collector = PresenceCollector(
+                    self.messaging,
+                    tenant=self.tenant,
+                    on_new_peer=lambda _pid: self._d2d_announcer.trigger_burst(),
+                    device_id=self.device_id,
+                )
+            else:
+                # Collector already exists (from _setup_agentic_driver) —
+                # update the callback via the constructor parameter.
+                self._d2d_collector._on_new_peer = lambda _pid: self._d2d_announcer.trigger_burst()
             if not self._d2d_collector._started:
                 await self._d2d_collector.start()
             await self._d2d_announcer.start()
@@ -1406,9 +1412,15 @@ class DeviceRuntime:
                 if not task.done():
                     task.cancel()
 
-            # Wait for tasks to complete cancellation (with timeout)
-            if self._background_tasks:
-                await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            # Cancel dynamically-spawned tasks (reconnect registrations, callbacks)
+            for task in list(self._spawned_tasks):
+                if not task.done():
+                    task.cancel()
+
+            # Wait for all tracked tasks to complete cancellation
+            all_tasks = list(self._background_tasks) + list(self._spawned_tasks)
+            if all_tasks:
+                await asyncio.gather(*all_tasks, return_exceptions=True)
 
             # Announce departure before tearing down D2D presence
             if self._d2d_announcer and self.messaging and not self.messaging.is_closed:
@@ -1445,18 +1457,23 @@ class DeviceRuntime:
                 await self.messaging.close()
                 self._logger.debug("Messaging connection closed")
 
+            if self._stopped is not None:
+                self._stopped.set()
+
     async def stop(self) -> None:
         """Stop the device gracefully.
 
-        Cancels the run() loop and allows cleanup to proceed.
+        Cancels the run() loop and waits for cleanup to complete.
         """
         if self._run_future is not None and not self._run_future.done():
             self._run_future.cancel()
-            # Wait for cleanup to complete
-            try:
-                await asyncio.sleep(0.1)
-            except asyncio.CancelledError:
-                pass
+            if self._stopped is not None:
+                try:
+                    await asyncio.wait_for(self._stopped.wait(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    self._logger.warning("Device cleanup did not complete within 10s")
+                except asyncio.CancelledError:
+                    pass
 
     async def invoke(
         self,
@@ -1519,7 +1536,7 @@ class DeviceRuntime:
         self._logger.info("Setting up DeviceDriver D2D capabilities")
 
         # Create and set D2D router (inline — no orchestration dependency).
-        router = _D2DRouter(
+        router = _RemoteInvoker(
             self.messaging,
             tenant=self.tenant,
         )
@@ -1528,33 +1545,25 @@ class DeviceRuntime:
 
         # Pass device context to driver for capability runtime
         self._driver._device_id = self.device_id
-        self._driver._nats_url = self.messaging_urls[0] if self.messaging_urls else None
-
         # Create and set registry (RegistryClient or D2DRegistry)
         if self._d2d_mode:
             from device_connect_edge.discovery import D2DRegistry, PresenceCollector
             # Reuse the collector from run() if available, otherwise create one.
-            # Don't start it here — run() will start it after wiring _on_new_peer
-            # so that burst announcements work from the moment discovery begins.
+            # Start it early so @on handlers can resolve device types from the
+            # peer cache.  run() will skip the redundant start via _started guard.
             collector = getattr(self, '_d2d_collector', None)
             if collector is None:
                 collector = PresenceCollector(self.messaging, self.tenant, device_id=self.device_id)
                 self._d2d_collector = collector
             self._driver.registry = D2DRegistry(collector)
+            if not collector._started:
+                await collector.start()
             self._logger.debug("D2DRegistry configured for DeviceDriver (no infrastructure)")
         else:
-            try:
-                from device_connect_server.registry.client import RegistryClient
-                from device_connect_edge.messaging.config import MessagingConfig
-                config = MessagingConfig(
-                    backend=self._messaging_backend or "zenoh",
-                    servers=self.messaging_urls,
-                )
-                registry = RegistryClient(self.messaging, config, tenant=self.tenant)
-                self._driver.registry = registry
-                self._logger.debug("RegistryClient configured for DeviceDriver")
-            except ImportError:
-                self._logger.debug("RegistryClient not available (device-connect-server not installed)")
+            from device_connect_edge.registry_client import RegistryClient
+            registry = RegistryClient(self.messaging, tenant=self.tenant)
+            self._driver.registry = registry
+            self._logger.debug("RegistryClient configured for DeviceDriver")
 
         # Set up event subscriptions
         await self._driver.setup_subscriptions()
@@ -1611,6 +1620,6 @@ class DeviceRuntime:
         # Notify registration callbacks
         for cb in list(self._registration_callbacks):
             try:
-                asyncio.create_task(cb())
+                self._track_task(asyncio.create_task(cb()))
             except Exception as e:
                 self._logger.exception("Registration callback error: %s", e)

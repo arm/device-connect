@@ -8,7 +8,7 @@ class MessagingError(Exception):
     pass
 
 
-class ConnectionError(MessagingError):
+class MessagingConnectionError(MessagingError):
     """Raised when connection to messaging broker fails."""
     pass
 

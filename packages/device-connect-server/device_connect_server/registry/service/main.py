@@ -22,11 +22,13 @@ from pydantic import BaseModel, Field
 
 import logging
 
-from device_connect_server import DeviceCapabilities, build_rpc_error, build_rpc_response
-from device_connect_server.messaging import MessagingClient, create_client
-from device_connect_server.messaging.config import MessagingConfig
+from device_connect_edge import DeviceCapabilities, build_rpc_error, build_rpc_response
+from device_connect_edge.messaging import MessagingClient, create_client
+from device_connect_edge.messaging.config import MessagingConfig
 
 from device_connect_server.registry.service import registry
+from device_connect_server.registry.service.registry import summarize_fleet
+from device_connect_server.security.acl import ACLManager
 
 
 logging.basicConfig(level=logging.INFO)
@@ -263,6 +265,9 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
     """Create a registerDevice RPC handler bound to ``tenant``."""
 
     async def rpc_register_device(data: bytes, reply: Optional[str]):
+        if not reply:
+            logger.debug("[device-registry] register request with no reply address; ignoring")
+            return
         payload: dict[str, Any] = {}
         try:
             payload = json.loads(data)
@@ -291,7 +296,7 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
                 "status": "registered",
                 "device_registration_id": registration_id,
             }
-            await messaging.publish(reply, build_rpc_response(payload["id"], response))
+            await messaging.publish(reply, build_rpc_response(payload.get("id"), response))
             # emit a device online event
             event_payload = {
                 "jsonrpc": "2.0",
@@ -307,9 +312,10 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
             )
             logger.info("[device-registry] registered %s (tenant=%s) ttl=%s", params.device_id, tenant, ttl)
         except Exception as ex:
+            error_code = -32602 if isinstance(ex, (json.JSONDecodeError, ValueError)) else -32603
             await messaging.publish(
                 reply,
-                build_rpc_error(payload.get("id") if isinstance(payload, dict) else None, -32602, str(ex)),
+                build_rpc_error(payload.get("id") if isinstance(payload, dict) else None, error_code, str(ex)),
             )
             params_dict = payload.get("params") if isinstance(payload, dict) else {}
             device_id = params_dict.get("device_id") if isinstance(params_dict, dict) else None
@@ -318,32 +324,103 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
     return rpc_register_device
 
 
-def _make_list_handler(tenant: str, messaging: MessagingClient):
-    """Create a listDevices RPC handler bound to ``tenant``."""
+def _make_list_handler(
+    tenant: str,
+    messaging: MessagingClient,
+    acl_manager: Optional[ACLManager] = None,
+):
+    """Create a discovery RPC handler bound to ``tenant``.
 
-    async def rpc_list_devices(data: bytes, reply: Optional[str]):
-        payload = json.loads(data)
-        if payload.get("method") != "discovery/listDevices":
+    Handles:
+    - ``discovery/listDevices`` — list devices with optional filters
+    - ``discovery/getDevice`` — get a single device by ID (O(1))
+    - ``discovery/describeFleet`` — aggregated fleet summary
+
+    If *acl_manager* is provided, results are filtered by the
+    ``requester_id`` field in the RPC params.
+    """
+
+    async def rpc_discovery(data: bytes, reply: Optional[str]):
+        if not reply:
+            logger.debug("[device-registry] discovery request with no reply address; ignoring")
             return
+        # NOTE: ACL filtering is permissive by default.  When requester_id is
+        # omitted (empty string), filter_visible_devices passes all devices
+        # because the default visible_to=["*"] wildcard matches any requester.
+        # This is intentional — ACL is opt-in and requester_id is supplied by
+        # the caller, not extracted from authenticated credentials.
+        payload: dict[str, Any] = {}
         try:
-            devs = await asyncio.to_thread(registry.list_devices, tenant)
-            await messaging.publish(
-                reply,
-                build_rpc_response(payload["id"], {"devices": devs})
-            )
+            payload = json.loads(data)
+            method = payload.get("method", "")
+            params = payload.get("params") or {}
+
+            if method == "discovery/listDevices":
+                device_type = params.get("device_type")
+                location = params.get("location")
+                devs = await asyncio.to_thread(
+                    registry.list_devices, tenant,
+                    device_type=device_type, location=location,
+                )
+                if acl_manager:
+                    requester_id = params.get("requester_id", "")
+                    devs = acl_manager.filter_visible_devices(
+                        requester_id, devs, tenant=tenant
+                    )
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload.get("id"), {"devices": devs})
+                )
+            elif method == "discovery/getDevice":
+                device_id = params.get("device_id")
+                if not device_id:
+                    await messaging.publish(
+                        reply,
+                        build_rpc_error(payload.get("id"), -32602, "device_id required")
+                    )
+                    return
+                device = await asyncio.to_thread(
+                    registry.get_device, tenant, device_id,
+                )
+                if device and acl_manager:
+                    requester_id = params.get("requester_id", "")
+                    visible = acl_manager.filter_visible_devices(
+                        requester_id, [device], tenant=tenant
+                    )
+                    device = visible[0] if visible else None
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload.get("id"), {"device": device})
+                )
+            elif method == "discovery/describeFleet":
+                devs = await asyncio.to_thread(registry.list_devices, tenant)
+                if acl_manager:
+                    requester_id = params.get("requester_id", "")
+                    devs = acl_manager.filter_visible_devices(
+                        requester_id, devs, tenant=tenant
+                    )
+                summary = summarize_fleet(devs)
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload.get("id"), summary)
+                )
+            else:
+                return  # Not a discovery method — ignore
         except Exception as e:
             await messaging.publish(
                 reply,
-                build_rpc_error(payload.get("id"), -32000, str(e))
+                build_rpc_error(payload.get("id") if isinstance(payload, dict) else None, -32000, str(e))
             )
 
-    return rpc_list_devices
+    return rpc_discovery
 
 
 def _make_hb_handler(tenant: str):
     """Create a heartbeat handler bound to ``tenant``."""
 
     async def hb_handler(data_bytes: bytes, reply: Optional[str]):
+        data: Any = None
+        device_id: str = "?"
         try:
             data = json.loads(data_bytes)
             device_id = data.pop("device_id")
@@ -354,8 +431,7 @@ def _make_hb_handler(tenant: str):
             await asyncio.to_thread(registry.update_status, tenant, device_id, data)
             logger.debug("[device-registry] heartbeat from %s (tenant=%s)", device_id, tenant)
         except Exception as e:
-            logger.exception("[device-registry] heartbeat error for %s: %s",
-                             data.get("device_id", "?") if isinstance(data, dict) else "?", e)
+            logger.exception("[device-registry] heartbeat error for %s: %s", device_id, e)
 
     return hb_handler
 
@@ -381,6 +457,9 @@ async def main() -> None:
         tenants,
     )
 
+    # ACL enforcement (permissive by default — no ACL = visible to all)
+    acl_manager = ACLManager()
+
     # Subscribe per-tenant
     for tenant in tenants:
         await messaging.subscribe(
@@ -391,7 +470,7 @@ async def main() -> None:
         await messaging.subscribe(
             f"device-connect.{tenant}.discovery",
             queue="orch",
-            callback=_make_list_handler(tenant, messaging),
+            callback=_make_list_handler(tenant, messaging, acl_manager),
         )
         await messaging.subscribe(
             f"device-connect.{tenant}.*.heartbeat",
@@ -428,7 +507,10 @@ async def main() -> None:
                     _device_ttl.pop(compound_key, None)
             await asyncio.sleep(1)
 
-    asyncio.create_task(offline_monitor())
+    # NOTE: _monitor_task is intentionally a local variable.  The infinite
+    # loop below keeps main() (and therefore this frame) alive, so the task
+    # reference is never garbage-collected.
+    _monitor_task = asyncio.create_task(offline_monitor())
 
     # ----- Run forever -----
     while True:

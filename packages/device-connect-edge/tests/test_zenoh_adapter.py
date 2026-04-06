@@ -261,10 +261,10 @@ class TestZenohClientConnect:
         mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
 
         from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
-        from device_connect_edge.messaging.exceptions import ConnectionError
+        from device_connect_edge.messaging.exceptions import MessagingConnectionError
 
         adapter = ZenohAdapter()
-        with pytest.raises(ConnectionError, match="Connection refused"):
+        with pytest.raises(MessagingConnectionError, match="Connection refused"):
             await adapter.connect(servers=["tcp/host:7447"])
 
 
@@ -360,10 +360,11 @@ class TestZenohClientPublishQueryReply:
         adapter = ZenohAdapter()
         await adapter.connect(servers=["tcp/host:7447"])
 
-        # Simulate a pending query
+        # Simulate a pending query (stored as (query, timestamp) tuple)
+        import time
         mock_query = _make_mock_query("test/rpc", b"request")
         query_id = "abc123"
-        adapter._pending_queries[query_id] = mock_query
+        adapter._pending_queries[query_id] = (mock_query, time.monotonic())
 
         # Publish to the reply subject
         await adapter.publish(f"_zenoh_query/{query_id}", b"response")

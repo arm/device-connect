@@ -32,7 +32,7 @@ class DockerComposeManager:
         """Check if infrastructure is already running.
 
         Detects both itest-specific containers *and* any other containers
-        occupying the required ports (e.g. from core/docker-compose-dev.yml).
+        occupying the required ports (e.g. from another docker-compose-dev.yml).
         """
         # First check for our own itest containers
         try:

@@ -1,7 +1,7 @@
 """Unit tests for device_connect_edge.device module.
 
 Tests DeviceRuntime lifecycle, build_rpc_response/build_rpc_error helpers,
-and _D2DRouter — all with mocked messaging (no real NATS connection).
+and _RemoteInvoker — all with mocked messaging (no real NATS connection).
 """
 
 import asyncio
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from device_connect_edge.device import DeviceRuntime, build_rpc_response, build_rpc_error, _D2DRouter
+from device_connect_edge.device import DeviceRuntime, build_rpc_response, build_rpc_error, _RemoteInvoker
 from device_connect_edge.drivers import DeviceDriver, rpc, emit
 from device_connect_edge.types import DeviceCapabilities, DeviceIdentity, DeviceStatus
 
@@ -100,12 +100,12 @@ class TestBuildRpcError:
         assert parsed["error"]["message"] == "Custom error"
 
 
-# ── _D2DRouter ───────────────────────────────────────────────────
+# ── _RemoteInvoker ───────────────────────────────────────────────
 
-class TestD2DRouter:
+class TestRemoteInvoker:
     def _make_router(self, messaging=None, tenant="default", timeout=30.0):
         messaging = messaging or AsyncMock()
-        return _D2DRouter(messaging, tenant=tenant, timeout=timeout), messaging
+        return _RemoteInvoker(messaging, tenant=tenant, timeout=timeout), messaging
 
     @pytest.mark.asyncio
     async def test_invoke_sends_correct_subject(self):
@@ -452,18 +452,8 @@ class TestSplitPackageImports:
         assert rt._factory_identity["provisioning"]["commissioned"] is True
 
     @pytest.mark.asyncio
-    async def test_setup_agentic_driver_imports_registry_from_device_connect_server(self):
-        class FakeRegistryClient:
-            def __init__(self, messaging, config, tenant="default"):
-                self.messaging = messaging
-                self.config = config
-                self.tenant = tenant
-
-        server_pkg = _fake_package("device_connect_server")
-        registry_pkg = _fake_package("device_connect_server.registry")
-        registry_mod = types.ModuleType("device_connect_server.registry.client")
-        registry_mod.RegistryClient = FakeRegistryClient
-
+    async def test_setup_agentic_driver_uses_sdk_registry_client(self):
+        """Infra-mode uses SDK's own RegistryClient (no server dependency)."""
         driver = StubDriver()
         rt = DeviceRuntime(
             driver=driver,
@@ -473,22 +463,12 @@ class TestSplitPackageImports:
         rt._d2d_mode = False
         rt.messaging = AsyncMock()
 
-        with patch.dict(
-            sys.modules,
-            {
-                "device_connect_server": server_pkg,
-                "device_connect_server.registry": registry_pkg,
-                "device_connect_server.registry.client": registry_mod,
-            },
-            clear=False,
-        ):
-            await rt._setup_agentic_driver()
+        await rt._setup_agentic_driver()
 
-        assert isinstance(driver.registry, FakeRegistryClient)
-        assert driver.registry.messaging is rt.messaging
+        from device_connect_edge.registry_client import RegistryClient
+        assert isinstance(driver.registry, RegistryClient)
+        assert driver.registry._client is rt.messaging
         assert driver.registry.tenant == "default"
-        assert driver.registry.config.backend == "nats"
-        assert driver.registry.config.servers == ["nats://localhost:4222"]
 
 # ── DeviceRuntime departure announcement ─────────────────────────
 

@@ -9,7 +9,7 @@ from typing import Callable, Dict
 from device_connect_edge.messaging.base import MessagingClient, Subscription
 from device_connect_edge.messaging.exceptions import (
     MessagingError,
-    ConnectionError,
+    MessagingConnectionError,
     PublishError,
     SubscribeError,
     RequestTimeoutError,
@@ -82,7 +82,7 @@ __all__ = [
     "create_client",
     "register_backend",
     "MessagingError",
-    "ConnectionError",
+    "MessagingConnectionError",
     "PublishError",
     "SubscribeError",
     "RequestTimeoutError",

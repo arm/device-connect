@@ -30,6 +30,7 @@ Usage from DeviceRuntime (automatic when D2D mode is detected)::
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -129,7 +130,7 @@ class PresenceAnnouncer:
             try:
                 await self._probe_sub.unsubscribe()
             except Exception:
-                pass
+                logger.debug("cleanup error unsubscribing probe", exc_info=True)
             self._probe_sub = None
         if self._task is not None:
             self._task.cancel()
@@ -169,7 +170,7 @@ class PresenceCollector:
         self,
         messaging,
         tenant: str,
-        on_new_peer: Optional[Callable[[str], None]] = None,
+        on_new_peer: Optional[Callable[[str], Any]] = None,
         device_id: str = "",
     ):
         self._messaging = messaging
@@ -197,7 +198,7 @@ class PresenceCollector:
             try:
                 await self._sub.unsubscribe()
             except Exception:
-                pass
+                logger.debug("cleanup error unsubscribing presence", exc_info=True)
             self._sub = None
         if self._prune_task is not None:
             self._prune_task.cancel()
@@ -218,6 +219,10 @@ class PresenceCollector:
         if not device_id:
             return
 
+        # Filter out our own presence announcements
+        if device_id == self._device_id:
+            return
+
         # Handle graceful departure announcements
         if payload.get("departing"):
             async with self._lock:
@@ -236,9 +241,11 @@ class PresenceCollector:
             logger.info("%s: discovered peer %s", self._log_tag, device_id)
             if self._on_new_peer:
                 try:
-                    self._on_new_peer(device_id)
+                    result = self._on_new_peer(device_id)
+                    if inspect.isawaitable(result):
+                        await result
                 except Exception:
-                    pass
+                    logger.warning("on_new_peer callback failed for device %s", device_id, exc_info=True)
 
     async def _prune_loop(self) -> None:
         try:
@@ -260,8 +267,14 @@ class PresenceCollector:
         self,
         *,
         device_type: Optional[str] = None,
+        location: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Return currently known peers, optionally filtered by device_type."""
+        """Return currently known peers, optionally filtered.
+
+        Args:
+            device_type: Filter by device type (fuzzy, case-insensitive).
+            location: Filter by device location (fuzzy, case-insensitive).
+        """
         async with self._lock:
             results = list(self._peers.values())
 
@@ -272,6 +285,13 @@ class PresenceCollector:
                 if device_type.lower() in dt.lower():
                     filtered.append(d)
             results = filtered
+
+        if location:
+            loc = location.lower()
+            results = [
+                d for d in results
+                if loc in ((d.get("status") or {}).get("location", "")).lower()
+            ]
 
         return results
 
@@ -347,6 +367,16 @@ class PresenceCollector:
         return None
 
 
+def _device_has_capabilities(device: dict, required: List[str]) -> bool:
+    """Check if a device has all required capabilities (by function name)."""
+    funcs = (device.get("capabilities") or {}).get("functions", [])
+    available = {
+        (f.get("name") if isinstance(f, dict) else f)
+        for f in funcs
+    }
+    return all(cap in available for cap in required)
+
+
 class D2DRegistry:
     """Drop-in replacement for ``RegistryClient`` backed by a ``PresenceCollector``.
 
@@ -365,7 +395,15 @@ class D2DRegistry:
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
-        return await self._collector.list_devices(device_type=device_type)
+        results = await self._collector.list_devices(
+            device_type=device_type, location=location,
+        )
+        if capabilities:
+            results = [
+                d for d in results
+                if _device_has_capabilities(d, capabilities)
+            ]
+        return results
 
     async def get_device(
         self,

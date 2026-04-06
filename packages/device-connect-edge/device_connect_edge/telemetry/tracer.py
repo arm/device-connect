@@ -39,7 +39,7 @@ except ImportError:
 
 
 _TRACER_NAME = "device_connect"
-_TRACER_VERSION = "0.1.0"
+_TRACER_VERSION = "0.2.2"
 
 
 def get_tracer() -> Any:
@@ -50,7 +50,7 @@ def get_tracer() -> Any:
     a usable tracer — never None.
     """
     if not _OTEL_AVAILABLE:
-        return trace_api.get_tracer(_TRACER_NAME) if False else _NoOpTracer()
+        return _NoOpTracer()
 
     return trace_api.get_tracer(_TRACER_NAME, _TRACER_VERSION)
 

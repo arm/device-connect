@@ -1,4 +1,4 @@
-"""Unit tests for device_connect_server.drivers.capability_loader module.
+"""Unit tests for device_connect_edge.drivers.capability_loader module.
 
 Tests cover:
 - Loading capabilities from a Python file via manifest
@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from device_connect_server.drivers.capability_loader import (
+from device_connect_edge.drivers.capability_loader import (
     CapabilityLoader,
 )
 
@@ -41,7 +41,7 @@ def _write_capability(tmp_path, cap_id, class_name, code, manifest_extra=None):
 
 
 SIMPLE_CAPABILITY_CODE = """\
-from device_connect_server.drivers.decorators import rpc, emit
+from device_connect_edge.drivers.decorators import rpc, emit
 
 class SimpleCapability:
     def __init__(self, device=None):
@@ -59,7 +59,7 @@ class SimpleCapability:
 """
 
 EMIT_CAPABILITY_CODE = """\
-from device_connect_server.drivers.decorators import rpc, emit
+from device_connect_edge.drivers.decorators import rpc, emit
 
 class EmitCapability:
     def __init__(self, device=None):

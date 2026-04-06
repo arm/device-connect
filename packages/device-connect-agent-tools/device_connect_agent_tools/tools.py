@@ -1,100 +1,207 @@
 """Device Connect device operations — framework-agnostic tool functions.
 
+Hierarchical discovery tools that keep LLM context small:
+
+1. ``describe_fleet()``         — bird's-eye summary (types, locations, counts)
+2. ``list_devices(...)``        — paginated compact roster (no schemas)
+3. ``get_device_functions(id)`` — full schemas for ONE device
+4. ``invoke_device(...)``       — call a function on a device
+
 Plain Python functions with type hints and docstrings. Use them directly
 or wrap with a framework adapter:
 
     # Plain Python
-    from device_connect_agent_tools import connect, discover_devices, invoke_device
+    from device_connect_agent_tools import connect, describe_fleet, list_devices
     connect()
-    devices = discover_devices()
+    fleet = describe_fleet()
+    devices = list_devices(device_type="camera")
 
     # Strands
-    from device_connect_agent_tools.adapters.strands import discover_devices, invoke_device
-    agent = Agent(tools=[discover_devices, invoke_device])
-
-    # LangChain
-    from device_connect_agent_tools.adapters.langchain import discover_devices, invoke_device
-    agent = create_react_agent(model, [discover_devices, invoke_device])
+    from device_connect_agent_tools.adapters.strands import (
+        describe_fleet, list_devices, get_device_functions, invoke_device,
+    )
+    agent = Agent(tools=[describe_fleet, list_devices, get_device_functions, invoke_device])
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Any
 
 from device_connect_agent_tools.connection import get_connection
+from device_connect_agent_tools._normalize import (
+    full_device, compact_device, fuzzy_filter_by_type, extract_status,
+    aggregate_fleet, group_devices,
+)
 
 logger = logging.getLogger(__name__)
 
+# When the fleet (or filtered result set) has this many devices or fewer,
+# describe_fleet() and list_devices() auto-include full function schemas
+# so the agent can skip get_device_functions() and go straight to invoke.
+# Set to 0 to disable auto-expansion.
+try:
+    SMALL_FLEET_THRESHOLD = min(max(int(os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD", "5")), 0), 100)
+except (ValueError, TypeError):
+    logger.warning(
+        "Invalid DEVICE_CONNECT_SMALL_FLEET_THRESHOLD value %r, defaulting to 5",
+        os.getenv("DEVICE_CONNECT_SMALL_FLEET_THRESHOLD"),
+    )
+    SMALL_FLEET_THRESHOLD = 5
 
-def discover_devices(
-    device_type: str | None = None,
-    refresh: bool = False,
-) -> list[dict[str, Any]]:
-    """Discover available Device Connect devices on the network.
 
-    Returns all devices with their function schemas so you know what
-    you can call on each device.
+# ── Shared helpers ──────────────────────────────────────────────
 
-    Args:
-        device_type: Optional filter (e.g., "robot", "camera"). Fuzzy matching.
-        refresh: Force refresh from registry instead of cache.
+
+# ── Hierarchical discovery tools ─────────────────────────────────
+
+
+def describe_fleet() -> dict[str, Any]:
+    """Get a high-level summary of all available devices.
+
+    Returns device counts grouped by type and location. Use this first
+    to understand what devices are available, then call list_devices()
+    to browse specific types or locations.
+
+    For small fleets (≤ SMALL_FLEET_THRESHOLD devices), full device
+    details including function schemas are included automatically — you
+    can skip list_devices / get_device_functions and go straight to
+    invoke_device.
 
     Returns:
-        List of devices with device_id, device_type, functions, events.
+        Dict with total_devices, total_functions, by_type, by_location.
+        For small fleets, also includes "devices" with full schemas.
 
     Example:
-        devices = discover_devices()
-        robots = discover_devices(device_type="robot")
+        fleet = describe_fleet()
+        # {"total_devices": 47, "by_type": {"camera": {"count": 12, ...}}, ...}
     """
     try:
         conn = get_connection()
-        devices = conn.list_devices(device_type=device_type)
+        devices = conn.list_devices()
 
-        if device_type:
-            t = device_type.lower().replace("_", "").replace("-", "")
-            filtered = [
-                d for d in devices
-                if d.get("device_type")
-                and (
-                    t in d["device_type"].lower().replace("_", "").replace("-", "")
-                    or d["device_type"].lower().replace("_", "").replace("-", "") in t
-                )
-            ]
-            if filtered:
-                devices = filtered
-            else:
-                devices = []
+        result: dict[str, Any] = aggregate_fleet(devices)
 
-        results = []
-        for d in devices:
-            functions = d.get("functions", [])
-            events = d.get("events", [])
+        # Auto-expand: include full device details for small fleets
+        if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
+            result["devices"] = [full_device(d) for d in devices]
+            result["hint"] = (
+                "Full device details included — skip list_devices / "
+                "get_device_functions and go straight to invoke_device."
+            )
 
-            results.append({
-                "device_id": d.get("device_id"),
-                "device_type": d.get("device_type"),
-                "location": d.get("location"),
-                "status": d.get("status", {}),
-                "functions": [
-                    {
-                        "name": f.get("name") if isinstance(f, dict) else f,
-                        "description": f.get("description", "") if isinstance(f, dict) else "",
-                        "parameters": f.get("parameters", {}) if isinstance(f, dict) else {},
-                    }
-                    for f in functions
-                ],
-                "events": [
-                    e.get("name") if isinstance(e, dict) else e
-                    for e in events
-                ],
-            })
-        return results
+        return result
 
     except Exception as e:
-        logger.error("Discovery failed: %s", e)
-        return []
+        logger.error("describe_fleet failed: %s", e)
+        return {"total_devices": 0, "total_functions": 0, "by_type": {}, "by_location": {}}
+
+
+def list_devices(
+    device_type: str | None = None,
+    location: str | None = None,
+    status: str | None = None,
+    group_by: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Browse available devices with filtering and pagination.
+
+    Returns compact device summaries. When the result set is small
+    (≤ SMALL_FLEET_THRESHOLD), full function schemas are included
+    automatically so you can skip get_device_functions().
+
+    Args:
+        device_type: Filter by type (e.g., "camera", "robot"). Fuzzy matching.
+        location: Filter by location (e.g., "lobby", "warehouse-A").
+        status: Filter by availability (e.g., "online", "offline", "busy").
+        group_by: Group results by "location" or "device_type". Returns grouped dict.
+        offset: Skip first N devices (for pagination).
+        limit: Max devices to return (default 20).
+
+    Returns:
+        Dict with devices list (or groups dict), total count, pagination info.
+
+    Example:
+        # Browse all cameras
+        result = list_devices(device_type="camera")
+
+        # Group by location
+        result = list_devices(group_by="location")
+    """
+    try:
+        conn = get_connection()
+        devices = conn.list_devices(location=location)
+
+        # Client-side fuzzy type filter (provider filter is stricter and
+        # can drop valid fuzzy matches like "environmentsensor" vs
+        # "environment_sensor", so we skip provider-level type filtering
+        # and let fuzzy_filter_by_type be the sole filter).
+        if device_type:
+            devices = fuzzy_filter_by_type(devices, device_type)
+
+        # Status filter
+        if status:
+            s = status.lower()
+            devices = [d for d in devices if s in extract_status(d).lower()]
+
+        total = len(devices)
+
+        # Build device summaries — include schemas for small result sets
+        def _summary(d: dict, expand: bool) -> dict:
+            result = compact_device(d, expand)
+            result["status"] = extract_status(d)
+            return result
+
+        if group_by in ("location", "device_type"):
+            expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
+            return group_devices(devices, group_by, expand)
+
+        # Paginate
+        page = devices[offset:offset + limit]
+        expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
+        return {
+            "devices": [_summary(d, expand) for d in page],
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + limit < total,
+        }
+
+    except Exception as e:
+        logger.error("list_devices failed: %s", e)
+        return {"devices": [], "total": 0, "offset": 0, "limit": limit, "has_more": False}
+
+
+def get_device_functions(device_id: str) -> dict[str, Any]:
+    """Get full function schemas for a specific device.
+
+    Call this after list_devices() to see what a device can do and
+    what parameters each function accepts.
+
+    Args:
+        device_id: Device ID (e.g., "camera-001").
+
+    Returns:
+        Dict with device_id, device_type, location, functions (with schemas), events.
+
+    Example:
+        info = get_device_functions("camera-001")
+        # {"device_id": "camera-001", "functions": [{"name": "capture_image", ...}]}
+    """
+    try:
+        conn = get_connection()
+        device = conn.get_device(device_id)
+        if not device:
+            return {"error": f"Device {device_id} not found"}
+        return full_device(device)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── Invocation tools (unchanged) ─────────────────────────────────
 
 
 def invoke_device(
@@ -103,12 +210,12 @@ def invoke_device(
     params: dict[str, Any] | None = None,
     llm_reasoning: str | None = None,
 ) -> dict[str, Any]:
-    """Call a function on an Device Connect device.
+    """Call a function on a Device Connect device.
 
     Args:
         device_id: Target device ID (e.g., "robot-001", "camera-001").
         function: Function name to call (e.g., "start_cleaning", "capture_image").
-        params: Function parameters as a dictionary. Check discover_devices for schemas.
+        params: Function parameters as a dictionary. Check get_device_functions() for schemas.
             Do NOT put llm_reasoning inside params.
         llm_reasoning: Why you're calling this function — for observability.
 
@@ -203,3 +310,47 @@ def get_device_status(device_id: str) -> dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# ── Backward compatibility ───────────────────────────────────────
+
+
+def discover_devices(
+    device_type: str | None = None,
+    refresh: bool = False,
+) -> list[dict[str, Any]]:
+    """Discover available devices (deprecated — use list_devices instead).
+
+    Returns all devices with their function schemas. For large fleets,
+    prefer the hierarchical approach:
+    1. describe_fleet() — see what's available
+    2. list_devices(...) — browse with filters
+    3. get_device_functions(id) — get schemas for one device
+
+    Args:
+        device_type: Optional filter (e.g., "robot", "camera"). Fuzzy matching.
+        refresh: Force refresh from registry instead of cache.
+
+    Returns:
+        List of devices with device_id, device_type, functions, events.
+    """
+    try:
+        conn = get_connection()
+        # Invalidate cache when refresh is requested
+        if refresh:
+            conn.invalidate_cache()
+        devices = conn.list_devices()
+
+        if device_type:
+            devices = fuzzy_filter_by_type(devices, device_type)
+
+        results = []
+        for d in devices:
+            entry = full_device(d)
+            entry["status"] = d.get("status", {})
+            results.append(entry)
+        return results
+
+    except Exception as e:
+        logger.error("Discovery failed: %s", e)
+        return []

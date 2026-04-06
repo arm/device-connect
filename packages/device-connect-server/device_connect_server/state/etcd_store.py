@@ -45,8 +45,8 @@ import uuid
 from typing import Any, Dict, Optional
 
 from device_connect_server.state.base import StateStore
-from device_connect_server.telemetry.tracer import get_tracer, StatusCode
-from device_connect_server.telemetry.metrics import get_metrics
+from device_connect_edge.telemetry.tracer import get_tracer, StatusCode
+from device_connect_edge.telemetry.metrics import get_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ class EtcdStateStore(StateStore):
                 try:
                     await loop.run_in_executor(None, lease.revoke)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error revoking lease during close", exc_info=True)
             self._leases.clear()
             self._client = None
             logger.info("EtcdStateStore closed")
@@ -264,7 +264,7 @@ class EtcdStateStore(StateStore):
                 try:
                     await loop.run_in_executor(None, lease.revoke)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error revoking lease after delete", exc_info=True)
             span.set_status(StatusCode.OK)
             return bool(deleted)
 
@@ -314,7 +314,7 @@ class EtcdStateStore(StateStore):
                 try:
                     await loop.run_in_executor(None, lease.revoke)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error revoking unused lease after lock contention", exc_info=True)
                 logger.debug("Lock contention: %s", key)
                 span.set_attribute("db.lock.acquired", False)
 
@@ -342,7 +342,7 @@ class EtcdStateStore(StateStore):
                 try:
                     await loop.run_in_executor(None, lease.revoke)
                 except Exception:
-                    pass
+                    logger.debug("cleanup error revoking lease during lock release", exc_info=True)
             logger.debug("Lock released: %s", key)
             span.set_status(StatusCode.OK)
 
@@ -363,7 +363,7 @@ class EtcdStateStore(StateStore):
                 await loop.run_in_executor(None, lease.refresh)
                 return True
             except Exception:
-                pass
+                logger.warning("Lease refresh failed for key %s, falling back to re-write", key, exc_info=True)
 
         # Fallback: re-read and re-write with new TTL
         value = await self.get(key)

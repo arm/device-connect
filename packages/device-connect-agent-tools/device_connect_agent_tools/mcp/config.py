@@ -36,11 +36,15 @@ class BridgeConfig:
 
     # Messaging configuration
     messaging_urls: List[str] = field(default_factory=lambda: ["tcp/localhost:7447"])
+    messaging_backend: Optional[str] = None  # auto-detected from URLs if None
     messaging_auth: Optional[Dict[str, Any]] = None
     messaging_tls: Optional[Dict[str, Any]] = None
 
     # Device Connect configuration
     tenant: str = "default"
+
+    # Discovery mode: "auto" (detect from backend/URLs), "d2d", or "infra"
+    discovery_mode: str = "auto"
 
     # MCP Bridge configuration
     refresh_interval: float = 30.0  # Seconds between device refreshes
@@ -90,9 +94,11 @@ class BridgeConfig:
 
         return cls(
             messaging_urls=urls,
+            messaging_backend=os.getenv("MESSAGING_BACKEND") or None,
             messaging_auth=auth,
             messaging_tls=tls_config,
             tenant=os.getenv("TENANT", "default"),
+            discovery_mode=os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "auto").lower(),
             refresh_interval=float(os.getenv("MCP_REFRESH_INTERVAL", "30")),
             request_timeout=float(os.getenv("MCP_REQUEST_TIMEOUT", "30")),
         )
@@ -148,13 +154,23 @@ class BridgeConfig:
             tenant=data.get("tenant", "default"),
         )
 
+    def get_backend(self) -> str:
+        """Determine messaging backend from explicit config or URL scheme."""
+        if self.messaging_backend:
+            return self.messaging_backend
+        from device_connect_edge.messaging.config import MessagingConfig
+        config = MessagingConfig(servers=self.messaging_urls)
+        return config.backend
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for logging/debugging."""
         return {
             "messaging_urls": self.messaging_urls,
+            "messaging_backend": self.messaging_backend,
             "messaging_auth": "***" if self.messaging_auth else None,
             "messaging_tls": self.messaging_tls,
             "tenant": self.tenant,
+            "discovery_mode": self.discovery_mode,
             "refresh_interval": self.refresh_interval,
             "request_timeout": self.request_timeout,
         }

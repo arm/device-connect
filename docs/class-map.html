@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Device Connect — Interactive Class Map</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; background: #0f1117; color: #e0e0e0; overflow: hidden; height: 100vh; width: 100vw; }
+
+  /* ─── Controls Bar ─── */
+  .controls-bar {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    background: rgba(15,17,23,0.95); border-bottom: 1px solid #2a2d35;
+    display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+    backdrop-filter: blur(8px);
+  }
+  .controls-bar h1 { font-size: 15px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .controls-bar .pkg-label { font-size: 11px; color: #888; margin-left: 4px; }
+  .zoom-controls { display: flex; gap: 4px; margin-left: 12px; }
+  .zoom-controls button {
+    width: 28px; height: 28px; border: 1px solid #3a3d45; border-radius: 4px;
+    background: #1a1d25; color: #ccc; cursor: pointer; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .zoom-controls button:hover { background: #2a2d35; color: #fff; }
+  .zoom-level { font-size: 11px; color: #888; min-width: 40px; text-align: center; line-height: 28px; }
+  #class-search {
+    width: 160px; height: 28px; padding: 0 8px;
+    background: #1a1d25; border: 1px solid #3a3d45; border-radius: 4px;
+    color: #e0e0e0; font-size: 12px; outline: none; margin-left: 12px;
+  }
+  #class-search:focus { border-color: #5dade2; }
+  #class-search::placeholder { color: #555; }
+  .class-box.search-match { border-color: #5dade2 !important; box-shadow: 0 0 10px rgba(93,173,226,0.2); }
+
+  .controls-hint { font-size: 11px; color: #555; margin-left: auto; }
+
+  /* ─── Flow Legend ─── */
+  .flow-legend {
+    position: fixed; top: 52px; right: 12px; z-index: 100;
+    background: rgba(15,17,23,0.95); border: 1px solid #2a2d35; border-radius: 8px;
+    padding: 12px; width: 340px; backdrop-filter: blur(8px);
+    max-height: calc(100vh - 70px); overflow-y: auto;
+  }
+  .flow-legend h3 { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .flow-legend .mode-key {
+    display: flex; gap: 10px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #2a2d35;
+  }
+  .flow-legend .mode-key span { font-size: 10px; display: flex; align-items: center; gap: 4px; }
+  .flow-legend .mode-key .key-dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  /* Scenario rows */
+  .scenario-row {
+    display: flex; align-items: center; gap: 8px; padding: 5px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .scenario-row:last-of-type { border-bottom: none; }
+  .scenario-pills { display: flex; gap: 3px; flex-shrink: 0; }
+  .pill {
+    padding: 3px 9px; border-radius: 4px; border: 1px solid;
+    font-size: 10px; font-weight: 600; cursor: pointer; background: none;
+    transition: all 0.15s; letter-spacing: 0.3px;
+  }
+  .pill.d2d { border-color: rgba(230,126,34,0.25); color: rgba(230,126,34,0.6); }
+  .pill.d2d:hover { border-color: rgba(230,126,34,0.5); color: #e67e22; background: rgba(230,126,34,0.08); }
+  .pill.d2d.active { border-color: #e67e22; color: #fff; background: rgba(230,126,34,0.25); }
+  .pill.infra { border-color: rgba(26,188,156,0.25); color: rgba(26,188,156,0.6); }
+  .pill.infra:hover { border-color: rgba(26,188,156,0.5); color: #1abc9c; background: rgba(26,188,156,0.08); }
+  .pill.infra.active { border-color: #1abc9c; color: #fff; background: rgba(26,188,156,0.25); }
+  .scenario-label { font-size: 11.5px; color: #bbb; line-height: 1.3; }
+  .identical-badge {
+    display: inline-block; font-size: 10px; color: #78c8ff;
+    background: rgba(120,200,255,0.1); padding: 1px 4px; border-radius: 3px;
+    margin-left: 2px; cursor: help; vertical-align: middle;
+  }
+  .scenario-num { font-size: 10px; color: #555; margin-right: 2px; }
+
+  .flow-desc {
+    font-size: 11px; color: #888; padding: 8px; line-height: 1.5; display: none;
+    background: rgba(255,255,255,0.02); border-radius: 4px; margin-top: 8px;
+  }
+  .flow-desc.visible { display: block; }
+  .flow-desc .same-path-note {
+    display: inline-block; margin-top: 4px; padding: 2px 6px; border-radius: 3px;
+    background: rgba(255,255,255,0.06); color: #999; font-size: 10px;
+  }
+
+  .flow-legend .reset-btn {
+    display: block; width: 100%; margin-top: 10px; padding: 6px 8px;
+    border: 1px solid #3a3d45; border-radius: 4px; background: none;
+    color: #888; cursor: pointer; font-size: 11px;
+  }
+  .flow-legend .reset-btn:hover { background: rgba(255,255,255,0.05); color: #ccc; }
+
+  .legend-toggle {
+    position: absolute; top: 8px; right: 8px;
+    background: none; border: 1px solid #3a3d45; border-radius: 4px;
+    color: #888; cursor: pointer; font-size: 10px; width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.2s;
+  }
+  .legend-toggle:hover { color: #ccc; background: rgba(255,255,255,0.05); }
+  .flow-legend.collapsed { width: auto; min-width: 38px; padding: 8px; }
+  .flow-legend.collapsed > *:not(.legend-toggle) { display: none; }
+  .flow-legend.collapsed .legend-toggle { position: static; transform: rotate(180deg); }
+
+  /* ─── Package Legend ─── */
+  .pkg-legend {
+    position: fixed; bottom: 12px; left: 12px; z-index: 100;
+    background: rgba(15,17,23,0.95); border: 1px solid #2a2d35; border-radius: 8px;
+    padding: 10px 14px; backdrop-filter: blur(8px); display: flex; gap: 16px;
+  }
+  .pkg-legend .pkg-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #aaa; }
+  .pkg-legend .pkg-swatch { width: 12px; height: 12px; border-radius: 3px; }
+
+  /* ─── Map Viewport ─── */
+  .map-viewport {
+    position: fixed; top: 44px; left: 0; right: 0; bottom: 0;
+    overflow: hidden; cursor: grab;
+  }
+  .map-viewport.grabbing { cursor: grabbing; }
+
+  /* ─── Map Canvas ─── */
+  .map-canvas {
+    position: absolute; width: 4200px; height: 3000px;
+    transform-origin: 0 0; will-change: transform;
+  }
+
+  /* ─── SVG Layer ─── */
+  .connections-layer {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .connections-layer path, .connections-layer line { pointer-events: stroke; }
+
+  /* ─── Connection Styles ─── */
+  .conn { fill: none; stroke: #3a3d45; stroke-width: 1.5; transition: opacity 0.3s, stroke 0.3s; }
+  .conn.inheritance { stroke-dasharray: none; }
+  .conn.implements { stroke-dasharray: 6 3; }
+  .conn.composition { stroke-dasharray: none; }
+  .conn.uses { stroke-dasharray: 3 3; }
+  .conn.dimmed { opacity: 0.08; }
+  .conn.highlighted { stroke-width: 2.5; opacity: 1; }
+  .conn.highlighted.animated {
+    stroke-dasharray: 8 4;
+    animation: flowAnim 0.8s linear infinite;
+  }
+  @keyframes flowAnim { to { stroke-dashoffset: -24; } }
+
+  .conn-label {
+    font-size: 10px; fill: #666; pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .conn-label.dimmed { opacity: 0.08; }
+
+  /* ─── Zone Labels ─── */
+  .zone-label {
+    position: absolute; font-size: 13px; font-weight: 600; letter-spacing: 2px;
+    text-transform: uppercase; color: rgba(255,255,255,0.08); pointer-events: none;
+  }
+
+  /* ─── Class Box ─── */
+  .class-box {
+    position: absolute; border-radius: 8px; min-width: 180px; max-width: 260px;
+    border: 1px solid #2a2d35; background: #16181f; overflow: hidden;
+    transition: opacity 0.3s, border-color 0.3s, box-shadow 0.3s;
+    cursor: default;
+  }
+  .class-box.dimmed { opacity: 0.12; }
+  .class-box.highlighted { border-color: var(--hl-color, #fff); box-shadow: 0 0 12px rgba(var(--hl-rgb, 255,255,255), 0.15); }
+
+  .box-header {
+    padding: 6px 10px; display: flex; align-items: center; gap: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.06); flex-wrap: wrap;
+  }
+  .class-name { font-size: 13px; font-weight: 600; color: #fff; }
+  .class-badge {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px;
+    text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0;
+  }
+  .badge-abc { background: rgba(255,180,50,0.15); color: #ffb432; }
+  .badge-protocol { background: rgba(120,200,255,0.15); color: #78c8ff; }
+  .badge-model { background: rgba(150,150,150,0.15); color: #999; }
+  .badge-decorator { background: rgba(255,120,200,0.15); color: #ff78c8; }
+  .badge-function { background: rgba(100,255,180,0.15); color: #64ffb4; }
+
+  .mode-badge {
+    font-size: 8px; padding: 1px 4px; border-radius: 3px; margin-left: auto;
+    text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; display: none;
+  }
+  .mode-badge.d2d { background: rgba(230,126,34,0.2); color: #e67e22; }
+  .mode-badge.infra { background: rgba(26,188,156,0.2); color: #1abc9c; }
+  .mode-badge.visible { display: inline-block; }
+
+  .box-body { padding: 6px 10px 8px; }
+  .box-desc { font-size: 10px; color: #777; line-height: 1.3; margin-bottom: 4px; }
+  .method-list { list-style: none; }
+  .method-list li {
+    font-size: 10px; color: #9a9ea8; font-family: 'SF Mono', 'Fira Code', monospace;
+    padding: 1px 0;
+  }
+  .method-list li::before { content: ''; display: inline-block; width: 4px; height: 4px; border-radius: 50%; background: #3a3d45; margin-right: 5px; vertical-align: middle; }
+
+  /* Package color schemes */
+  .class-box.edge .box-header { background: rgba(52,152,219,0.12); }
+  .class-box.edge .class-name { color: #5dade2; }
+  .class-box.edge { border-color: rgba(52,152,219,0.2); }
+
+  .class-box.server .box-header { background: rgba(39,174,96,0.12); }
+  .class-box.server .class-name { color: #58d68d; }
+  .class-box.server { border-color: rgba(39,174,96,0.2); }
+
+  .class-box.agent .box-header { background: rgba(155,89,182,0.12); }
+  .class-box.agent .class-name { color: #bb8fce; }
+  .class-box.agent { border-color: rgba(155,89,182,0.2); }
+
+  /* ─── Type Accent Stripes ─── */
+  .class-box[data-type="abc"]       { border-left: 3px solid #ffb432; }
+  .class-box[data-type="protocol"]  { border-left: 3px solid #78c8ff; }
+  .class-box[data-type="model"]     { border-left: 3px solid #999; }
+  .class-box[data-type="decorator"] { border-left: 3px solid #ff78c8; }
+  .class-box[data-type="function"]  { border-left: 3px solid #64ffb4; }
+
+  /* ─── Tooltip ─── */
+  .tooltip {
+    position: fixed; z-index: 200; max-width: 340px;
+    background: rgba(20,22,28,0.97); border: 1px solid #3a3d45; border-radius: 6px;
+    padding: 10px 12px; pointer-events: none; display: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  }
+  .tooltip.visible { display: block; }
+  .tooltip .tt-title { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+  .tooltip .tt-file { font-size: 10px; color: #666; font-family: monospace; margin-bottom: 6px; }
+  .tooltip .tt-desc { font-size: 11px; color: #aaa; line-height: 1.4; }
+  .tooltip .tt-methods { margin-top: 6px; font-size: 10px; color: #888; font-family: monospace; }
+  .tooltip .tt-methods div { padding: 1px 0; }
+</style>
+</head>
+<body>
+
+<!-- Controls Bar -->
+<div class="controls-bar">
+  <h1>Device Connect<span class="pkg-label">Class Map</span></h1>
+  <div class="zoom-controls">
+    <button id="zoom-out" title="Zoom out (-)">-</button>
+    <span class="zoom-level" id="zoom-level">100%</span>
+    <button id="zoom-in" title="Zoom in (+)">+</button>
+    <button id="zoom-fit" title="Fit to screen (0)">Fit</button>
+  </div>
+  <input type="text" id="class-search" placeholder="Search classes..." />
+  <span class="controls-hint">Scroll to zoom | Drag to pan | 1-8 + D/I select flow | Esc reset</span>
+</div>
+
+<!-- Flow Legend -->
+<div class="flow-legend" id="flow-legend">
+  <button class="legend-toggle" id="legend-toggle" title="Collapse legend">&#x25B6;</button>
+  <h3>Scenarios</h3>
+  <div class="mode-key">
+    <span><span class="key-dot" style="background:#e67e22"></span> D2D (peer mesh)</span>
+    <span><span class="key-dot" style="background:#1abc9c"></span> Infra (broker + registry)</span>
+  </div>
+  <div style="font-size:10px;color:#666;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #2a2d35"><span class="identical-badge">&#x2194;</span> Same class-level path in both modes</div>
+  <div id="scenario-rows"></div>
+  <div class="flow-desc" id="flow-desc"></div>
+  <button class="reset-btn" id="reset-btn">Reset view (Esc)</button>
+</div>
+
+<!-- Package Legend -->
+<div class="pkg-legend">
+  <div class="pkg-item"><div class="pkg-swatch" style="background:#3498db"></div>device-connect-edge</div>
+  <div class="pkg-item"><div class="pkg-swatch" style="background:#27ae60"></div>device-connect-server</div>
+  <div class="pkg-item"><div class="pkg-swatch" style="background:#9b59b6"></div>device-connect-agent-tools</div>
+  <div class="pkg-item" style="gap:4px">
+    <span style="border:1px dashed #ffb432;padding:0 3px;border-radius:2px;font-size:9px;color:#ffb432">ABC</span>
+    <span style="border:1px dashed #78c8ff;padding:0 3px;border-radius:2px;font-size:9px;color:#78c8ff">Protocol</span>
+  </div>
+</div>
+
+<!-- Tooltip -->
+<div class="tooltip" id="tooltip">
+  <div class="tt-title"></div>
+  <div class="tt-file"></div>
+  <div class="tt-desc"></div>
+  <div class="tt-methods"></div>
+</div>
+
+<!-- Map Viewport -->
+<div class="map-viewport" id="viewport">
+  <div class="map-canvas" id="canvas">
+    <svg class="connections-layer" id="svg-layer" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#3a3d45"/></marker>
+        <marker id="arrow-d2d" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e67e22"/></marker>
+        <marker id="arrow-infra" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#1abc9c"/></marker>
+        <marker id="diamond" markerWidth="10" markerHeight="8" refX="0" refY="4" orient="auto"><path d="M0,4 L5,0 L10,4 L5,8 Z" fill="#3a3d45"/></marker>
+        <marker id="triangle" markerWidth="10" markerHeight="8" refX="10" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 Z" fill="none" stroke="#3a3d45" stroke-width="1"/></marker>
+      </defs>
+    </svg>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// DATA MODEL
+// ══════════════════════════════════════════════════════════════
+
+const D2D_COLOR = '#e67e22';
+const INFRA_COLOR = '#1abc9c';
+
+// 8 scenarios, each with D2D ('d') and Infra ('i') variants
+const scenarios = [
+  { num: 1, name: 'Device comes online', identical: false,
+    d2d_desc: 'DeviceRuntime.run() \u2192 _connect_messaging() \u2192 MessagingClient.connect() \u2192 DeviceDriver.connect() \u2192 PresenceAnnouncer.start() + PresenceCollector.start() \u2192 _cmd_subscription() \u2192 _heartbeat_loop() \u2192 @periodic routines start',
+    infra_desc: 'DeviceRuntime.run() \u2192 _connect_messaging() \u2192 MessagingClient.connect() \u2192 DeviceDriver.connect() \u2192 _register() \u2192 RegistryClient \u2192 RegistryService \u2192 DeviceRegistry (etcd) \u2192 _cmd_subscription() \u2192 _heartbeat_loop()' },
+  { num: 2, name: 'Device subscribes to events', identical: true,
+    d2d_desc: 'DeviceDriver @on(device_id=, device_type=, event_name=) \u2192 setup_subscriptions() \u2192 MessagingClient.subscribe_with_subject() on wildcard event topic \u2192 handler dispatches (device_id, event_name, payload)',
+    infra_desc: 'Identical path. DeviceDriver @on \u2192 setup_subscriptions() \u2192 MessagingClient.subscribe_with_subject(). The @on subscription mechanism is the same in both modes \u2014 only the messaging backend differs.' },
+  { num: 3, name: 'Orchestrator subscribes to events', identical: false,
+    d2d_desc: 'DeviceConnectAgent \u2192 DeviceConnection.connect() creates D2DRegistry(PresenceCollector) as discovery provider \u2192 DeviceConnection.subscribe_events() \u2192 MessagingClient.subscribe() on device event topics',
+    infra_desc: 'DeviceConnectAgent \u2192 DeviceConnection.connect() creates RegistryClient as discovery provider \u2192 DeviceConnection.subscribe_events() \u2192 MessagingClient.subscribe() on device event topics' },
+  { num: 4, name: 'LLM agent discovers devices', identical: false,
+    d2d_desc: 'StrandsAgent \u2192 ToolFunctions.describe_fleet() / list_devices() \u2192 DeviceConnection.list_devices() \u2192 D2DRegistry.list_devices() \u2192 PresenceCollector.list_devices() (local in-memory peer table, no RPC)',
+    infra_desc: 'StrandsAgent \u2192 ToolFunctions.describe_fleet() / list_devices() \u2192 DeviceConnection.list_devices() \u2192 RegistryClient.list_devices() \u2192 MessagingClient.request() \u2192 RegistryService \u2192 DeviceRegistry (etcd query)' },
+  { num: 5, name: 'LLM agent does an RPC', identical: true,
+    d2d_desc: 'StrandsAgent \u2192 ToolFunctions.invoke_device() \u2192 DeviceConnection.invoke() \u2192 MessagingClient.request() to device-connect.{tenant}.{device_id}.cmd \u2192 target DeviceRuntime._cmd_subscription() \u2192 DeviceDriver.invoke()',
+    infra_desc: 'Identical path. invoke_device() \u2192 DeviceConnection.invoke() \u2192 MessagingClient.request() to same cmd subject. RPC invocation uses the same mechanism in both modes \u2014 only the messaging backend differs.' },
+  { num: 6, name: 'Device discovers other devices', identical: false,
+    d2d_desc: 'DeviceDriver.list_devices() \u2192 DiscoveryProvider \u2192 D2DRegistry.list_devices() \u2192 PresenceCollector.list_devices() (local in-memory peer table)',
+    infra_desc: 'DeviceDriver.list_devices() \u2192 DiscoveryProvider \u2192 RegistryClient.list_devices() \u2192 MessagingClient.request() \u2192 RegistryService \u2192 DeviceRegistry (etcd)' },
+  { num: 7, name: 'Device RPCs another device', identical: true,
+    d2d_desc: 'DeviceDriver.invoke_remote() \u2192 _RemoteInvoker.invoke() \u2192 MessagingClient.request() to device-connect.{tenant}.{device_id}.cmd \u2192 target DeviceRuntime._cmd_subscription() \u2192 DeviceDriver.invoke()',
+    infra_desc: 'Identical path. invoke_remote() \u2192 _RemoteInvoker.invoke() \u2192 MessagingClient.request(). The _RemoteInvoker is used in both modes \u2014 only the messaging backend differs.' },
+  { num: 8, name: 'Device emits an event', identical: true,
+    d2d_desc: 'DeviceDriver @emit method \u2192 DeviceRuntime.enqueue_event() \u2192 _event_dispatch_loop() \u2192 MessagingClient.publish() on device-connect.{tenant}.{device_id}.event.{event_name}',
+    infra_desc: 'Identical path. @emit \u2192 enqueue_event() \u2192 MessagingClient.publish(). Event publication uses the same mechanism in both modes \u2014 only the messaging backend differs.' },
+];
+
+// Flow IDs: '1d','1i','2d','2i', ... '8d','8i'
+// For each class/connection, flows[] lists which flow IDs it participates in
+
+const classes = [
+  // ── Edge Package ──
+  { id: 'DeviceDriver', name: 'DeviceDriver', pkg: 'edge', type: 'abc', x: 120, y: 180,
+    methods: ['connect()', 'disconnect()', 'invoke(fn, **params)', 'invoke_remote(device_id, fn)', 'list_devices()', 'get_device()', 'wait_for_device()', 'setup_subscriptions()', 'teardown_subscriptions()', 'emit_event()', 'start_routine(name)', 'stop_routine(name)', 'get_routine_status()'],
+    description: 'Abstract base for device logic. Subclass to define @rpc functions, @emit events, @on subscriptions, and @periodic routines. Provides D2D methods: invoke_remote(), list_devices().',
+    file: 'device_connect_edge/drivers/base.py',
+    flows: ['1d','1i','2d','2i','5d','5i','6d','6i','7d','7i','8d','8i'] },
+
+  { id: 'DeviceRuntime', name: 'DeviceRuntime', pkg: 'edge', type: 'class', x: 120, y: 620,
+    methods: ['run()', 'stop()', 'invoke(fn, **params)', 'enqueue_event()', 'set_heartbeat_provider()', 'add_connection_listener()', 'add_registration_listener()'],
+    description: 'Main device lifecycle orchestrator. Manages messaging connection, registration (infra) or presence (D2D), heartbeats, command dispatch, and event queuing.',
+    file: 'device_connect_edge/device.py',
+    flows: ['1d','1i','2d','2i','5d','5i','7d','7i','8d','8i'] },
+
+  { id: 'D2DRouter', name: '_RemoteInvoker', pkg: 'edge', type: 'class', x: 470, y: 620,
+    methods: ['invoke(device_id, fn, params)', 'publish_event(device_id, event)', 'notify_device(device_id, subject, payload)'],
+    description: 'Lightweight JSON-RPC client for device-to-device RPC invocation. Used in BOTH D2D and Infra modes. Sends requests via MessagingClient to target device cmd subjects.',
+    file: 'device_connect_edge/device.py',
+    flows: ['7d','7i'], mode: 'both' },
+
+  { id: 'Decorators', name: 'Decorators', pkg: 'edge', type: 'decorator', x: 470, y: 180,
+    methods: ['@rpc()', '@emit()', '@on(device_id=, device_type=, event_name=)', '@periodic(interval)', '@before_emit(event)'],
+    description: 'Method decorators that define device capabilities. @rpc exposes callable functions, @emit declares events, @on subscribes to other devices\' events, @periodic runs background routines. Note: @on is defined in base.py, not decorators.py.',
+    file: 'device_connect_edge/drivers/decorators.py',
+    flows: ['1d','1i','2d','2i','8d','8i'] },
+
+  { id: 'DriverTransport', name: 'DriverTransport', pkg: 'edge', type: 'class', x: 470, y: 420,
+    methods: ['publish(topic, data)', 'subscribe(topic, cb)', 'request(topic, data)', 'teardown()'],
+    description: 'Raw messaging transport for hardware-native topic access. Allows drivers to use custom topic patterns outside the Device Connect conventions.',
+    file: 'device_connect_edge/drivers/transport.py',
+    flows: [] },
+
+  { id: 'TypeModels', name: 'Type Models', pkg: 'edge', type: 'model', x: 120, y: 1020,
+    methods: ['DeviceCapabilities', 'FunctionDef', 'EventDef', 'DeviceIdentity', 'DeviceStatus', 'DeviceState (Enum)'],
+    description: 'Pydantic models defining device metadata. DeviceCapabilities bundles functions + events. FunctionDef has JSON Schema parameters. DeviceIdentity has hardware info.',
+    file: 'device_connect_edge/types.py',
+    flows: [] },
+
+  // ── Edge: Messaging ──
+  { id: 'MessagingClient', name: 'MessagingClient', pkg: 'edge', type: 'abc', x: 820, y: 620,
+    methods: ['connect()', 'publish(subject, data)', 'subscribe(subject, cb)', 'request(subject, data)', 'close()'],
+    description: 'Abstract messaging interface. Implemented by NATSAdapter, ZenohAdapter, MQTTAdapter. Central to all communication \u2014 used by every flow in both modes.',
+    file: 'device_connect_edge/messaging/base.py',
+    flows: ['1d','1i','2d','2i','3d','3i','4d','4i','5d','5i','6d','6i','7d','7i','8d','8i'] },
+
+  // ── Edge: Discovery ──
+  { id: 'DiscoveryProvider', name: 'DiscoveryProvider', pkg: 'edge', type: 'protocol', x: 1180, y: 180,
+    methods: ['list_devices(device_type, location, capabilities)', 'get_device(device_id)'],
+    description: 'Protocol (interface) for device discovery. Implemented by D2DRegistry (peer-based) and RegistryClient (server-based). The point where D2D and Infra discovery paths diverge.',
+    file: 'device_connect_edge/discovery_provider.py',
+    flows: ['4d','4i','6d','6i'] },
+
+  { id: 'PresenceAnnouncer', name: 'PresenceAnnouncer', pkg: 'edge', type: 'class', x: 1000, y: 850,
+    methods: ['start()', 'stop()', 'trigger_burst()'],
+    description: 'D2D discovery: broadcasts device metadata on presence topic at 2Hz burst (10s) then 0.2Hz steady. Responds to discovery probes instantly.',
+    file: 'device_connect_edge/discovery.py',
+    flows: ['1d'], mode: 'd2d' },
+
+  { id: 'PresenceCollector', name: 'PresenceCollector', pkg: 'edge', type: 'class', x: 1000, y: 1080,
+    methods: ['start()', 'stop()', 'list_devices()', 'get_device()', 'send_discovery_probe()', 'wait_for_peers()', 'wait_for_device_type()', 'wait_for_device_id()'],
+    description: 'D2D discovery: listens for presence announcements, maintains in-memory peer table, prunes stale peers (30s timeout). Supports blocking wait-for-device.',
+    file: 'device_connect_edge/discovery.py',
+    flows: ['1d','3d','4d','6d'], mode: 'd2d' },
+
+  { id: 'D2DRegistry', name: 'D2DRegistry', pkg: 'edge', type: 'class', x: 1180, y: 420,
+    methods: ['list_devices(device_type, location, capabilities)', 'get_device(device_id)'],
+    description: 'Drop-in DiscoveryProvider backed by PresenceCollector. Used in D2D mode so DeviceDriver.list_devices() and DeviceConnection.list_devices() work without a registry service.',
+    file: 'device_connect_edge/discovery.py',
+    flows: ['3d','4d','6d'], mode: 'd2d' },
+
+  { id: 'RegistryClient', name: 'RegistryClient', pkg: 'edge', type: 'class', x: 1470, y: 420,
+    methods: ['list_devices(device_type, location, capabilities)', 'get_device(device_id)', 'invalidate_cache()'],
+    description: 'Infra-mode DiscoveryProvider. Queries registry service via JSON-RPC over messaging. Results are cached with configurable TTL.',
+    file: 'device_connect_edge/registry_client.py',
+    flows: ['1i','3i','4i','6i'], mode: 'infra' },
+
+  // ── Server Package ──
+  { id: 'DeviceRegistry', name: 'DeviceRegistry', pkg: 'server', type: 'class', x: 1820, y: 420,
+    methods: ['register(tenant, device_id, payload, ttl)', 'refresh(tenant, device_id)', 'list_devices(tenant)', 'get_device(tenant, device_id)', 'describe_fleet(tenant)', 'update_status(tenant, device_id, status)'],
+    description: 'Server-side etcd-backed device persistence. Manages TTL leases for device registrations. Provides fleet summary for orchestrators.',
+    file: 'device_connect_server/registry/service/registry.py',
+    flows: ['1i','4i','6i'], mode: 'infra' },
+
+  { id: 'RegistryService', name: 'Registry Handlers', pkg: 'server', type: 'function', x: 1820, y: 180,
+    methods: ['_make_register_handler()', '_make_list_handler()', '_make_hb_handler()', 'main()'],
+    description: 'Stateless factory functions that create JSON-RPC handlers for device registration, heartbeats, and discovery queries. main() wires handlers and runs the async service loop.',
+    file: 'device_connect_server/registry/service/main.py',
+    flows: ['1i','4i','6i'], mode: 'infra' },
+
+  { id: 'StateStore', name: 'StateStore', pkg: 'server', type: 'abc', x: 2200, y: 180,
+    methods: ['connect()', 'close()', 'get(key)', 'set(key, value, ttl)', 'delete(key)', 'lock(key, ttl)', 'get_prefix(prefix)', 'refresh_ttl(key, ttl)'],
+    description: 'Abstract distributed state store. Supports TTL, prefix queries, and distributed locks. Used by orchestrators for experiment/device state.',
+    file: 'device_connect_server/state/base.py', flows: [] },
+
+  { id: 'EtcdStateStore', name: 'EtcdStateStore', pkg: 'server', type: 'class', x: 2200, y: 420,
+    methods: ['connect()', 'get()', 'set()', 'delete()', '_try_acquire_lock()', '_release_lock()'],
+    description: 'etcd-backed implementation of StateStore. Uses etcd3gw HTTP gateway. Tracks lock ownership for distributed coordination.',
+    file: 'device_connect_server/state/etcd_store.py', flows: [] },
+
+  { id: 'ACLManager', name: 'ACLManager', pkg: 'server', type: 'class', x: 2200, y: 680,
+    methods: ['set_acl()', 'get_acl()', 'delete_acl()', 'list_acls()', 'filter_visible_devices()', 'check_event_subscription()', 'check_function_call()'],
+    description: 'Authorization policy engine. Manages DeviceACL rules for visibility, event subscription, and function call permissions. Filters discovery results via requester_id in RPC params.',
+    file: 'device_connect_server/security/acl.py',
+    flows: ['4i','6i'] },
+
+  { id: 'ServerRegistryClient', name: 'RegistryClient', pkg: 'server', type: 'class', x: 2500, y: 420,
+    methods: ['connect()', 'close()', 'list_devices(device_type, location, capabilities)', 'get_device(device_id)', 'get_device_functions(device_id)', 'get_device_events(device_id)', 'wait_for_device(device_id, timeout)'],
+    description: 'Server-side registry client for orchestrators and external consumers. Communicates with the registry service via JSON-RPC over messaging. Supports async context manager.',
+    file: 'device_connect_server/registry/client.py',
+    flows: [], mode: 'infra' },
+
+  { id: 'CapabilityLoader', name: 'CapabilityLoader', pkg: 'edge', type: 'class', x: 470, y: 850,
+    methods: ['load_all()', 'load_one()', 'invoke(fn, **params)', 'get_functions()', 'start_all_routines()', 'set_driver()'],
+    description: 'In-process capability loading from directory of Python modules. Discovers @rpc/@periodic methods, wires event emission, manages routine lifecycle. Includes CapabilityDriverMixin.',
+    file: 'device_connect_edge/drivers/capability_loader.py', flows: [] },
+
+  { id: 'CommissioningMode', name: 'CommissioningMode', pkg: 'server', type: 'class', x: 1820, y: 680,
+    methods: ['validate_pin()', 'start_commissioning_server()', 'save_credentials()'],
+    description: 'Device onboarding with factory-provisioned PIN. Rate-limited bcrypt validation. HTTP server for credential provisioning during commissioning.',
+    file: 'device_connect_server/security/commissioning.py', flows: [] },
+
+  { id: 'AuditLogger', name: 'AuditLogger', pkg: 'server', type: 'abc', x: 1820, y: 920,
+    methods: ['connect()', 'close()', 'log(entry)', 'log_event()', 'log_tool_call()', 'log_assistant()', 'log_subscription_change()', 'log_device_status()'],
+    description: 'Abstract audit logging interface. MongoAuditLogger writes to MongoDB for orchestrator UI dashboards. NullAuditLogger for testing.',
+    file: 'device_connect_server/logging/base.py', flows: [] },
+
+  // ── Agent-tools Package ──
+  { id: 'DeviceConnection', name: 'DeviceConnection', pkg: 'agent', type: 'class', x: 2620, y: 180,
+    methods: ['connect()', 'close()', 'list_devices()', 'get_device()', 'invoke(device_id, fn, params)', 'subscribe_events()', 'async_subscribe()', 'async_subscribe_with_subject()', 'broadcast()', 'subscribe_buffered()', 'unsubscribe_buffered()', 'get_inbox()', 'messaging_client'],
+    description: 'Sync-to-async bridge for agent messaging. Runs dedicated event loop thread. Supports D2D (PresenceCollector) and Infra (RegistryClient) discovery modes.',
+    file: 'device_connect_agent_tools/connection.py',
+    flows: ['3d','3i','4d','4i','5d','5i'] },
+
+  { id: 'ToolFunctions', name: 'Tool Functions', pkg: 'agent', type: 'function', x: 2620, y: 470,
+    methods: ['describe_fleet()', 'list_devices(type, location)', 'get_device_functions(device_id)', 'invoke_device(device_id, fn, params)', 'invoke_device_with_fallback()', 'get_device_status()'],
+    description: 'Module-level functions providing framework-agnostic hierarchical discovery tools. Keep LLM context small: fleet overview \u2192 device list \u2192 single device schemas \u2192 invoke. Wrapped by Strands/LangChain adapters.',
+    file: 'device_connect_agent_tools/tools.py',
+    flows: ['4d','4i','5d','5i'] },
+
+  { id: 'DeviceConnectAgent', name: 'DeviceConnectAgent', pkg: 'agent', type: 'class', x: 3050, y: 180,
+    methods: ['prepare()', 'run()', 'stop()', '_run_agent_sync(prompt)'],
+    description: 'Event-driven agent base class. Connects, discovers devices, subscribes to events, batches incoming events, and invokes _run_agent_sync() (virtual) for LLM reasoning.',
+    file: 'device_connect_agent_tools/agent.py',
+    flows: ['3d','3i','4d','4i','5d','5i'] },
+
+  { id: 'StrandsAgent', name: 'StrandsDeviceConnectAgent', pkg: 'agent', type: 'class', x: 3050, y: 470,
+    methods: ['prepare()', '_run_agent_sync(prompt)', '_build_system_prompt()'],
+    description: 'Strands LLM implementation. Creates Strands Agent with device tools + auto-generated system prompt from discovered devices. Uses Claude/Anthropic model.',
+    file: 'device_connect_agent_tools/adapters/strands_agent.py',
+    flows: ['3d','3i','4d','4i','5d','5i'] },
+
+  { id: 'MCPBridgeServer', name: 'MCPBridgeServer', pkg: 'agent', type: 'class', x: 3450, y: 180,
+    methods: ['start()', '_init_discovery()', '_register_meta_tools()', '_connect_messaging()', 'stop()'],
+    description: 'MCP protocol server for Claude Desktop. Supports D2D (PresenceCollector) and Infra (RegistryClient) discovery. Exposes 4 hierarchical meta-tools.',
+    file: 'device_connect_agent_tools/mcp/bridge.py',
+    flows: ['4d','4i','5d','5i'] },
+
+  { id: 'ToolRouter', name: 'ToolRouter', pkg: 'agent', type: 'class', x: 3450, y: 470,
+    methods: ['invoke(tool_name, arguments, timeout=None)'],
+    description: 'Routes MCP tool calls to Device Connect devices. Parses device_id::function_name format, builds JSON-RPC 2.0 request, sends via MessagingClient.',
+    file: 'device_connect_agent_tools/mcp/router.py',
+    flows: ['5d','5i'] },
+
+  // ── Edge: Messaging Adapters ──
+  { id: 'NATSAdapter', name: 'NATSAdapter', pkg: 'edge', type: 'class', x: 680, y: 880,
+    methods: ['connect()', 'publish()', 'subscribe()', 'request()', 'close()'],
+    description: 'NATS-backed MessagingClient. Supports reconnection callbacks, drain, flush. Primary adapter for routed/infrastructure deployments.',
+    file: 'device_connect_edge/messaging/nats_adapter.py',
+    flows: [] },
+
+  { id: 'ZenohAdapter', name: 'ZenohAdapter', pkg: 'edge', type: 'class', x: 680, y: 1120,
+    methods: ['connect()', 'publish()', 'subscribe()', 'request()', 'close()'],
+    description: 'Zenoh-backed MessagingClient. Peer-to-peer capable for D2D mode with configurable scouting and transport keepalive.',
+    file: 'device_connect_edge/messaging/zenoh_adapter.py',
+    flows: [] },
+
+  { id: 'MQTTAdapter', name: 'MQTTAdapter', pkg: 'edge', type: 'class', x: 680, y: 1340,
+    methods: ['connect()', 'publish()', 'subscribe()', 'request()', 'close()'],
+    description: 'MQTT-backed MessagingClient. Bridges to MQTT 3.1.1/5.0 brokers for constrained IoT environments.',
+    file: 'device_connect_edge/messaging/mqtt_adapter.py',
+    flows: [] },
+
+  // ── Server: Audit Logger Implementations ──
+  { id: 'MongoAuditLogger', name: 'MongoAuditLogger', pkg: 'server', type: 'class', x: 1820, y: 1160,
+    methods: ['connect()', 'close()', 'log(entry)'],
+    description: 'MongoDB-backed audit logger. Stores log entries in MongoDB collection for orchestrator UI dashboards.',
+    file: 'device_connect_server/logging/mongo.py',
+    flows: [] },
+
+  { id: 'NullAuditLogger', name: 'NullAuditLogger', pkg: 'server', type: 'class', x: 2100, y: 1160,
+    methods: ['connect()', 'close()', 'log(entry)'],
+    description: 'No-op audit logger for testing or when logging is disabled. All operations silently ignored.',
+    file: 'device_connect_server/logging/mongo.py',
+    flows: [] },
+
+  // ── Agent-tools: MCP Classes ──
+  { id: 'DeviceConnectMCP', name: 'DeviceConnectMCP', pkg: 'agent', type: 'class', x: 2620, y: 760,
+    methods: ['tool()', 'event()', 'emit(event_name, payload)', 'run()', 'stop()', 'is_running', 'get_capabilities()'],
+    description: 'FastMCP-compatible device API. Provides @tool and @event decorators for defining device capabilities as an MCP server.',
+    file: 'device_connect_agent_tools/mcp/device_connect_mcp.py',
+    flows: [] },
+
+  { id: 'DeviceToolsServer', name: 'DeviceToolsServer', pkg: 'agent', type: 'class', x: 3050, y: 760,
+    methods: ['connect()', 'disconnect()', 'send_command()', 'list_devices()', 'device_introspect()', 'device_read()', 'device_write()', 'device_bash()', 'device_invoke()'],
+    description: 'MCP server for remote device operations in Setup mode. Exposes 24+ tools for device introspection, file I/O, code execution, and function invocation.',
+    file: 'device_connect_agent_tools/mcp/device_tools.py',
+    flows: [] },
+
+];
+
+const connections = [
+  // ── Structural relationships ──
+  { from: 'DeviceRuntime', to: 'DeviceDriver', type: 'composition', label: 'has driver',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['1d','1i','5d','5i','7d','7i','8d','8i'] },
+
+  { from: 'DeviceRuntime', to: 'D2DRouter', type: 'composition', label: 'creates router',
+    fromAnchor: 'right', toAnchor: 'bottom',
+    flows: ['7d','7i'] },
+
+  { from: 'DeviceRuntime', to: 'MessagingClient', type: 'composition', label: 'has messaging',
+    fromAnchor: 'right', toAnchor: 'left',
+    flows: ['1d','1i','2d','2i','5d','5i','7d','7i','8d','8i'] },
+
+  { from: 'DeviceDriver', to: 'Decorators', type: 'uses', label: 'decorated methods',
+    fromAnchor: 'right', toAnchor: 'left',
+    flows: ['1d','1i','2d','2i','8d','8i'] },
+
+  { from: 'DeviceDriver', to: 'DriverTransport', type: 'composition', label: 'has transport',
+    fromAnchor: 'right', toAnchor: 'left', flows: [] },
+
+  { from: 'DeviceDriver', to: 'TypeModels', type: 'uses', label: 'capabilities',
+    fromAnchor: 'bottom', toAnchor: 'top', flows: [] },
+
+  { from: 'DeviceRuntime', to: 'TypeModels', type: 'uses', label: 'identity, status',
+    fromAnchor: 'bottom', toAnchor: 'top', flows: [] },
+
+  { from: 'D2DRouter', to: 'MessagingClient', type: 'uses', label: 'request/publish',
+    fromAnchor: 'right', toAnchor: 'top',
+    flows: ['7d','7i'] },
+
+  { from: 'DriverTransport', to: 'MessagingClient', type: 'uses', label: 'raw topics',
+    fromAnchor: 'right', toAnchor: 'top', flows: [] },
+
+  // ── D2D: Device comes online ──
+  { from: 'DeviceRuntime', to: 'PresenceAnnouncer', type: 'composition', label: 'starts announcer',
+    fromAnchor: 'bottom', toAnchor: 'left',
+    flows: ['1d'] },
+
+  { from: 'DeviceRuntime', to: 'PresenceCollector', type: 'composition', label: 'starts collector',
+    fromAnchor: 'bottom', toAnchor: 'left',
+    flows: ['1d'] },
+
+  { from: 'PresenceAnnouncer', to: 'MessagingClient', type: 'uses', label: 'publish presence',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['1d'] },
+
+  { from: 'PresenceCollector', to: 'MessagingClient', type: 'uses', label: 'subscribe presence',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['1d','4d','6d'] },
+
+  // ── Infra: Device comes online ──
+  { from: 'DeviceRuntime', to: 'RegistryClient', type: 'uses', label: '_register() JSON-RPC',
+    fromAnchor: 'right', toAnchor: 'left',
+    flows: ['1i'] },
+
+  // ── Discovery: D2D stack ──
+  { from: 'D2DRegistry', to: 'PresenceCollector', type: 'composition', label: 'wraps',
+    fromAnchor: 'bottom', toAnchor: 'top',
+    flows: ['3d','4d','6d'] },
+
+  { from: 'D2DRegistry', to: 'DiscoveryProvider', type: 'implements', label: 'implements',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['4d','6d'] },
+
+  // ── Discovery: Infra stack ──
+  { from: 'RegistryClient', to: 'DiscoveryProvider', type: 'implements', label: 'implements',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['4i','6i'] },
+
+  { from: 'RegistryClient', to: 'MessagingClient', type: 'uses', label: 'JSON-RPC queries',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['1i','4i','6i'] },
+
+  { from: 'RegistryClient', to: 'RegistryService', type: 'uses', label: 'JSON-RPC (via messaging)',
+    fromAnchor: 'right', toAnchor: 'left',
+    flows: ['1i','4i','6i'] },
+
+  { from: 'RegistryService', to: 'DeviceRegistry', type: 'composition', label: 'has registry',
+    fromAnchor: 'bottom', toAnchor: 'top',
+    flows: ['1i','4i','6i'] },
+
+  // ── DeviceDriver discovery ──
+  { from: 'DeviceDriver', to: 'DiscoveryProvider', type: 'uses', label: 'list_devices() / get_device()',
+    fromAnchor: 'top', toAnchor: 'left',
+    flows: ['6d','6i'] },
+
+  // ── DeviceDriver invoke_remote ──
+  { from: 'DeviceDriver', to: 'D2DRouter', type: 'uses', label: 'invoke_remote()',
+    fromAnchor: 'bottom', toAnchor: 'top',
+    flows: ['7d','7i'] },
+
+  // ── @on event subscription ──
+  { from: 'Decorators', to: 'MessagingClient', type: 'uses', label: '@on \u2192 subscribe(event topic)',
+    fromAnchor: 'bottom', toAnchor: 'top',
+    flows: ['2d','2i'] },
+
+  // ── Server internals ──
+  { from: 'EtcdStateStore', to: 'StateStore', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom', flows: [] },
+
+  { from: 'RegistryService', to: 'ACLManager', type: 'uses', label: 'filter visibility',
+    fromAnchor: 'right', toAnchor: 'left',
+    flows: ['4i','6i'] },
+
+  // ── Agent-tools ──
+  { from: 'DeviceConnection', to: 'MessagingClient', type: 'uses', label: 'async messaging',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['3d','3i','5d','5i'] },
+
+  { from: 'DeviceConnection', to: 'RegistryClient', type: 'uses', label: 'discovery (infra)',
+    fromAnchor: 'bottom', toAnchor: 'right',
+    flows: ['3i','4i'] },
+
+  { from: 'DeviceConnection', to: 'D2DRegistry', type: 'uses', label: 'discovery (D2D)',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['3d','4d'] },
+
+  { from: 'ToolFunctions', to: 'DeviceConnection', type: 'uses', label: 'get_connection()',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['4d','4i','5d','5i'] },
+
+  { from: 'DeviceConnectAgent', to: 'DeviceConnection', type: 'uses', label: 'connect + subscribe',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['3d','3i'] },
+
+  { from: 'DeviceConnectAgent', to: 'ToolFunctions', type: 'uses', label: 'discover_devices()',
+    fromAnchor: 'bottom', toAnchor: 'right',
+    flows: ['4d','4i'] },
+
+  { from: 'StrandsAgent', to: 'DeviceConnectAgent', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom',
+    flows: ['3d','3i','4d','4i','5d','5i'] },
+
+  { from: 'StrandsAgent', to: 'ToolFunctions', type: 'uses', label: 'Strands @tool wrappers',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['4d','4i','5d','5i'] },
+
+  { from: 'MCPBridgeServer', to: 'ToolRouter', type: 'composition', label: 'has router',
+    fromAnchor: 'bottom', toAnchor: 'top',
+    flows: ['5d','5i'] },
+
+  { from: 'MCPBridgeServer', to: 'RegistryClient', type: 'uses', label: 'discovery (infra)',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['4i'] },
+
+  { from: 'MCPBridgeServer', to: 'D2DRegistry', type: 'uses', label: 'discovery (D2D)',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['4d'] },
+
+  { from: 'ToolRouter', to: 'MessagingClient', type: 'uses', label: 'JSON-RPC invoke',
+    fromAnchor: 'left', toAnchor: 'right',
+    flows: ['5d','5i'] },
+
+  // ── Messaging adapter inheritance ──
+  { from: 'NATSAdapter', to: 'MessagingClient', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom', flows: [] },
+
+  { from: 'ZenohAdapter', to: 'MessagingClient', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom', flows: [] },
+
+  { from: 'MQTTAdapter', to: 'MessagingClient', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom', flows: [] },
+
+  // ── Audit logger inheritance ──
+  { from: 'MongoAuditLogger', to: 'AuditLogger', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom', flows: [] },
+
+  { from: 'NullAuditLogger', to: 'AuditLogger', type: 'inheritance', label: 'extends',
+    fromAnchor: 'top', toAnchor: 'bottom', flows: [] },
+
+  // ── Server registry client ──
+  { from: 'ServerRegistryClient', to: 'RegistryService', type: 'uses', label: 'JSON-RPC queries',
+    fromAnchor: 'left', toAnchor: 'right', flows: [] },
+
+  { from: 'ServerRegistryClient', to: 'MessagingClient', type: 'uses', label: 'messaging transport',
+    fromAnchor: 'left', toAnchor: 'right', flows: [] },
+
+  // ── Agent MCP classes ──
+  { from: 'DeviceConnectMCP', to: 'MessagingClient', type: 'uses', label: 'device messaging',
+    fromAnchor: 'left', toAnchor: 'right', flows: [] },
+
+  { from: 'DeviceToolsServer', to: 'MessagingClient', type: 'uses', label: 'device commands',
+    fromAnchor: 'left', toAnchor: 'right', flows: [] },
+];
+
+
+// ══════════════════════════════════════════════════════════════
+// RENDERING
+// ══════════════════════════════════════════════════════════════
+
+const canvas = document.getElementById('canvas');
+const svgLayer = document.getElementById('svg-layer');
+const viewport = document.getElementById('viewport');
+const tooltip = document.getElementById('tooltip');
+
+// ── Render class boxes ──
+const boxElements = {};
+classes.forEach(cls => {
+  const div = document.createElement('div');
+  div.className = `class-box ${cls.pkg}`;
+  div.id = `box-${cls.id}`;
+  div.style.left = cls.x + 'px';
+  div.style.top = cls.y + 'px';
+  div.dataset.id = cls.id;
+  div.dataset.type = cls.type;
+  div.dataset.flows = (cls.flows || []).join(',');
+  if (cls.mode) div.dataset.mode = cls.mode;
+
+  let badge = '';
+  if (cls.type === 'abc') badge = '<span class="class-badge badge-abc">ABC</span>';
+  else if (cls.type === 'protocol') badge = '<span class="class-badge badge-protocol">Protocol</span>';
+  else if (cls.type === 'model') badge = '<span class="class-badge badge-model">Models</span>';
+  else if (cls.type === 'decorator') badge = '<span class="class-badge badge-decorator">Decorators</span>';
+  else if (cls.type === 'function') badge = '<span class="class-badge badge-function">Functions</span>';
+
+  let modeBadge = '';
+  if (cls.mode === 'd2d') modeBadge = '<span class="mode-badge d2d">D2D only</span>';
+  else if (cls.mode === 'infra') modeBadge = '<span class="mode-badge infra">Infra only</span>';
+  else if (cls.mode === 'both') modeBadge = '<span class="mode-badge d2d">Both modes</span>';
+
+  const methodsHTML = cls.methods.map(m => `<li>${m}</li>`).join('');
+
+  div.innerHTML = `
+    <div class="box-header">
+      <span class="class-name">${cls.name}</span>
+      ${badge}${modeBadge}
+    </div>
+    <div class="box-body">
+      <div class="box-desc">${cls.description.split('.')[0]}.</div>
+      <ul class="method-list">${methodsHTML}</ul>
+    </div>
+  `;
+
+  canvas.appendChild(div);
+  boxElements[cls.id] = div;
+});
+
+// ── Render zone labels ──
+[
+  { text: 'Edge \u2014 Device Package', x: 250, y: 100 },
+  { text: 'Messaging & Discovery', x: 1050, y: 100 },
+  { text: 'Server \u2014 Infrastructure', x: 1950, y: 100 },
+  { text: 'Agent Tools \u2014 LLM Integration', x: 2900, y: 100 },
+].forEach(z => {
+  const div = document.createElement('div');
+  div.className = 'zone-label';
+  div.style.left = z.x + 'px';
+  div.style.top = z.y + 'px';
+  div.textContent = z.text;
+  canvas.appendChild(div);
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// CONNECTION DRAWING
+// ══════════════════════════════════════════════════════════════
+
+function getBoxRect(id) {
+  const el = boxElements[id];
+  if (!el) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight };
+}
+
+function getAnchor(rect, side) {
+  switch (side) {
+    case 'top': return { x: rect.x + rect.w / 2, y: rect.y };
+    case 'bottom': return { x: rect.x + rect.w / 2, y: rect.y + rect.h };
+    case 'left': return { x: rect.x, y: rect.y + rect.h / 2 };
+    case 'right': return { x: rect.x + rect.w, y: rect.y + rect.h / 2 };
+    default: return { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
+  }
+}
+
+function drawConnections() {
+  svgLayer.querySelectorAll('.conn, .conn-label').forEach(el => el.remove());
+
+  connections.forEach((conn, idx) => {
+    const fromRect = getBoxRect(conn.from);
+    const toRect = getBoxRect(conn.to);
+    if (!fromRect.w || !toRect.w) return;
+
+    let fromPt, toPt;
+    if (conn.fromAnchor && conn.toAnchor) {
+      fromPt = getAnchor(fromRect, conn.fromAnchor);
+      toPt = getAnchor(toRect, conn.toAnchor);
+    } else {
+      const fcx = fromRect.x + fromRect.w/2, fcy = fromRect.y + fromRect.h/2;
+      const tcx = toRect.x + toRect.w/2, tcy = toRect.y + toRect.h/2;
+      const dx = tcx - fcx, dy = tcy - fcy;
+      const fS = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'bottom' : 'top');
+      const tS = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'left' : 'right') : (dy > 0 ? 'top' : 'bottom');
+      fromPt = getAnchor(fromRect, fS);
+      toPt = getAnchor(toRect, tS);
+    }
+
+    const dx = toPt.x - fromPt.x;
+    const dy = toPt.y - fromPt.y;
+    const tension = Math.min(Math.abs(dx), Math.abs(dy), 100);
+    let cp1x = fromPt.x, cp1y = fromPt.y, cp2x = toPt.x, cp2y = toPt.y;
+
+    const fSide = conn.fromAnchor || (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'bottom' : 'top'));
+    const tSide = conn.toAnchor || (Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'left' : 'right') : (dy > 0 ? 'top' : 'bottom'));
+    const cOff = Math.max(40, Math.min(tension, 80));
+
+    if (fSide === 'right') cp1x += cOff;
+    else if (fSide === 'left') cp1x -= cOff;
+    else if (fSide === 'bottom') cp1y += cOff;
+    else if (fSide === 'top') cp1y -= cOff;
+
+    if (tSide === 'right') cp2x += cOff;
+    else if (tSide === 'left') cp2x -= cOff;
+    else if (tSide === 'bottom') cp2y += cOff;
+    else if (tSide === 'top') cp2y -= cOff;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M${fromPt.x},${fromPt.y} C${cp1x},${cp1y} ${cp2x},${cp2y} ${toPt.x},${toPt.y}`);
+    path.classList.add('conn', conn.type);
+    path.dataset.idx = idx;
+    path.dataset.flows = (conn.flows || []).join(',');
+
+    let marker = 'url(#arrow)';
+    if (conn.type === 'inheritance') marker = 'url(#triangle)';
+    else if (conn.type === 'composition') path.setAttribute('marker-start', 'url(#diamond)');
+    path.setAttribute('marker-end', marker);
+
+    svgLayer.appendChild(path);
+
+    if (conn.label) {
+      const mx = (fromPt.x + toPt.x) / 2;
+      const my = (fromPt.y + toPt.y) / 2;
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      text.setAttribute('x', mx);
+      text.setAttribute('y', my - 6);
+      text.setAttribute('text-anchor', 'middle');
+      text.classList.add('conn-label');
+      text.dataset.idx = idx;
+      text.dataset.flows = (conn.flows || []).join(',');
+      text.textContent = conn.label;
+      svgLayer.appendChild(text);
+    }
+  });
+}
+
+requestAnimationFrame(() => { requestAnimationFrame(drawConnections); });
+
+
+// ══════════════════════════════════════════════════════════════
+// PAN / ZOOM
+// ══════════════════════════════════════════════════════════════
+
+let scale = 0.55;
+let panX = 0, panY = 0;
+let isPanning = false, panStartX = 0, panStartY = 0, panStartPanX = 0, panStartPanY = 0;
+
+function applyTransform() {
+  canvas.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+  document.getElementById('zoom-level').textContent = Math.round(scale * 100) + '%';
+}
+
+function zoomTo(newScale, cx, cy) {
+  const oldScale = scale;
+  newScale = Math.max(0.2, Math.min(2.5, newScale));
+  const vr = viewport.getBoundingClientRect();
+  const px = (cx !== undefined ? cx : vr.width / 2);
+  const py = (cy !== undefined ? cy : vr.height / 2);
+  panX = px - (px - panX) * (newScale / oldScale);
+  panY = py - (py - panY) * (newScale / oldScale);
+  scale = newScale;
+  applyTransform();
+}
+
+viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoomTo(scale * (e.deltaY > 0 ? 0.9 : 1.1), e.clientX, e.clientY);
+}, { passive: false });
+
+viewport.addEventListener('mousedown', e => {
+  if (e.button === 0 || e.button === 1) {
+    isPanning = true;
+    panStartX = e.clientX; panStartY = e.clientY;
+    panStartPanX = panX; panStartPanY = panY;
+    viewport.classList.add('grabbing');
+    e.preventDefault();
+  }
+});
+window.addEventListener('mousemove', e => {
+  if (!isPanning) return;
+  panX = panStartPanX + (e.clientX - panStartX);
+  panY = panStartPanY + (e.clientY - panStartY);
+  applyTransform();
+});
+window.addEventListener('mouseup', () => { isPanning = false; viewport.classList.remove('grabbing'); });
+
+// Touch
+let lastTouchDist = 0;
+viewport.addEventListener('touchstart', e => {
+  if (e.touches.length === 1) {
+    isPanning = true;
+    panStartX = e.touches[0].clientX; panStartY = e.touches[0].clientY;
+    panStartPanX = panX; panStartPanY = panY;
+  } else if (e.touches.length === 2) {
+    lastTouchDist = Math.hypot(e.touches[1].clientX - e.touches[0].clientX, e.touches[1].clientY - e.touches[0].clientY);
+  }
+}, { passive: true });
+viewport.addEventListener('touchmove', e => {
+  if (e.touches.length === 1 && isPanning) {
+    panX = panStartPanX + (e.touches[0].clientX - panStartX);
+    panY = panStartPanY + (e.touches[0].clientY - panStartY);
+    applyTransform();
+  } else if (e.touches.length === 2) {
+    const dist = Math.hypot(e.touches[1].clientX - e.touches[0].clientX, e.touches[1].clientY - e.touches[0].clientY);
+    if (lastTouchDist > 0) {
+      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      zoomTo(scale * (dist / lastTouchDist), cx, cy);
+    }
+    lastTouchDist = dist;
+  }
+}, { passive: true });
+viewport.addEventListener('touchend', () => { isPanning = false; lastTouchDist = 0; });
+
+// Zoom buttons
+document.getElementById('zoom-in').addEventListener('click', () => zoomTo(scale * 1.2));
+document.getElementById('zoom-out').addEventListener('click', () => zoomTo(scale / 1.2));
+document.getElementById('zoom-fit').addEventListener('click', () => {
+  // Calculate actual content bounds from rendered boxes
+  const boxes = Object.values(boxElements);
+  if (!boxes.length) return;
+  let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+  boxes.forEach(el => {
+    minX = Math.min(minX, el.offsetLeft);
+    minY = Math.min(minY, el.offsetTop);
+    maxX = Math.max(maxX, el.offsetLeft + el.offsetWidth);
+    maxY = Math.max(maxY, el.offsetTop + el.offsetHeight);
+  });
+  const pad = 40;
+  const contentW = maxX - minX + pad * 2;
+  const contentH = maxY - minY + pad * 2;
+  const vr = viewport.getBoundingClientRect();
+  // Account for flow legend panel on the right
+  const legendCollapsed = document.getElementById('flow-legend').classList.contains('collapsed');
+  const availW = vr.width - (legendCollapsed ? 60 : 360);
+  scale = Math.min(availW / contentW, vr.height / contentH) * 0.92;
+  panX = (availW - contentW * scale) / 2 - minX * scale + pad * scale;
+  panY = (vr.height - contentH * scale) / 2 - minY * scale + pad * scale;
+  applyTransform();
+});
+
+// Initial view
+applyTransform();
+requestAnimationFrame(() => {
+  const vr = viewport.getBoundingClientRect();
+  panX = (vr.width - 4200 * scale) / 2;
+  panY = (vr.height - 3000 * scale) / 2 + 20;
+  applyTransform();
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// FLOW LEGEND & HIGHLIGHTING
+// ══════════════════════════════════════════════════════════════
+
+let activeFlowId = null; // e.g. '3d', '5i'
+let activeScenario = null; // 1-8
+
+function renderScenarioRows() {
+  const container = document.getElementById('scenario-rows');
+  scenarios.forEach(sc => {
+    const row = document.createElement('div');
+    row.className = 'scenario-row';
+    row.innerHTML = `
+      <div class="scenario-pills">
+        <button class="pill d2d" data-flow="${sc.num}d" title="D2D: ${sc.name}">D2D</button>
+        <button class="pill infra" data-flow="${sc.num}i" title="Infra: ${sc.name}">Infra</button>
+      </div>
+      <span class="scenario-label"><span class="scenario-num">${sc.num}.</span> ${sc.name}${sc.identical ? ' <span class="identical-badge" title="Same class-level path in both modes">&#x2194;</span>' : ''}</span>
+    `;
+    row.querySelectorAll('.pill').forEach(pill => {
+      pill.addEventListener('click', () => toggleFlow(pill.dataset.flow));
+    });
+    container.appendChild(row);
+  });
+}
+
+function toggleFlow(flowId) {
+  if (activeFlowId === flowId) {
+    clearFlow();
+    return;
+  }
+  activeFlowId = flowId;
+  const scNum = parseInt(flowId);
+  const mode = flowId.endsWith('d') ? 'd2d' : 'infra';
+  const color = mode === 'd2d' ? D2D_COLOR : INFRA_COLOR;
+  const sc = scenarios.find(s => s.num === scNum);
+  activeScenario = scNum;
+
+  // Update pill buttons
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  const activeBtn = document.querySelector(`.pill[data-flow="${flowId}"]`);
+  if (activeBtn) activeBtn.classList.add('active');
+
+  // Show description
+  const descEl = document.getElementById('flow-desc');
+  const desc = mode === 'd2d' ? sc.d2d_desc : sc.infra_desc;
+  let html = `<strong>${mode === 'd2d' ? 'D2D' : 'Infra'}:</strong> ${desc}`;
+  if (sc.identical) {
+    html += `<br><span class="same-path-note">* Same class-level path in both modes \u2014 only the messaging backend differs</span>`;
+  }
+  descEl.innerHTML = html;
+  descEl.classList.add('visible');
+
+  // Highlight class boxes
+  document.querySelectorAll('.class-box').forEach(box => {
+    const boxFlows = (box.dataset.flows || '').split(',');
+    if (boxFlows.includes(flowId)) {
+      box.classList.remove('dimmed');
+      box.classList.add('highlighted');
+      box.style.setProperty('--hl-color', color);
+      // Show mode badge for D2D/Infra-specific classes
+      const mb = box.querySelector('.mode-badge');
+      if (mb && box.dataset.mode) mb.classList.add('visible');
+    } else {
+      box.classList.add('dimmed');
+      box.classList.remove('highlighted');
+      box.style.removeProperty('--hl-color');
+      const mb = box.querySelector('.mode-badge');
+      if (mb) mb.classList.remove('visible');
+    }
+  });
+
+  // Highlight connections
+  svgLayer.querySelectorAll('.conn').forEach(path => {
+    const pathFlows = (path.dataset.flows || '').split(',');
+    if (pathFlows.includes(flowId)) {
+      path.classList.remove('dimmed');
+      path.classList.add('highlighted', 'animated');
+      path.style.stroke = color;
+      path.setAttribute('marker-end', mode === 'd2d' ? 'url(#arrow-d2d)' : 'url(#arrow-infra)');
+    } else {
+      path.classList.add('dimmed');
+      path.classList.remove('highlighted', 'animated');
+      path.style.stroke = '';
+      path.setAttribute('marker-end', 'url(#arrow)');
+    }
+  });
+
+  svgLayer.querySelectorAll('.conn-label').forEach(text => {
+    const textFlows = (text.dataset.flows || '').split(',');
+    if (textFlows.includes(flowId)) {
+      text.classList.remove('dimmed');
+      text.style.fill = color;
+    } else {
+      text.classList.add('dimmed');
+      text.style.fill = '';
+    }
+  });
+}
+
+function clearFlow() {
+  activeFlowId = null;
+  activeScenario = null;
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  document.getElementById('flow-desc').classList.remove('visible');
+
+  document.querySelectorAll('.class-box').forEach(box => {
+    box.classList.remove('dimmed', 'highlighted');
+    box.style.removeProperty('--hl-color');
+    const mb = box.querySelector('.mode-badge');
+    if (mb) mb.classList.remove('visible');
+  });
+
+  svgLayer.querySelectorAll('.conn').forEach(path => {
+    path.classList.remove('dimmed', 'highlighted', 'animated');
+    path.style.stroke = '';
+    // Restore correct marker
+    const idx = parseInt(path.dataset.idx);
+    const conn = connections[idx];
+    if (conn) {
+      if (conn.type === 'inheritance') path.setAttribute('marker-end', 'url(#triangle)');
+      else path.setAttribute('marker-end', 'url(#arrow)');
+    }
+  });
+  svgLayer.querySelectorAll('.conn-label').forEach(text => {
+    text.classList.remove('dimmed');
+    text.style.fill = '';
+  });
+}
+
+document.getElementById('reset-btn').addEventListener('click', clearFlow);
+
+/// Keyboard shortcuts: 1-8 cycle scenarios, D/I toggle mode, Esc reset
+window.addEventListener('keydown', e => {
+  const searchInput = document.getElementById('class-search');
+  if (e.key === 'Escape') { clearFlow(); clearClassHighlight(); searchInput.value = ''; clearSearch(); searchInput.blur(); return; }
+  // Don't intercept keys when typing in search
+  if (document.activeElement === searchInput) return;
+  if (e.key >= '1' && e.key <= '8') {
+    const num = parseInt(e.key);
+    // If already on this scenario, cycle mode
+    if (activeScenario === num && activeFlowId) {
+      const currentMode = activeFlowId.endsWith('d') ? 'd' : 'i';
+      toggleFlow(num + (currentMode === 'd' ? 'i' : 'd'));
+    } else {
+      toggleFlow(num + 'd'); // Default to D2D
+    }
+    return;
+  }
+  if ((e.key === 'd' || e.key === 'D') && activeScenario) {
+    toggleFlow(activeScenario + 'd');
+    return;
+  }
+  if ((e.key === 'i' || e.key === 'I') && activeScenario) {
+    toggleFlow(activeScenario + 'i');
+    return;
+  }
+  if (e.key === '+' || e.key === '=') zoomTo(scale * 1.15);
+  else if (e.key === '-') zoomTo(scale / 1.15);
+  else if (e.key === '0') document.getElementById('zoom-fit').click();
+});
+
+renderScenarioRows();
+
+// Legend collapse toggle
+document.getElementById('legend-toggle').addEventListener('click', () => {
+  document.getElementById('flow-legend').classList.toggle('collapsed');
+});
+
+// Class search
+function clearSearch() {
+  document.querySelectorAll('.class-box').forEach(box => {
+    box.classList.remove('dimmed', 'search-match');
+  });
+  svgLayer.querySelectorAll('.conn, .conn-label').forEach(el => el.classList.remove('dimmed'));
+}
+
+document.getElementById('class-search').addEventListener('input', function(e) {
+  const query = e.target.value.toLowerCase().trim();
+  if (!query) { clearSearch(); return; }
+  // Clear any active flow first
+  if (activeFlowId) clearFlow();
+  document.querySelectorAll('.class-box').forEach(box => {
+    const cls = classes.find(c => c.id === box.dataset.id);
+    if (!cls) return;
+    const match = cls.name.toLowerCase().includes(query)
+                || cls.file.toLowerCase().includes(query)
+                || cls.description.toLowerCase().includes(query)
+                || cls.methods.some(m => m.toLowerCase().includes(query));
+    if (match) {
+      box.classList.remove('dimmed');
+      box.classList.add('search-match');
+    } else {
+      box.classList.add('dimmed');
+      box.classList.remove('search-match');
+    }
+  });
+  svgLayer.querySelectorAll('.conn, .conn-label').forEach(el => el.classList.add('dimmed'));
+});
+
+
+// Auto-fit on load
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    document.getElementById('zoom-fit').click();
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// CLASS-CLICK HIGHLIGHTING
+// ══════════════════════════════════════════════════════════════
+
+// Build adjacency map
+const adjacency = {};
+connections.forEach((conn, idx) => {
+  if (!adjacency[conn.from]) adjacency[conn.from] = [];
+  if (!adjacency[conn.to]) adjacency[conn.to] = [];
+  adjacency[conn.from].push({ neighbor: conn.to, idx });
+  adjacency[conn.to].push({ neighbor: conn.from, idx });
+});
+
+let clickedClassId = null;
+
+function clearClassHighlight() {
+  clickedClassId = null;
+  document.querySelectorAll('.class-box').forEach(box => {
+    box.classList.remove('dimmed', 'highlighted');
+    box.style.removeProperty('--hl-color');
+  });
+  svgLayer.querySelectorAll('.conn').forEach(path => {
+    path.classList.remove('dimmed', 'highlighted');
+    path.style.stroke = '';
+  });
+  svgLayer.querySelectorAll('.conn-label').forEach(text => {
+    text.classList.remove('dimmed');
+    text.style.fill = '';
+  });
+}
+
+document.querySelectorAll('.class-box').forEach(box => {
+  box.addEventListener('click', e => {
+    // Don't interfere with flow highlighting or search
+    if (activeFlowId) return;
+    const searchVal = document.getElementById('class-search').value.trim();
+    if (searchVal) return;
+
+    const id = box.dataset.id;
+    if (clickedClassId === id) { clearClassHighlight(); return; }
+
+    clickedClassId = id;
+    const neighbors = new Set((adjacency[id] || []).map(a => a.neighbor));
+    const connIdxs = new Set((adjacency[id] || []).map(a => a.idx));
+    neighbors.add(id);
+
+    document.querySelectorAll('.class-box').forEach(b => {
+      if (neighbors.has(b.dataset.id)) {
+        b.classList.remove('dimmed');
+        if (b.dataset.id === id) {
+          b.classList.add('highlighted');
+          b.style.setProperty('--hl-color', '#5dade2');
+        }
+      } else {
+        b.classList.add('dimmed');
+        b.classList.remove('highlighted');
+      }
+    });
+
+    svgLayer.querySelectorAll('.conn').forEach(path => {
+      if (connIdxs.has(parseInt(path.dataset.idx))) {
+        path.classList.remove('dimmed');
+        path.classList.add('highlighted');
+        path.style.stroke = '#5dade2';
+      } else {
+        path.classList.add('dimmed');
+        path.classList.remove('highlighted');
+        path.style.stroke = '';
+      }
+    });
+
+    svgLayer.querySelectorAll('.conn-label').forEach(text => {
+      if (connIdxs.has(parseInt(text.dataset.idx))) {
+        text.classList.remove('dimmed');
+        text.style.fill = '#5dade2';
+      } else {
+        text.classList.add('dimmed');
+        text.style.fill = '';
+      }
+    });
+  });
+});
+
+
+// ══════════════════════════════════════════════════════════════
+// TOOLTIPS
+// ══════════════════════════════════════════════════════════════
+
+document.querySelectorAll('.class-box').forEach(box => {
+  box.addEventListener('mouseenter', e => {
+    const cls = classes.find(c => c.id === box.dataset.id);
+    if (!cls) return;
+    tooltip.querySelector('.tt-title').textContent = cls.name;
+    tooltip.querySelector('.tt-file').textContent = cls.file;
+    tooltip.querySelector('.tt-desc').textContent = cls.description;
+    tooltip.querySelector('.tt-methods').innerHTML = cls.methods.map(m => `<div>${m}</div>`).join('');
+    tooltip.classList.add('visible');
+    positionTooltip(e);
+  });
+  box.addEventListener('mousemove', positionTooltip);
+  box.addEventListener('mouseleave', () => tooltip.classList.remove('visible'));
+});
+
+function positionTooltip(e) {
+  const pad = 12;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + 340 > window.innerWidth) x = e.clientX - 340 - pad;
+  if (y + 250 > window.innerHeight) y = e.clientY - 250 - pad;
+  tooltip.style.left = x + 'px';
+  tooltip.style.top = y + 'px';
+}
+
+</script>
+</body>
+</html>

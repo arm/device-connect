@@ -1,9 +1,12 @@
 """MCP Bridge Server for Claude Desktop.
 
-Connects Claude Desktop to Device Connect devices by:
-1. Discovering devices via NATS registry
-2. Exposing device functions as MCP tools
-3. Routing MCP tool calls to devices via NATS
+Connects Claude Desktop to Device Connect devices by exposing 4 meta-tools
+for hierarchical device discovery, avoiding the MCP tool explosion problem:
+
+1. describe_fleet     — bird's-eye fleet summary
+2. list_devices       — paginated, filterable device roster (no schemas)
+3. get_device_functions — full function schemas for ONE device
+4. invoke_device      — call a function on a device
 
 Usage:
     # As a module (for Claude Desktop config)
@@ -19,16 +22,21 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
+import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from device_connect_edge.messaging import create_client
 from device_connect_edge.messaging.base import MessagingClient
+from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
-from device_connect_agent_tools.mcp.discovery import DeviceDiscoveryClient, DiscoveryError
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
-from device_connect_agent_tools.mcp.schema import MCPToolDefinition
+from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
+from device_connect_agent_tools.connection import flatten_device
+from device_connect_agent_tools._normalize import (
+    full_device, compact_device, fuzzy_filter_by_type, extract_status,
+    aggregate_fleet, group_devices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +54,9 @@ class MCPBridgeServer:
 
     This server:
     - Runs as an MCP server via stdio transport
-    - Connects to Device Connect NATS for device discovery
-    - Exposes all device functions as MCP tools
-    - Routes tool calls through NATS to devices
+    - Connects to Device Connect messaging for device discovery
+    - Exposes 4 meta-tools for hierarchical discovery (not per-function)
+    - Routes invocations through messaging to devices
 
     Example:
         config = BridgeConfig.from_environment()
@@ -57,11 +65,6 @@ class MCPBridgeServer:
     """
 
     def __init__(self, config: BridgeConfig):
-        """Initialize MCP Bridge Server.
-
-        Args:
-            config: Bridge configuration
-        """
         if not FASTMCP_AVAILABLE:
             raise ImportError(
                 "FastMCP is required for MCP Bridge. "
@@ -71,220 +74,248 @@ class MCPBridgeServer:
         self.config = config
         self._mcp: Optional[FastMCP] = None
         self._messaging_client: Optional[MessagingClient] = None
-        self._discovery: Optional[DeviceDiscoveryClient] = None
+        self._registry = None  # RegistryClient or D2DRegistry (DiscoveryProvider)
         self._router: Optional[ToolRouter] = None
-        self._tools: Dict[str, MCPToolDefinition] = {}
+        self._d2d_collector = None  # PresenceCollector, if in D2D mode
         self._running = False
 
     async def start(self) -> None:
-        """Start the MCP Bridge Server.
-
-        This connects to NATS, discovers devices, and runs the MCP server.
-        The method blocks until the server is stopped.
-        """
+        """Start the MCP Bridge Server."""
         if self._running:
             logger.warning("MCPBridgeServer already running")
             return
 
         self._running = True
         logger.info("Starting MCP Bridge Server")
-        logger.debug(f"Config: {self.config.to_dict()}")
 
         try:
-            # Connect to NATS
+            # Connect to messaging
             await self._connect_messaging()
 
-            # Initialize discovery and router
-            self._discovery = DeviceDiscoveryClient(
-                self._messaging_client,
-                tenant=self.config.tenant,
-                cache_ttl=self.config.refresh_interval,
-            )
+            # Initialize discovery provider and router
+            await self._init_discovery()
             self._router = ToolRouter(
                 self._messaging_client,
                 tenant=self.config.tenant,
                 timeout=self.config.request_timeout,
             )
 
-            # Create FastMCP server
+            # Create FastMCP server with 4 meta-tools
             self._mcp = FastMCP("Device Connect Bridge")
+            self._register_meta_tools()
 
-            # Register the dynamic tool handler
-            self._register_dynamic_tools()
-
-            # Do initial tool discovery BEFORE starting MCP server
-            # This ensures tools are available when Claude Desktop first queries
-            logger.info("Performing initial tool discovery...")
-            await self._refresh_tools()
-
-            # Start background refresh task
-            refresh_task = asyncio.create_task(self._refresh_loop())
-
-            try:
-                # Run MCP server (async - for stdio transport)
-                logger.info("MCP Bridge ready - waiting for connections")
-                await self._mcp.run_stdio_async()
-            finally:
-                refresh_task.cancel()
-                try:
-                    await refresh_task
-                except asyncio.CancelledError:
-                    pass
+            logger.info("MCP Bridge ready — 4 meta-tools registered")
+            await self._mcp.run_stdio_async()
 
         finally:
             await self._cleanup()
 
-    async def _connect_messaging(self) -> None:
-        """Connect to NATS messaging."""
-        logger.info(f"Connecting to NATS: {self.config.messaging_urls}")
+    def _is_d2d_mode(self) -> bool:
+        """Determine if D2D (peer mesh) discovery should be used."""
+        mode = self.config.discovery_mode
+        if mode in ("d2d", "p2p"):
+            return True
+        if mode == "infra":
+            return False
+        # "auto": D2D when backend is Zenoh
+        backend = self.config.get_backend()
+        is_d2d = backend == "zenoh"
+        logger.info("Auto-detected discovery mode: %s (backend=%s)", "d2d" if is_d2d else "infra", backend)
+        return is_d2d
 
-        self._messaging_client = create_client("nats")
+    async def _init_discovery(self) -> None:
+        """Initialize discovery provider — D2D (PresenceCollector) or infra (RegistryClient)."""
+        if self._is_d2d_mode():
+            from device_connect_edge.discovery import PresenceCollector, D2DRegistry
+            logger.info("Using D2D discovery (PresenceCollector)")
+            self._d2d_collector = PresenceCollector(
+                self._messaging_client, self.config.tenant
+            )
+            await self._d2d_collector.start()
+            await self._d2d_collector.wait_for_peers(timeout=3.0)
+            self._registry = D2DRegistry(self._d2d_collector)
+        else:
+            logger.info("Using infra discovery (RegistryClient)")
+            self._registry = RegistryClient(
+                self._messaging_client,
+                tenant=self.config.tenant,
+                timeout=self.config.request_timeout,
+                cache_ttl=self.config.refresh_interval,
+            )
+
+    async def _list_devices(
+        self,
+        location: str | None = None,
+    ) -> list[dict]:
+        """List devices from registry and flatten to canonical shape.
+
+        Only *location* is passed server-side (exact-match filter).
+        ``device_type`` filtering is done client-side via
+        :func:`fuzzy_filter_by_type` — the provider's strict filter can
+        reject valid fuzzy matches (e.g. "environmentsensor" vs
+        "environment_sensor").  See ``tools.py:list_devices`` for the
+        same pattern and rationale.
+        """
+        raw = await self._registry.list_devices(location=location)
+        return [flatten_device(d) for d in raw]
+
+    async def _get_device(self, device_id: str) -> dict | None:
+        """Get one device from registry and flatten to canonical shape."""
+        raw = await self._registry.get_device(device_id)
+        return flatten_device(raw) if raw else None
+
+    async def _connect_messaging(self) -> None:
+        backend = self.config.get_backend()
+        logger.info("Connecting to messaging: %s (backend=%s)", self.config.messaging_urls, backend)
+        self._messaging_client = create_client(backend)
         await self._messaging_client.connect(
             servers=self.config.messaging_urls,
             credentials=self.config.messaging_auth,
             tls_config=self.config.messaging_tls,
         )
+        logger.info("Connected to messaging")
 
-        logger.info("Connected to NATS")
+    def _register_meta_tools(self) -> None:
+        """Register the 4 hierarchical discovery meta-tools."""
 
-    def _register_dynamic_tools(self) -> None:
-        """Register the dynamic tool handler with FastMCP.
+        @self._mcp.tool(
+            name="describe_fleet",
+            description=(
+                "Get a high-level summary of all available IoT devices. "
+                "Returns device counts grouped by type and location. "
+                "For small fleets, full device details are included automatically. "
+                "Call this first to understand what devices are available."
+            ),
+        )
+        async def describe_fleet() -> str:
+            """Fleet summary with type/location groupings."""
+            devices = await self._list_devices()
 
-        Since device tools are discovered dynamically, we register a single
-        handler that routes to the appropriate device based on tool name.
-        """
-        # Register tools/list handler to return discovered tools
-        @self._mcp.resource("device-connect://tools")
-        async def list_device_connect_tools() -> str:
-            """List all available Device Connect device tools."""
-            tools = await self._get_tools()
-            return "\n".join(
-                f"- {t.name}: {t.description}"
-                for t in tools
-            )
+            result = aggregate_fleet(devices)
 
-    async def _refresh_loop(self) -> None:
-        """Periodically refresh the tool list from device registry."""
-        while self._running:
-            try:
-                await self._refresh_tools()
-            except Exception as e:
-                logger.error(f"Tool refresh failed: {e}")
+            # Auto-expand: include full device details for small fleets
+            if SMALL_FLEET_THRESHOLD > 0 and len(devices) <= SMALL_FLEET_THRESHOLD:
+                result["devices"] = [full_device(d) for d in devices]
+                result["hint"] = (
+                    "Full device details included — skip list_devices / "
+                    "get_device_functions and go straight to invoke_device."
+                )
 
-            await asyncio.sleep(self.config.refresh_interval)
+            return json.dumps(result, indent=2)
 
-    async def _refresh_tools(self) -> None:
-        """Refresh available tools from device registry."""
-        if not self._discovery or not self._mcp:
-            return
+        @self._mcp.tool(
+            name="list_devices",
+            description=(
+                "Browse available IoT devices with filtering and pagination. "
+                "Returns compact summaries; for small fleets, full function "
+                "schemas are included automatically. "
+                "Use get_device_functions(device_id) for full schemas on larger fleets."
+            ),
+        )
+        async def list_devices(
+            device_type: str = "",
+            location: str = "",
+            status: str = "",
+            group_by: str = "",
+            offset: int = 0,
+            limit: int = 20,
+        ) -> str:
+            """Paginated, filterable device list."""
+            devices = await self._list_devices(location=location or None)
 
-        try:
-            tools = await self._discovery.get_tools()
-            logger.info(f"Discovered {len(tools)} tools from registry")
+            # Client-side fuzzy type filter — sole type filter; provider-level
+            # type filtering is intentionally skipped (see _list_devices docstring).
+            if device_type:
+                devices = fuzzy_filter_by_type(devices, device_type)
 
-            # Update tool cache
-            new_tools = {t.name: t for t in tools}
+            # Client-side status filter
+            if status:
+                s = status.lower()
+                devices = [d for d in devices if s in extract_status(d).lower()]
 
-            # Register new tools with FastMCP
-            for name, tool_def in new_tools.items():
-                if name not in self._tools:
-                    self._register_tool(tool_def)
+            def _summary(d: dict, expand: bool) -> dict:
+                result = compact_device(d, expand)
+                result["status"] = extract_status(d)
+                return result
 
-            self._tools = new_tools
+            total = len(devices)
 
-        except DiscoveryError as e:
-            logger.warning(f"Discovery failed: {e}")
+            if group_by in ("location", "device_type"):
+                expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
+                result = group_devices(devices, group_by, expand)
+            else:
+                page = devices[offset:offset + limit]
+                expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
+                result = {
+                    "devices": [_summary(d, expand) for d in page],
+                    "total": total,
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + limit < total,
+                }
 
-    def _register_tool(self, tool_def: MCPToolDefinition) -> None:
-        """Register a single tool with FastMCP."""
-        # Original name uses :: separator (e.g., device-id::function_name)
-        original_name = tool_def.name
+            return json.dumps(result, indent=2)
 
-        # MCP-compliant name uses -- separator (only a-zA-Z0-9_- allowed)
-        mcp_name = original_name.replace("::", "--")
+        @self._mcp.tool(
+            name="get_device_functions",
+            description=(
+                "Get full function schemas for a specific device. "
+                "Call this after list_devices() to see what parameters "
+                "each function accepts before invoking it."
+            ),
+        )
+        async def get_device_functions(device_id: str) -> str:
+            """Full function schemas for one device."""
+            device = await self._get_device(device_id)
+            if not device:
+                return json.dumps({"error": f"Device {device_id} not found"})
+            return json.dumps(full_device(device), indent=2)
 
-        logger.info(f"Registering tool: {mcp_name}")
-
-        # FastMCP doesn't support **kwargs, so we use a single dict parameter
-        # that we'll pass through to the device
-        async def tool_handler(arguments: str = "{}") -> Any:
-            """Dynamic tool handler.
-
-            Args:
-                arguments: JSON string of arguments to pass to the device function
-            """
-            import json
+        @self._mcp.tool(
+            name="invoke_device",
+            description=(
+                "Call a function on a Device Connect device. "
+                "Use get_device_functions() first to see available functions "
+                "and their parameter schemas."
+            ),
+        )
+        async def invoke_device(
+            device_id: str,
+            function: str,
+            arguments: str = "{}",
+        ) -> str:
+            """Invoke a device function."""
             try:
                 args = json.loads(arguments) if arguments else {}
-            except json.JSONDecodeError:
-                args = {}
-            # Use original name with :: for routing to device
-            return await self._invoke_tool(original_name, args)
+            except json.JSONDecodeError as e:
+                return json.dumps({"success": False, "error": f"Invalid JSON arguments: {e}"})
 
-        # Set function metadata for FastMCP
-        tool_handler.__name__ = mcp_name.replace(".", "_").replace("-", "_")
-        tool_handler.__doc__ = tool_def.description or f"Invoke {original_name}"
-
-        # Register with FastMCP using the MCP-compliant name
-        self._mcp.tool(
-            name=mcp_name,
-            description=tool_def.description or f"Invoke {original_name}",
-        )(tool_handler)
-
-    async def _invoke_tool(
-        self,
-        tool_name: str,
-        arguments: Dict[str, Any],
-    ) -> Any:
-        """Invoke a tool via the router.
-
-        Args:
-            tool_name: Tool name (device_id::function_name)
-            arguments: Tool arguments
-
-        Returns:
-            Tool result
-        """
-        if not self._router:
-            raise RuntimeError("Router not initialized")
-
-        logger.info(f"Invoking tool: {tool_name}")
-
-        try:
-            result = await self._router.invoke(tool_name, arguments)
-            return result
-        except ToolInvocationError as e:
-            logger.error(f"Tool invocation failed: {e}")
-            raise
-
-    async def _get_tools(self) -> List[MCPToolDefinition]:
-        """Get current list of tools."""
-        if not self._discovery:
-            return []
-
-        try:
-            return await self._discovery.get_tools()
-        except DiscoveryError:
-            # Return cached tools on discovery failure
-            return list(self._tools.values())
+            tool_name = f"{device_id}::{function}"
+            try:
+                result = await self._router.invoke(tool_name, args)
+                return json.dumps({"success": True, "result": result}, indent=2)
+            except ToolInvocationError as e:
+                return json.dumps({"success": False, "error": str(e)})
 
     async def _cleanup(self) -> None:
-        """Clean up resources."""
         self._running = False
-
+        if self._d2d_collector:
+            try:
+                await self._d2d_collector.stop()
+            except Exception as e:
+                logger.warning("Error stopping D2D collector: %s", e)
+            self._d2d_collector = None
         if self._messaging_client:
             try:
                 await self._messaging_client.close()
             except Exception as e:
-                logger.warning(f"Error closing messaging client: {e}")
-
+                logger.warning("Error closing messaging client: %s", e)
         self._messaging_client = None
-        self._discovery = None
+        self._registry = None
         self._router = None
         self._mcp = None
 
     async def stop(self) -> None:
-        """Stop the server gracefully."""
         self._running = False
         await self._cleanup()
 

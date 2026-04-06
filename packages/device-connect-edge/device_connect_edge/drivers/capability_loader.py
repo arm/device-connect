@@ -11,8 +11,8 @@ Key Components:
     - EventSubscription: Event subscription for agentic pattern
 
 Example:
-    from device_connect_server.drivers import DeviceDriver
-    from device_connect_server.drivers.capability_loader import CapabilityDriverMixin
+    from device_connect_edge.drivers import DeviceDriver
+    from device_connect_edge.drivers.capability_loader import CapabilityDriverMixin
 
     class MyDriver(CapabilityDriverMixin, DeviceDriver):
         def __init__(self):
@@ -30,6 +30,7 @@ Example:
 import asyncio
 import importlib
 import importlib.util
+import inspect
 import json
 import logging
 import os
@@ -39,7 +40,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from device_connect_server.drivers import DeviceDriver
+    from device_connect_edge.drivers import DeviceDriver
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,8 @@ class CapabilityLoader:
         self._functions: Dict[str, Callable] = {}
         self._routines: Dict[str, asyncio.Task] = {}
         self._subscriptions: List[EventSubscription] = []
+        self._spawned_tasks: set[asyncio.Task] = set()
+        self._module_names: Dict[str, str] = {}  # cap_name -> sys.modules key
 
         # Reference to driver (set externally if needed for capability constructor)
         self._driver: Optional["DeviceDriver"] = None
@@ -208,9 +211,7 @@ class CapabilityLoader:
                 if await self._load_capability(cap_path):
                     count += 1
             except Exception as e:
-                logger.error(f"Failed to load capability from {cap_path}: {e}")
-                import traceback
-                traceback.print_exc()
+                logger.exception("Failed to load capability from %s: %s", cap_path, e)
 
         logger.info(f"Loaded {count} capabilities from {self._capabilities_dir}")
         return count
@@ -277,6 +278,7 @@ class CapabilityLoader:
 
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
+        self._module_names[cap_id] = spec.name
         spec.loader.exec_module(module)
 
         # Instantiate the capability
@@ -307,12 +309,21 @@ class CapabilityLoader:
 
         # Call start() lifecycle method
         if hasattr(cap_instance, "start"):
-            await cap_instance.start()
+            if inspect.iscoroutinefunction(cap_instance.start):
+                await cap_instance.start()
+            else:
+                cap_instance.start()
 
         self._capabilities[cap_id] = loaded
         logger.info(f"Loaded capability: {cap_id} "
                     f"(functions={loaded.functions}, routines={loaded.routines})")
         return True
+
+    def _track_task(self, task: asyncio.Task) -> asyncio.Task:
+        """Register a dynamically-spawned task for lifecycle tracking."""
+        self._spawned_tasks.add(task)
+        task.add_done_callback(self._spawned_tasks.discard)
+        return task
 
     async def unload_all(self) -> None:
         """Unload all capabilities, cancel routines, and cleanup."""
@@ -325,6 +336,11 @@ class CapabilityLoader:
                 pass
         self._routines.clear()
 
+        # Cancel all tracked spawned tasks
+        for task in list(self._spawned_tasks):
+            task.cancel()
+        self._spawned_tasks.clear()
+
         # Clear function registrations
         self._functions.clear()
 
@@ -335,9 +351,17 @@ class CapabilityLoader:
         for cap_id, loaded in self._capabilities.items():
             try:
                 if hasattr(loaded.instance, "stop"):
-                    await loaded.instance.stop()
+                    if inspect.iscoroutinefunction(loaded.instance.stop):
+                        await loaded.instance.stop()
+                    else:
+                        loaded.instance.stop()
             except Exception as e:
                 logger.error(f"Error stopping capability {cap_id}: {e}")
+
+        # Clean up sys.modules entries for loaded capability modules
+        for mod_name in self._module_names.values():
+            sys.modules.pop(mod_name, None)
+        self._module_names.clear()
 
         self._capabilities.clear()
         logger.info("Unloaded all capabilities")
@@ -380,9 +404,17 @@ class CapabilityLoader:
         # Stop capability
         try:
             if hasattr(loaded.instance, "stop"):
-                await loaded.instance.stop()
+                if inspect.iscoroutinefunction(loaded.instance.stop):
+                    await loaded.instance.stop()
+                else:
+                    loaded.instance.stop()
         except Exception as e:
             logger.error(f"Error stopping capability {capability_id}: {e}")
+
+        # Clean up sys.modules entry for this capability's module
+        mod_name = self._module_names.pop(capability_id, None)
+        if mod_name:
+            sys.modules.pop(mod_name, None)
 
         del self._capabilities[capability_id]
         logger.info(f"Unloaded capability: {capability_id}")
@@ -429,7 +461,7 @@ class CapabilityLoader:
             raise KeyError(f"Function not found: {function}")
 
         method = self._functions[function]
-        if asyncio.iscoroutinefunction(method):
+        if inspect.iscoroutinefunction(method):
             return await method(**params)
         else:
             return method(**params)
@@ -451,7 +483,7 @@ class CapabilityLoader:
         Args:
             loaded: LoadedCapability object
         """
-        from device_connect_server.drivers.decorators import build_function_schema
+        from device_connect_edge.drivers.decorators import build_function_schema
 
         cap_instance = loaded.instance
         cap_id = loaded.id
@@ -480,6 +512,11 @@ class CapabilityLoader:
                     # Register with namespace prefix
                     self._functions[f"{cap_id}.{func_name}"] = attr
                     # Also register without prefix for direct invocation
+                    if func_name in self._functions:
+                        logger.warning(
+                            "Capability function %s from %s shadows existing registration",
+                            func_name, cap_id,
+                        )
                     self._functions[func_name] = attr
                     loaded.functions.append(func_name)
                     logger.debug(f"Registered function: {func_name} from {cap_id}")
@@ -514,11 +551,11 @@ class CapabilityLoader:
         # Also set callback if the capability uses an older pattern
         if hasattr(cap_instance, "set_event_callback"):
             cap_instance.set_event_callback(
-                lambda name, payload: asyncio.create_task(emit_event_internal(name, payload))
+                lambda name, payload: self._track_task(asyncio.create_task(emit_event_internal(name, payload)))
             )
         elif hasattr(cap_instance, "_event_callback"):
             cap_instance._event_callback = (
-                lambda name, payload: asyncio.create_task(emit_event_internal(name, payload))
+                lambda name, payload: self._track_task(asyncio.create_task(emit_event_internal(name, payload)))
             )
 
     def _collect_routines(self, loaded: LoadedCapability) -> None:
@@ -536,10 +573,12 @@ class CapabilityLoader:
                 attr = getattr(cap_instance, attr_name)
                 if callable(attr) and getattr(attr, "_is_device_routine", False):
                     interval = getattr(attr, "_routine_interval", 1.0)
+                    wait_for_completion = getattr(attr, "_routine_wait_for_completion", True)
                     loaded.routines.append(attr_name)
                     loaded.routine_configs[attr_name] = {
                         "callable": attr,
                         "interval": interval,
+                        "wait_for_completion": wait_for_completion,
                     }
                     logger.debug(f"Collected routine: {attr_name} (interval={interval}s)")
             except Exception as e:
@@ -581,8 +620,9 @@ class CapabilityLoader:
 
             routine = config["callable"]
             interval = config["interval"]
+            wait_for_completion = config.get("wait_for_completion", True)
             task = asyncio.create_task(
-                self._run_routine(cap_id, routine_name, routine, interval)
+                self._run_routine(cap_id, routine_name, routine, interval, wait_for_completion)
             )
             self._routines[key] = task
             count += 1
@@ -591,7 +631,8 @@ class CapabilityLoader:
         return count
 
     async def _run_routine(
-        self, cap_id: str, routine_name: str, routine: Callable, interval: float
+        self, cap_id: str, routine_name: str, routine: Callable, interval: float,
+        wait_for_completion: bool = True,
     ) -> None:
         """Run a capability's periodic routine.
 
@@ -600,15 +641,17 @@ class CapabilityLoader:
             routine_name: Name of the routine
             routine: The routine callable
             interval: Interval in seconds
+            wait_for_completion: If True, subtract elapsed time from sleep interval
         """
-        from device_connect_server.drivers.decorators import set_call_origin, reset_call_origin
+        from device_connect_edge.drivers.decorators import set_call_origin, reset_call_origin
 
         logger.debug(f"Starting routine {cap_id}.{routine_name} with interval {interval}s")
         while cap_id in self._capabilities:
+            start_time = asyncio.get_running_loop().time()
             # Set call origin to "routine" so RPC logs show LOCAL instead of EXEC
             token = set_call_origin("routine")
             try:
-                if asyncio.iscoroutinefunction(routine):
+                if inspect.iscoroutinefunction(routine):
                     await routine()
                 else:
                     routine()
@@ -619,7 +662,13 @@ class CapabilityLoader:
                 logger.error(f"Routine error in {cap_id}.{routine_name}: {e}")
             finally:
                 reset_call_origin(token)
-            await asyncio.sleep(interval)
+
+            if wait_for_completion:
+                elapsed = asyncio.get_running_loop().time() - start_time
+                sleep_time = max(0, interval - elapsed)
+                await asyncio.sleep(sleep_time)
+            else:
+                await asyncio.sleep(interval)
 
     async def _setup_subscriptions(self, loaded: LoadedCapability) -> None:
         """Set up event subscriptions for a capability's agentic pattern.
@@ -762,7 +811,10 @@ class CapabilityDriverMixin:
             True if loaded successfully
         """
         if self._capability_loader:
-            return await self._capability_loader.load_one(capability_id)
+            result = await self._capability_loader.load_one(capability_id)
+            if result:
+                self._invalidate_caches()
+            return result
         return False
 
     async def unload_capability(self, capability_id: str) -> bool:
@@ -775,7 +827,10 @@ class CapabilityDriverMixin:
             True if unloaded successfully
         """
         if self._capability_loader:
-            return await self._capability_loader.unload_one(capability_id)
+            result = await self._capability_loader.unload_one(capability_id)
+            if result:
+                self._invalidate_caches()
+            return result
         return False
 
     def _get_functions(self) -> Dict[str, Callable]:
@@ -793,22 +848,22 @@ class CapabilityDriverMixin:
 
         return funcs
 
-    async def invoke(self, function: str, **params) -> Any:
+    async def invoke(self, function_name: str, **params) -> Any:
         """Override to route to capability functions.
 
         Args:
-            function: Function name to invoke
+            function_name: Function name to invoke
             **params: Function parameters
 
         Returns:
             Function result
         """
         # Check if it's a capability function
-        if self._capability_loader and self._capability_loader.has_function(function):
-            return await self._capability_loader.invoke(function, **params)
+        if self._capability_loader and self._capability_loader.has_function(function_name):
+            return await self._capability_loader.invoke(function_name, **params)
 
         # Fall back to base class
-        return await super().invoke(function, **params)
+        return await super().invoke(function_name, **params)
 
     def get_capability_subscriptions(self) -> List[EventSubscription]:
         """Get event subscriptions from all capabilities.

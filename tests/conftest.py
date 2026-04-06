@@ -9,7 +9,7 @@ Fixtures:
     - event_capture: EventCollector for messaging event capture
     - event_injector: EventInjector for simulating device events
     - mock_orchestrator: Rule-based orchestrator (no LLM)
-    - messaging_client: Connected SDK MessagingClient for direct RPC calls
+    - messaging_client: Connected Edge MessagingClient for direct RPC calls
 
 Backend parameterization:
     All fixtures are parameterized over NATS and Zenoh via messaging_backend.
@@ -126,7 +126,7 @@ def nats_url(messaging_url) -> str:
 
 @pytest_asyncio.fixture
 async def messaging_client(infrastructure, messaging_backend, messaging_url):
-    """Connected SDK MessagingClient for direct RPC calls in tests."""
+    """Connected Edge MessagingClient for direct RPC calls in tests."""
     from device_connect_edge.messaging import create_client
 
     client = create_client(messaging_backend)

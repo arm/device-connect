@@ -5,7 +5,7 @@ It uses the messaging layer to communicate with the registry service.
 
 Example:
     from device_connect_server.registry import RegistryClient
-    from device_connect_server.messaging import create_client
+    from device_connect_edge.messaging import create_client
 
     async with RegistryClient(messaging_client) as registry:
         devices = await registry.list_devices()
