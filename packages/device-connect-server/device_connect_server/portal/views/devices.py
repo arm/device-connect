@@ -4,7 +4,8 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from .. import config
-from ..services import credentials, bundles, nsc, nats_admin, registry_client
+from ..services import credentials, bundles, registry_client
+from ..services.backend import get_backend
 
 
 def setup_routes(app: web.Application):
@@ -26,6 +27,8 @@ async def devices_page(request: web.Request):
     user = request["user"]
     tenant = user["tenant"]
     creds = credentials.list_credentials(tenant=tenant)
+    backend = get_backend()
+    broker_info = backend.broker_display_info()
 
     return aiohttp_jinja2.render_template("devices/list.html", request, {
         "user": user,
@@ -33,7 +36,7 @@ async def devices_page(request: web.Request):
         "tenant": tenant,
         "credentials": creds,
         "public_host": _public_host(request),
-        "nats_port": config.NATS_PORT,
+        "nats_port": broker_info.get("port", ""),
         "readonly": False,
     })
 
@@ -64,6 +67,8 @@ async def device_detail_page(request: web.Request):
         }
 
     cred_file = credentials.get_credential(f"{device_name}.creds.json")
+    backend = get_backend()
+    broker_info = backend.broker_display_info()
 
     return aiohttp_jinja2.render_template("devices/detail.html", request, {
         "user": user,
@@ -71,7 +76,7 @@ async def device_detail_page(request: web.Request):
         "device": device,
         "cred_filename": cred_file.name if cred_file else None,
         "public_host": _public_host(request),
-        "nats_port": config.NATS_PORT,
+        "nats_port": broker_info.get("port", ""),
     })
 
 
@@ -91,18 +96,20 @@ async def create_device(request: web.Request):
     # Prefix with tenant name for uniqueness
     full_name = f"{tenant}-{device_name}"
 
-    if not nsc.is_bootstrapped():
+    backend = get_backend()
+    if not backend.is_bootstrapped():
         return web.Response(
             text='<div class="px-5 py-3 text-sm text-red-600">System not bootstrapped — ask admin to run setup first</div>',
             content_type="text/html",
         )
 
     try:
-        await nsc.add_device(
+        broker_info = backend.broker_display_info()
+        await backend.add_device(
             tenant, full_name,
-            nats_host=config.NATS_HOST, nats_port=config.NATS_PORT,
+            host=broker_info["host"], port=broker_info["port"],
         )
-        await nats_admin.reload_nats()
+        await backend.reload_broker()
     except Exception as e:
         return web.Response(
             text=f'<div class="px-5 py-3 text-sm text-red-600">Failed to create device: {e}</div>',

@@ -8,10 +8,10 @@
   </div>
   <div class="flex gap-3">
     {% if bootstrapped %}
-    <button hx-post="/api/admin/nats/reload" hx-target="#status-msg" hx-swap="innerHTML"
+    <button hx-post="/api/admin/broker/reload" hx-target="#status-msg" hx-swap="innerHTML"
             class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
       <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-      Reload NATS
+      Reload Broker
     </button>
     {% endif %}
     <a href="/admin/health"
@@ -41,8 +41,11 @@
     {% endif %}
   </div>
   <div class="bg-white rounded-xl border border-gray-200 p-5">
-    <div class="text-sm font-medium text-gray-500">NATS Server</div>
-    <div class="text-sm font-semibold text-gray-900 mt-1">{{ nats_host }}:{{ nats_port }}</div>
+    <div class="text-sm font-medium text-gray-500">{{ broker_info.backend if broker_info else 'NATS' }} Server</div>
+    <div class="text-sm font-semibold text-gray-900 mt-1">{{ broker_info.host if broker_info else nats_host }}:{{ broker_info.port if broker_info else nats_port }}</div>
+    {% if broker_info and broker_info.auth_method %}
+    <div class="text-xs text-gray-400 mt-0.5">{{ broker_info.auth_method }}</div>
+    {% endif %}
   </div>
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Total Tenants</div>

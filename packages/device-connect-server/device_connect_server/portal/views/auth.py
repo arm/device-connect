@@ -6,9 +6,8 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from ..app import set_session, clear_session
-from ..services import users, nsc
-from ..services import nats_admin
-from .. import config
+from ..services import users
+from ..services.backend import get_backend
 
 
 def setup_routes(app: web.Application):
@@ -102,13 +101,15 @@ async def signup_submit(request: web.Request):
         return aiohttp_jinja2.render_template("signup.html", request, {"error": str(e)})
 
     # Create tenant namespace with initial device credentials
-    if nsc.is_bootstrapped():
+    backend = get_backend()
+    if backend.is_bootstrapped():
         try:
-            await nsc.create_tenant(
+            broker_info = backend.broker_display_info()
+            await backend.create_tenant(
                 username, num_devices=3,
-                nats_host=config.NATS_HOST, nats_port=config.NATS_PORT,
+                host=broker_info["host"], port=broker_info["port"],
             )
-            await nats_admin.reload_nats()
+            await backend.reload_broker()
         except Exception:
             pass  # Tenant creation is best-effort during signup
 
