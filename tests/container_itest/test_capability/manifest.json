@@ -1,0 +1,9 @@
+{
+  "id": "echo-cap",
+  "class_name": "EchoCapability",
+  "entry_point": "capability.py",
+  "container": {
+    "image": "itest-echo-cap:latest",
+    "resources": {"memory": "128Mi", "cpu": "0.5"}
+  }
+}

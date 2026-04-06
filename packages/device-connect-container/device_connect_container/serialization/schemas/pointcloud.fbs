@@ -1,0 +1,56 @@
+// FlatBuffers schema for LiDAR point clouds.
+//
+// Compile with: flatc --python -o generated/ pointcloud.fbs
+//
+// Defines the wire format for 3D point cloud data transferred
+// over Zenoh SHM between capability containers.
+
+namespace device_connect.data;
+
+/// Point data encoding.
+enum PointFormat : byte {
+    /// X, Y, Z as float32 (12 bytes per point).
+    XYZ_FLOAT32 = 0,
+    /// X, Y, Z, Intensity as float32 (16 bytes per point).
+    XYZI_FLOAT32 = 1,
+    /// X, Y, Z, R, G, B as float32+uint8 (15 bytes per point).
+    XYZRGB = 2,
+    /// Compressed (e.g., Draco).
+    COMPRESSED = 3,
+}
+
+/// 3D point cloud data.
+table PointCloud {
+    /// Timestamp in microseconds since epoch.
+    timestamp_us: uint64;
+
+    /// Frame sequence number.
+    sequence: uint32;
+
+    /// Number of points in the cloud.
+    num_points: uint32;
+
+    /// Point data format.
+    format: PointFormat = XYZ_FLOAT32;
+
+    /// Raw point data (packed according to format).
+    /// stride = bytes_per_point based on format.
+    data: [ubyte] (required);
+
+    /// Sensor pose (4x4 transform matrix, row-major float32, 64 bytes).
+    transform: [float];
+
+    /// Source device ID.
+    device_id: string;
+
+    /// Sensor-specific metadata.
+    metadata: [KeyValue];
+}
+
+/// Reuse KeyValue from frame.fbs (or define locally if compiling standalone).
+table KeyValue {
+    key: string (required);
+    value: string;
+}
+
+root_type PointCloud;

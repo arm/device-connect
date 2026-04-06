@@ -840,3 +840,112 @@ class ZenohAdapter(MessagingClient):
         # NATS single-level wildcard '*' stays as '*' in Zenoh (same semantics)
 
         return key
+
+    # ── Shared Memory (Phase 2 — Container IPC) ──────────────────
+
+    async def initialize_shm(self, segment_size: int = 64 * 1024 * 1024) -> None:
+        """Initialize Zenoh SHM provider for zero-copy publishing.
+
+        Requires eclipse-zenoh built with the shared-memory feature and
+        containers sharing /dev/shm (via --ipc=host or shared volume).
+
+        Args:
+            segment_size: Total SHM segment size in bytes (default 64MB).
+
+        Raises:
+            ImportError: If Zenoh SHM is not available.
+            RuntimeError: If initialization fails.
+        """
+        if not self.is_connected:
+            raise NotConnectedError("Not connected to Zenoh")
+
+        if not hasattr(zenoh, 'shm') or not hasattr(zenoh.shm, 'ShmProvider'):
+            raise ImportError(
+                "Zenoh SHM not available. Rebuild with: "
+                "pip install eclipse-zenoh --no-binary :all: "
+                "--config-settings build-args='--features=zenoh/shared-memory'"
+            )
+
+        self._shm_provider = zenoh.shm.ShmProvider.default_backend(segment_size)
+        self._shm_enabled = True
+        self._logger.info("SHM provider initialized (segment_size=%d bytes)", segment_size)
+
+    async def publish_shm(self, subject: str, data: bytes) -> None:
+        """Publish data via shared memory for zero-copy local delivery.
+
+        Allocates a buffer in the SHM segment, copies data in, and publishes
+        a reference. Co-located subscribers receive a memoryview directly
+        from shared memory. Remote subscribers transparently get a byte copy.
+
+        Args:
+            subject: Topic/subject (NATS-style dots or Zenoh slashes).
+            data: Raw bytes to publish.
+
+        Raises:
+            RuntimeError: If SHM not initialized.
+        """
+        if not self.is_connected:
+            raise NotConnectedError("Not connected to Zenoh")
+        if not getattr(self, '_shm_enabled', False):
+            raise RuntimeError("SHM not initialized. Call initialize_shm() first.")
+
+        key = self._to_key_expr(subject)
+
+        sbuf = self._shm_provider.alloc(
+            len(data),
+            policy=zenoh.shm.BlockOn(zenoh.shm.GarbageCollect()),
+        )
+        sbuf[:] = data
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(self._executor, self._session.put, key, sbuf)
+
+    async def subscribe_shm(
+        self,
+        subject: str,
+        callback: Callable,
+    ) -> Subscription:
+        """Subscribe with SHM-aware delivery.
+
+        When the publisher uses SHM and is co-located, the callback receives
+        a memoryview into shared memory (zero-copy). Otherwise, it receives
+        standard bytes.
+
+        Args:
+            subject: Topic/subject pattern.
+            callback: Callable(subject: str, data: memoryview_or_bytes).
+
+        Returns:
+            Subscription handle.
+        """
+        if not self.is_connected:
+            raise NotConnectedError("Not connected to Zenoh")
+        key = self._to_key_expr(subject)
+
+        def _on_sample(sample):
+            try:
+                sample_key = str(sample.key_expr)
+                # Zenoh provides memoryview for SHM, bytes for network
+                payload = sample.payload
+                if isinstance(payload, memoryview):
+                    data = payload
+                elif isinstance(payload, (bytes, bytearray)):
+                    data = memoryview(payload)
+                else:
+                    data = memoryview(bytes(payload))
+
+                nats_subject = sample_key.replace("/", ".")
+                callback(nats_subject, data)
+            except Exception as e:
+                self._logger.error("SHM subscriber callback error: %s", e)
+
+        sub = self._session.declare_subscriber(key, _on_sample)
+        wrapper = ZenohSubscriptionWrapper(sub)
+        self._subscriptions[subject] = {"wrapper": wrapper, "type": "shm_sub"}
+
+        return wrapper
+
+    @property
+    def shm_enabled(self) -> bool:
+        """Whether SHM transport is initialized."""
+        return getattr(self, '_shm_enabled', False)

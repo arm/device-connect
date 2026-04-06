@@ -1,0 +1,74 @@
+// FlatBuffers schema for generic sensor readings.
+//
+// Compile with: flatc --python -o generated/ sensor_reading.fbs
+//
+// Flexible schema for various sensor types (temperature, IMU,
+// proximity, force/torque, etc.) transferred over Zenoh SHM.
+
+namespace device_connect.data;
+
+/// Sensor data type.
+enum SensorType : byte {
+    TEMPERATURE = 0,
+    HUMIDITY = 1,
+    PRESSURE = 2,
+    IMU_ACCEL = 3,
+    IMU_GYRO = 4,
+    IMU_MAG = 5,
+    PROXIMITY = 6,
+    FORCE_TORQUE = 7,
+    VOLTAGE = 8,
+    CURRENT = 9,
+    GPS = 10,
+    GENERIC = 255,
+}
+
+/// Single sensor reading with up to 6 scalar values.
+table SensorReading {
+    /// Timestamp in microseconds since epoch.
+    timestamp_us: uint64;
+
+    /// Sensor type.
+    sensor_type: SensorType = GENERIC;
+
+    /// Sensor channel / axis name.
+    channel: string;
+
+    /// Scalar values (interpretation depends on sensor_type).
+    /// For temperature: [value]
+    /// For IMU accel: [x, y, z]
+    /// For force/torque: [fx, fy, fz, tx, ty, tz]
+    values: [float] (required);
+
+    /// Unit string (e.g., "celsius", "m/s^2", "N").
+    unit: string;
+
+    /// Source device ID.
+    device_id: string;
+
+    /// Reading quality (0.0 = invalid, 1.0 = perfect).
+    quality: float = 1.0;
+}
+
+/// Batch of sensor readings (for high-frequency sensors).
+table SensorBatch {
+    /// Timestamp of first reading.
+    start_timestamp_us: uint64;
+
+    /// Sample rate in Hz.
+    sample_rate_hz: float;
+
+    /// Sensor type (all readings in batch share the same type).
+    sensor_type: SensorType = GENERIC;
+
+    /// Number of values per sample.
+    values_per_sample: uint8;
+
+    /// Packed readings: [v0_s0, v1_s0, ..., v0_s1, v1_s1, ...].
+    data: [float] (required);
+
+    /// Source device ID.
+    device_id: string;
+}
+
+root_type SensorReading;

@@ -1,0 +1,28 @@
+# Dockerfile for the echo-cap test capability sidecar.
+# Build context: repository root (so we can install local packages).
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Build deps for eclipse-zenoh (Rust + C linker)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential curl && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install local packages from the repo
+COPY packages/device-connect-edge /src/device-connect-edge
+COPY packages/device-connect-container /src/device-connect-container
+RUN pip install --no-cache-dir /src/device-connect-edge /src/device-connect-container && \
+    apt-get purge -y --auto-remove build-essential curl && \
+    rm -rf /root/.cargo /root/.rustup /var/lib/apt/lists/*
+
+# Copy the test capability
+COPY tests/container_itest/test_capability /app/capability
+
+ENV CAPABILITY_DIR=/app/capability
+ENV PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["python", "-m", "device_connect_container.sidecar_runtime"]

@@ -255,7 +255,13 @@ class DeviceRuntime:
         auto_commission: bool = True,
         commissioning_port: int = 5540,
         allow_insecure: Optional[bool] = None,
+
+        # Container mode (requires device-connect-container package)
+        container_mode: bool = False,
     ) -> None:
+        # Container mode: capabilities run as OCI sidecar containers
+        self._container_mode = container_mode
+
         # Store driver reference and connect driver to this device
         self._driver = driver
         if driver is not None:
@@ -967,6 +973,9 @@ class DeviceRuntime:
                         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     },
                 }
+                # Phase 3: Include attestation token if available
+                if hasattr(self, '_attestation_token') and self._attestation_token:
+                    params["attestation"] = self._attestation_token
                 try:
                     self._logger.info("Registering device")
                     response_data = await self.messaging.request(
@@ -1324,12 +1333,45 @@ class DeviceRuntime:
         except Exception as e:
             self._logger.debug("OpenTelemetry initialization skipped: %s", e)
 
+        # Phase 3: Generate PSA attestation token (if container security is available)
+        self._attestation_token = None
+        if self._container_mode or os.getenv("DEVICE_CONNECT_ATTESTATION", "").lower() in ("1", "true", "yes"):
+            try:
+                from device_connect_container.security.attestation import AttestationTokenGenerator
+                generator = AttestationTokenGenerator(
+                    device_id=self.device_id,
+                    device_type=(self._driver.device_type if self._driver else "unknown"),
+                )
+                self._attestation_token = generator.generate_token()
+                self._logger.info("PSA attestation token generated (hardware_backed=%s)",
+                                  self._attestation_token.get("metadata", {}).get("hardware_backed", False))
+            except ImportError:
+                self._logger.debug("Attestation skipped: device-connect-container not installed")
+            except Exception as e:
+                self._logger.warning("Attestation token generation failed: %s", e)
+
         # Operational mode
         await self._connect_messaging()
         self._logger.info("Connected to messaging backend: %s", self.messaging_urls)
 
         # Connect driver if present
         if self._driver is not None:
+            # If container_mode, upgrade the driver's capability loader before connect()
+            if self._container_mode and hasattr(self._driver, '_capability_loader'):
+                from device_connect_edge.drivers.capability_loader import CapabilityDriverMixin
+                if isinstance(self._driver, CapabilityDriverMixin) and self._driver._capability_loader is not None:
+                    # Re-initialize with container-aware loader
+                    loader = self._driver._capability_loader
+                    self._driver.init_capabilities(
+                        capabilities_dir=loader._capabilities_dir,
+                        tenant=loader._tenant if hasattr(loader, '_tenant') else self.tenant,
+                        simulation_mode=loader.simulation_mode,
+                        container_mode=True,
+                        messaging=self.messaging,
+                        device_id=self.device_id,
+                    )
+                    self._logger.info("Container mode: upgraded capability loader")
+
             await self._driver.connect()
             # Wire up driver's event emitter to our event queue
             self._driver.set_event_callback(self._on_driver_event)

@@ -1,0 +1,37 @@
+// Per-device Zenoh router configuration template.
+// Variables prefixed with $ are substituted by ZenohRouterManager.
+{
+  // Listen for local capability containers
+  listen: {
+    endpoints: ["tcp/0.0.0.0:7447"]
+  },
+
+  // Connect upstream to infrastructure router (if present)
+  // Omitted in D2D-only mode
+  // connect: {
+  //   endpoints: ["$UPSTREAM_ENDPOINT"]
+  // },
+
+  // Enable multicast scouting for D2D peer discovery between device routers
+  scouting: {
+    multicast: {
+      enabled: $MULTICAST_ENABLED
+    }
+  },
+
+  // Shared memory transport (Phase 2)
+  transport: {
+    shared_memory: {
+      enabled: $SHM_ENABLED
+    }
+  },
+
+  // Admin space for monitoring
+  adminspace: {
+    enabled: true,
+    permissions: {
+      read: true,
+      write: false
+    }
+  }
+}

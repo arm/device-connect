@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "device-connect-container"
+version = "0.1.0"
+description = "Device Connect Container — containerized capability deployment with SHM IPC and Armv9 security"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Arm", email = "opensource@arm.com"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "device-connect-edge>=0.2.0",
+    "pydantic>=2.7.1,<3",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+shm = [
+    "flatbuffers>=24.3.0",
+]
+iceoryx = [
+    "iceoryx2>=0.8.0",
+]
+security = [
+    "cryptography>=42.0",
+]
+all = [
+    "device-connect-container[shm,security]",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-timeout>=2.0",
+    "device-connect-container[all]",
+]
+
+[project.urls]
+Homepage = "https://github.com/arm/device-connect"
+Repository = "https://github.com/arm/device-connect.git"
+
+[tool.setuptools.packages.find]
+include = ["device_connect_container*"]

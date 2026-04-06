@@ -1,0 +1,24 @@
+# Auto-generated Dockerfile for Device Connect capability sidecar.
+# Build context: the capability directory containing manifest.json + source.
+
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Install device-connect packages
+RUN pip install --no-cache-dir device-connect-edge device-connect-container
+
+# Copy capability source
+COPY . /app/capability/
+
+# Install capability-declared Python dependencies (if any)
+ARG PIP_DEPS=""
+RUN if [ -n "$PIP_DEPS" ]; then pip install --no-cache-dir $PIP_DEPS; fi
+
+# Arm-specific: enable MTE for C extensions if building on aarch64
+ARG ENABLE_MTE="false"
+
+ENV CAPABILITY_DIR=/app/capability
+ENV PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["python", "-m", "device_connect_container.sidecar_runtime"]

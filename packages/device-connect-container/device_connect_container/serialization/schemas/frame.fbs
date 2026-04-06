@@ -1,0 +1,55 @@
+// FlatBuffers schema for camera frames.
+//
+// Compile with: flatc --python -o generated/ frame.fbs
+//
+// This schema defines the wire format for camera frame data
+// transferred over Zenoh SHM between capability containers.
+
+namespace device_connect.data;
+
+/// Pixel encoding format.
+enum PixelFormat : byte {
+    RGB8 = 0,
+    BGR8 = 1,
+    RGBA8 = 2,
+    GRAY8 = 3,
+    YUV420 = 4,
+    JPEG = 5,
+    PNG = 6,
+    H264 = 7,
+    H265 = 8,
+}
+
+/// Camera frame metadata and pixel data.
+table Frame {
+    /// Timestamp in microseconds since epoch.
+    timestamp_us: uint64;
+
+    /// Frame sequence number.
+    sequence: uint32;
+
+    /// Image dimensions.
+    width: uint16;
+    height: uint16;
+
+    /// Pixel format / encoding.
+    format: PixelFormat = RGB8;
+
+    /// Raw pixel data (or compressed bytes for JPEG/PNG/H264/H265).
+    /// When using SHM, subscribers read this directly from shared memory.
+    data: [ubyte] (required);
+
+    /// Source device ID.
+    device_id: string;
+
+    /// Camera-specific metadata (focal length, exposure, etc).
+    metadata: [KeyValue];
+}
+
+/// Generic key-value pair for extensible metadata.
+table KeyValue {
+    key: string (required);
+    value: string;
+}
+
+root_type Frame;

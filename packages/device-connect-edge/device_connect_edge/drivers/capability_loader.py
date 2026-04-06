@@ -738,6 +738,9 @@ class CapabilityDriverMixin:
         capabilities_dir: Path,
         tenant: Optional[str] = None,
         simulation_mode: bool = False,
+        container_mode: bool = False,
+        messaging: Optional[Any] = None,
+        device_id: Optional[str] = None,
     ) -> None:
         """Initialize capability loading.
 
@@ -747,16 +750,43 @@ class CapabilityDriverMixin:
             capabilities_dir: Directory containing capability subdirectories
             tenant: Tenant identifier (default: from TENANT env or "default")
             simulation_mode: Tag all events with simulated=True
+            container_mode: Use ContainerCapabilityLoader for sidecar deployment.
+                When True, capabilities with a ``container`` key in their manifest
+                run as OCI sidecar containers; others load in-process as before.
+            messaging: MessagingClient instance (required for container_mode)
+            device_id: Device identifier (required for container_mode)
         """
         if tenant is None:
             tenant = os.getenv("TENANT", "default")
 
-        self._capability_loader = CapabilityLoader(
-            event_emitter=self._emit_capability_event,
-            capabilities_dir=capabilities_dir,
-            tenant=tenant,
-            simulation_mode=simulation_mode,
-        )
+        if container_mode:
+            try:
+                from device_connect_container.container_loader import ContainerCapabilityLoader
+            except ImportError:
+                raise ImportError(
+                    "container_mode requires the device-connect-container package. "
+                    "Install with: pip install device-connect-container"
+                )
+            if messaging is None:
+                raise ValueError("container_mode requires a messaging client")
+            if device_id is None:
+                raise ValueError("container_mode requires a device_id")
+
+            self._capability_loader = ContainerCapabilityLoader(
+                event_emitter=self._emit_capability_event,
+                capabilities_dir=capabilities_dir,
+                messaging=messaging,
+                device_id=device_id,
+                tenant=tenant,
+                simulation_mode=simulation_mode,
+            )
+        else:
+            self._capability_loader = CapabilityLoader(
+                event_emitter=self._emit_capability_event,
+                capabilities_dir=capabilities_dir,
+                tenant=tenant,
+                simulation_mode=simulation_mode,
+            )
         # Set driver reference for capability constructors
         self._capability_loader.set_driver(self)
 

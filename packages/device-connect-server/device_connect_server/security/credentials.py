@@ -142,6 +142,10 @@ class CredentialsLoader:
         if "password" in mqtt_config:
             result["password"] = mqtt_config["password"]
 
+        # Phase 3: Attestation token (stored alongside credentials after commissioning)
+        if "attestation" in data:
+            result["attestation"] = data["attestation"]
+
         return result
 
     @staticmethod

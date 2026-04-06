@@ -1,0 +1,54 @@
+# Docker Compose for container-mode integration tests.
+#
+# Topology:
+#   zenoh-router  ← local IPC backplane
+#   echo-cap      ← capability sidecar (connects to router)
+#
+# The test code runs on the host, connects to the router on localhost:7448,
+# and sends JSON-RPC commands to the sidecar's capability topic.
+#
+# Usage:
+#   docker compose -f docker-compose-container-itest.yml up -d --build
+#   pytest tests/container_itest/ -v
+#   docker compose -f docker-compose-container-itest.yml down
+
+services:
+  # Per-device Zenoh router (IPC backplane)
+  zenoh-router:
+    image: eclipse/zenoh:latest
+    container_name: citest-zenoh-router
+    # No multicast scouting — this is a standalone local router
+    command: ["--no-multicast-scouting", "--rest-http-port", "8000"]
+    ports:
+      - "7448:7447"      # Zenoh protocol (use 7448 to avoid conflict with main itest)
+      - "8002:8000"      # REST (for healthcheck)
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/@/local/sessions || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+      start_period: 3s
+    networks:
+      - citest-net
+
+  # Echo capability sidecar
+  echo-cap:
+    build:
+      context: ../..
+      dockerfile: tests/container_itest/Dockerfile.echo-cap
+    container_name: citest-echo-cap
+    environment:
+      ZENOH_ROUTER_ENDPOINT: "tcp/zenoh-router:7447"
+      DEVICE_ID: "itest-device-001"
+      TENANT: "default"
+      CAPABILITY_DIR: "/app/capability"
+      LOG_LEVEL: "DEBUG"
+    depends_on:
+      zenoh-router:
+        condition: service_healthy
+    networks:
+      - citest-net
+
+networks:
+  citest-net:
+    driver: bridge

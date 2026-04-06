@@ -16,7 +16,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -257,6 +257,52 @@ class RegisterParams(BaseModel):
     capabilities: DeviceCapabilities  # description, functions, events
     identity: DeviceIdentity          # arch, manufacturer, model, etc.
     status: DeviceStatus              # location, busy_score, availability
+    # Phase 3: Optional PSA attestation token for hardware-backed device verification.
+    # When provided, the registry verifies the token before admitting the device.
+    # Format: PSA attestation token dict (see device_connect_container.security.attestation).
+    attestation: Optional[Dict[str, Any]] = None
+
+
+# ---------- Attestation verification ---------- #
+
+
+def _verify_attestation(token: Dict[str, Any], tenant: str) -> Dict[str, Any]:
+    """Verify a PSA attestation token using the configured policy.
+
+    In production, this integrates with Veraison for full PSA token
+    verification. In development, uses a local policy engine.
+
+    Args:
+        token: PSA attestation token dict.
+        tenant: Tenant namespace (for per-tenant policy).
+
+    Returns:
+        Dict with "allowed" (bool) and optional "reason" (str).
+    """
+    # Check if attestation verification is enabled
+    require_attestation = os.getenv("REQUIRE_ATTESTATION", "false").lower() in ("1", "true", "yes")
+
+    if not require_attestation:
+        # Attestation provided but not required — accept and log
+        logger.info("[attestation] Token received but verification not required (REQUIRE_ATTESTATION=false)")
+        return {"allowed": True, "reason": "verification_not_required"}
+
+    try:
+        from device_connect_container.security.policy import PolicyEngine
+        engine = PolicyEngine.production_default()
+        result = engine.evaluate(token)
+        return {"allowed": result.allowed, "reason": result.reason}
+    except ImportError:
+        # device-connect-container not installed — use basic validation
+        logger.debug("[attestation] device-connect-container not installed, using basic validation")
+        metadata = token.get("metadata", {})
+        if metadata.get("hardware_backed", False):
+            return {"allowed": True, "reason": "hardware_backed"}
+        else:
+            return {
+                "allowed": False,
+                "reason": "Software-only attestation rejected (install device-connect-container for full policy)",
+            }
 
 
 # ---------- Per-tenant handler factories ---------- #
@@ -278,6 +324,24 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
                 )
                 return
             params = RegisterParams(**payload["params"])
+
+            # Phase 3: Verify PSA attestation token if provided and policy requires it
+            if params.attestation is not None:
+                attestation_result = _verify_attestation(params.attestation, tenant)
+                if not attestation_result.get("allowed", False):
+                    await messaging.publish(
+                        reply,
+                        build_rpc_error(
+                            payload.get("id"), -32001,
+                            f"Attestation failed: {attestation_result.get('reason', 'unknown')}",
+                        ),
+                    )
+                    logger.warning(
+                        "[device-registry] attestation denied for %s: %s",
+                        params.device_id, attestation_result.get("reason"),
+                    )
+                    return
+
             registration_id = str(uuid.uuid4())
             registry_payload = params.model_dump()
             registry_payload.setdefault("registry", {})

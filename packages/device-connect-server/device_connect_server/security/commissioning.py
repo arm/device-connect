@@ -184,9 +184,28 @@ class CommissioningMode:
                         'error': 'No credentials provided'
                     }, status=400)
 
+                # Phase 3: Generate attestation token after PIN validation
+                # The token is included in the credentials bundle so it can
+                # be submitted during subsequent device registrations.
+                attestation_token = None
+                try:
+                    from device_connect_container.security.attestation import AttestationTokenGenerator
+                    generator = AttestationTokenGenerator(
+                        device_id=self.device_id,
+                        device_type=self.device_type,
+                    )
+                    attestation_token = generator.generate_token()
+                    logger.info("Attestation token generated during commissioning")
+                except ImportError:
+                    logger.debug("Attestation skipped: device-connect-container not installed")
+                except Exception as e:
+                    logger.warning("Attestation token generation failed: %s", e)
+
                 # Mark as commissioned
                 self.commissioned = True
                 received_credentials.update(credentials)
+                if attestation_token:
+                    received_credentials["attestation"] = attestation_token
                 credentials_received.set()
 
                 logger.info("Device commissioned successfully")
