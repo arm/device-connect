@@ -7,7 +7,8 @@ import time
 import aiohttp_jinja2
 from aiohttp import web
 
-from ..services import credentials, registry_client, nats_rpc
+from ..services import credentials, registry_client
+from ..services.backend import get_backend
 
 
 def setup_routes(app: web.Application):
@@ -71,7 +72,7 @@ def _resolve_tenant(request: web.Request) -> str:
 
 
 async def invoke_device_rpc(request: web.Request):
-    """Invoke an RPC function on a device via NATS."""
+    """Invoke an RPC function on a device via the active messaging backend."""
     tenant = _resolve_tenant(request)
     device_id = request.match_info["device_id"]
 
@@ -86,12 +87,13 @@ async def invoke_device_rpc(request: web.Request):
     if not function:
         return web.json_response({"error": {"message": "function is required"}}, status=400)
 
-    result = await nats_rpc.invoke(tenant, device_id, function, params)
+    backend = get_backend()
+    result = await backend.rpc_invoke(tenant, device_id, function, params)
     return web.json_response(result)
 
 
 async def event_stream(request: web.Request):
-    """SSE endpoint: stream device events in real-time via NATS subscription."""
+    """SSE endpoint: stream device events in real-time via the active backend."""
     tenant = _resolve_tenant(request)
     device_id = request.match_info["device_id"]
     event_name = request.match_info["event_name"]
@@ -106,28 +108,36 @@ async def event_stream(request: web.Request):
     )
     await response.prepare(request)
 
-    nc = None
+    backend = get_backend()
+    client = None
     sub = None
     try:
-        nc = await nats_rpc.connect()
+        client = await backend.rpc_connect()
         subject = f"device-connect.{tenant}.{device_id}.event.{event_name}"
         queue = asyncio.Queue()
 
-        async def on_msg(msg):
-            await queue.put(msg)
+        async def on_msg(msg_data, _subject=None):
+            await queue.put(msg_data)
 
-        sub = await nc.subscribe(subject, cb=on_msg)
+        # For NATS: msg is a nats.Msg with .data attribute
+        # For Zenoh: callback receives (bytes, subject) directly
+        if backend.backend_name() == "nats":
+            async def _nats_cb(msg):
+                await queue.put(msg.data)
+            sub = await backend.subscribe_events(client, subject, _nats_cb)
+        else:
+            sub = await backend.subscribe_events(client, subject, on_msg)
 
         # Send initial keepalive
         await response.write(b": connected\n\n")
 
         while True:
             try:
-                msg = await asyncio.wait_for(queue.get(), timeout=15)
+                raw = await asyncio.wait_for(queue.get(), timeout=15)
                 try:
-                    payload = json.loads(msg.data)
+                    payload = json.loads(raw if isinstance(raw, (str, bytes)) else raw)
                 except (json.JSONDecodeError, TypeError):
-                    payload = {"raw": msg.data.decode(errors="replace")}
+                    payload = {"raw": raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)}
 
                 event_data = {
                     "ts": time.strftime("%H:%M:%S"),
@@ -141,9 +151,6 @@ async def event_stream(request: web.Request):
     except (ConnectionResetError, asyncio.CancelledError):
         pass
     finally:
-        if sub:
-            await sub.unsubscribe()
-        if nc:
-            await nc.close()
+        await backend.unsubscribe_events(client, sub)
 
     return response

@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies (openssl for Zenoh PKI certificate generation)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl unzip \
+    curl unzip openssl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI (for SIGHUP to NATS container)
