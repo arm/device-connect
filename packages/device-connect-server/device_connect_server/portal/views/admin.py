@@ -168,6 +168,7 @@ async def admin_setup_page(request: web.Request):
         "bootstrapped": backend.is_bootstrapped(),
         "nats_host": config.NATS_HOST,
         "zenoh_host": config.ZENOH_HOST,
+        "mqtt_host": config.MQTT_HOST,
     })
 
 
@@ -180,7 +181,12 @@ async def admin_setup_submit(request: web.Request):
 
     # Defaults per backend
     if not port:
-        port = "7447" if backend_name == "zenoh" else "4222"
+        if backend_name == "zenoh":
+            port = "7447"
+        elif backend_name == "mqtt":
+            port = "1883"
+        else:
+            port = "4222"
 
     if not host:
         return web.Response(

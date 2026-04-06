@@ -21,6 +21,11 @@ ZENOH_HOST = os.environ.get("ZENOH_HOST", "localhost")
 ZENOH_PORT = os.environ.get("ZENOH_PORT", "7447")
 ZENOH_CONTAINER = os.environ.get("ZENOH_CONTAINER", "dc-zenoh")
 
+# MQTT (Mosquitto)
+MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
+MQTT_PORT = os.environ.get("MQTT_PORT", "1883")
+MQTT_CONTAINER = os.environ.get("MQTT_CONTAINER", "dc-mosquitto")
+
 # etcd
 ETCD_HOST = os.environ.get("ETCD_HOST", "localhost")
 ETCD_PORT = int(os.environ.get("ETCD_PORT", "2379"))
