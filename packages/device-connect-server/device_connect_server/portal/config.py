@@ -8,6 +8,7 @@ from pathlib import Path
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "8080"))
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "0.0.0.0")
 SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_urlsafe(32)
+SESSION_SECURE_COOKIE = os.environ.get("SESSION_SECURE_COOKIE", "").lower() in ("1", "true", "yes")
 
 # Messaging backend (optional override; otherwise auto-detected from etcd)
 MESSAGING_BACKEND = os.environ.get("MESSAGING_BACKEND", "")

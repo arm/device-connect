@@ -86,9 +86,11 @@ def ensure_admin():
     if not get_user(config.ADMIN_USER):
         create_user(config.ADMIN_USER, config.ADMIN_PASS, role="admin")
         if config.ADMIN_PASS_GENERATED:
-            logger.warning(
-                "Generated admin password (set ADMIN_PASS env var to override): %s",
-                config.ADMIN_PASS,
+            # Print to stdout (not logger) to avoid persisting the password
+            # in log aggregation systems or container log storage.
+            print(
+                f"[portal] Generated admin password (set ADMIN_PASS env var to override): "
+                f"{config.ADMIN_PASS}"
             )
         else:
             logger.info("Seeded admin account: %s", config.ADMIN_USER)

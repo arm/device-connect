@@ -522,18 +522,38 @@ async def main() -> None:
         parts = subject.split(".")
         return parts[1] if len(parts) >= 3 else "default"
 
+    # Cache per-tenant handlers to avoid re-creating closures on every message
+    _register_handlers: dict[str, Any] = {}
+    _discovery_handlers: dict[str, Any] = {}
+    _heartbeat_handlers: dict[str, Any] = {}
+
+    def _get_register_handler(tenant: str):
+        if tenant not in _register_handlers:
+            _register_handlers[tenant] = _make_register_handler(tenant, messaging)
+        return _register_handlers[tenant]
+
+    def _get_discovery_handler(tenant: str):
+        if tenant not in _discovery_handlers:
+            _discovery_handlers[tenant] = _make_list_handler(tenant, messaging, acl_manager)
+        return _discovery_handlers[tenant]
+
+    def _get_heartbeat_handler(tenant: str):
+        if tenant not in _heartbeat_handlers:
+            _heartbeat_handlers[tenant] = _make_hb_handler(tenant, messaging)
+        return _heartbeat_handlers[tenant]
+
     # subscribe_with_subject passes (data, subject, reply) to the callback
     async def _wildcard_register(data: bytes, subject: str, reply):
         tenant = _extract_tenant(subject)
-        await _make_register_handler(tenant, messaging)(data, reply)
+        await _get_register_handler(tenant)(data, reply)
 
     async def _wildcard_discovery(data: bytes, subject: str, reply):
         tenant = _extract_tenant(subject)
-        await _make_list_handler(tenant, messaging, acl_manager)(data, reply)
+        await _get_discovery_handler(tenant)(data, reply)
 
     async def _wildcard_heartbeat(data: bytes, subject: str, reply):
         tenant = _extract_tenant(subject)
-        await _make_hb_handler(tenant, messaging)(data, reply)
+        await _get_heartbeat_handler(tenant)(data, reply)
 
     await messaging.subscribe_with_subject(
         "device-connect.*.registry",

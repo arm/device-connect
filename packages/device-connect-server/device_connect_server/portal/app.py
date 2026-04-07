@@ -86,6 +86,7 @@ def set_session(response: web.Response, data: dict):
     response.set_cookie(
         "portal_session", cookie_value,
         httponly=True, samesite="Lax", max_age=86400,
+        secure=config.SESSION_SECURE_COOKIE or None,
     )
 
 

@@ -1,5 +1,6 @@
 """Authentication views: login, signup, logout."""
 
+import html as _html
 import re
 
 import aiohttp_jinja2
@@ -95,7 +96,8 @@ async def signup_submit(request: web.Request):
     try:
         user = users.create_user(username, password, role="user")
     except ValueError as e:
-        error_html = f'<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{e}</div>'
+        escaped = _html.escape(str(e))
+        error_html = f'<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{escaped}</div>'
         if _is_htmx(request):
             return web.Response(text=error_html, content_type="text/html")
         return aiohttp_jinja2.render_template("signup.html", request, {"error": str(e)})
@@ -111,7 +113,10 @@ async def signup_submit(request: web.Request):
             )
             await backend.reload_broker()
         except Exception:
-            pass  # Tenant creation is best-effort during signup
+            import logging
+            logging.getLogger(__name__).exception(
+                "Tenant creation failed during signup for user '%s'", username,
+            )
 
     # Log in
     if _is_htmx(request):

@@ -1,5 +1,7 @@
 """Device management views: create, list, download credentials and bundles."""
 
+import html as _html
+
 import aiohttp_jinja2
 from aiohttp import web
 
@@ -112,7 +114,7 @@ async def create_device(request: web.Request):
         await backend.reload_broker()
     except Exception as e:
         return web.Response(
-            text=f'<div class="px-5 py-3 text-sm text-red-600">Failed to create device: {e}</div>',
+            text=f'<div class="px-5 py-3 text-sm text-red-600">Failed to create device: {_html.escape(str(e))}</div>',
             content_type="text/html",
         )
 
@@ -129,10 +131,19 @@ async def create_device(request: web.Request):
 
 async def download_credential(request: web.Request):
     """Download a single credential file."""
+    user = request["user"]
+    tenant = user["tenant"]
     device_name = request.match_info["name"]
     filename = f"{device_name}.creds.json"
-    cred_path = credentials.get_credential(filename)
 
+    # Verify the credential belongs to the requesting user's tenant (admins bypass)
+    cred_data = credentials.get_credential_data(filename)
+    if cred_data and user.get("role") != "admin":
+        cred_tenant = cred_data.get("tenant", "")
+        if cred_tenant != tenant:
+            raise web.HTTPForbidden(text="Access denied: credential belongs to another tenant")
+
+    cred_path = credentials.get_credential(filename)
     if not cred_path:
         raise web.HTTPNotFound(text=f"Credential file not found: {filename}")
 
@@ -146,10 +157,12 @@ async def download_credential(request: web.Request):
 
 async def download_bundle(request: web.Request):
     """Download a tenant credential bundle as .zip."""
-    tenant = request.query.get("tenant")
-    if not tenant:
-        user = request["user"]
-        tenant = user["tenant"]
+    user = request["user"]
+    tenant = request.query.get("tenant") or user["tenant"]
+
+    # Non-admin users can only download their own tenant's bundle
+    if tenant != user["tenant"] and user.get("role") != "admin":
+        raise web.HTTPForbidden(text="Access denied: cannot download another tenant's bundle")
 
     bundle_bytes = bundles.create_bundle(tenant, public_host=_public_host(request))
     return web.Response(
