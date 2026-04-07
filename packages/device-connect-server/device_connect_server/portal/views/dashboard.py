@@ -60,9 +60,12 @@ async def live_devices_fragment(request: web.Request):
 
 def _resolve_tenant(request: web.Request) -> str:
     """Get tenant from query param (admin override) or session."""
+    from ..services.backend import validate_name
+
     user = request["user"]
     tenant_override = request.query.get("tenant")
     if tenant_override and user.get("role") == "admin":
+        validate_name(tenant_override, "tenant")
         return tenant_override
     return user["tenant"]
 

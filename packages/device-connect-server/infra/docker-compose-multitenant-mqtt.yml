@@ -95,7 +95,7 @@ services:
       CREDS_DIR: /root/.device-connect/credentials
     volumes:
       - ~/.device-connect/credentials:/root/.device-connect/credentials
-      - ../security_infra:/app/security_infra
+      - ../security_infra:/app/security_infra:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       mosquitto:

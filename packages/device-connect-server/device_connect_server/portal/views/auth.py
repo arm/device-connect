@@ -92,21 +92,20 @@ async def signup_submit(request: web.Request):
             return web.Response(text=error_html, content_type="text/html")
         return aiohttp_jinja2.render_template("signup.html", request, {"error": error})
 
-    # Create user account
+    # Validate tenant name before creating anything
     try:
-        user = users.create_user(username, password, role="user")
+        validate_name(username, "tenant")
     except ValueError as e:
         escaped = _html.escape(str(e))
         error_html = f'<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{escaped}</div>'
         if _is_htmx(request):
             return web.Response(text=error_html, content_type="text/html")
-        return aiohttp_jinja2.render_template("signup.html", request, {"error": str(e)})
+        return aiohttp_jinja2.render_template("signup.html", request, {"error": escaped})
 
-    # Create tenant namespace with initial device credentials
+    # Create tenant namespace first — if this fails, don't create the user
     backend = get_backend()
     if backend.is_bootstrapped():
         try:
-            validate_name(username, "tenant")
             broker_info = backend.broker_display_info()
             await backend.create_tenant(
                 username, num_devices=3,
@@ -118,6 +117,20 @@ async def signup_submit(request: web.Request):
             logging.getLogger(__name__).exception(
                 "Tenant creation failed during signup for user '%s'", username,
             )
+            error_html = '<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">Signup failed: could not provision tenant</div>'
+            if _is_htmx(request):
+                return web.Response(text=error_html, content_type="text/html")
+            return aiohttp_jinja2.render_template("signup.html", request, {"error": "Signup failed: could not provision tenant"})
+
+    # Create user account only after tenant is provisioned
+    try:
+        user = users.create_user(username, password, role="user")
+    except ValueError as e:
+        escaped = _html.escape(str(e))
+        error_html = f'<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{escaped}</div>'
+        if _is_htmx(request):
+            return web.Response(text=error_html, content_type="text/html")
+        return aiohttp_jinja2.render_template("signup.html", request, {"error": escaped})
 
     # Log in
     if _is_htmx(request):

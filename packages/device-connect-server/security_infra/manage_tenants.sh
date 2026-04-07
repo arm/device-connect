@@ -77,7 +77,7 @@ build_tenant_bundle() {
     [ -f "$f" ] || continue
     # Check if this creds file belongs to the tenant
     local file_tenant
-    file_tenant=$(python3 -c "import json,sys; print(json.load(open('$f')).get('tenant',''))" 2>/dev/null || echo "")
+    file_tenant=$(python3 -c "import json,sys; print(json.load(sys.stdin).get('tenant',''))" < "$f" 2>/dev/null || echo "")
     if [ "$file_tenant" = "$tenant" ]; then
       cp "$f" "${tenant_dir}/credentials/"
     fi
@@ -259,8 +259,8 @@ case "$COMMAND" in
 
     for f in "${CREDS_DIR}"/*.creds.json; do
       [ -f "$f" ] || continue
-      local_tenant=$(python3 -c "import json,sys; print(json.load(open('$f')).get('tenant',''))" 2>/dev/null || echo "unknown")
-      local_device=$(python3 -c "import json,sys; print(json.load(open('$f')).get('device_id',''))" 2>/dev/null || echo "unknown")
+      local_tenant=$(python3 -c "import json,sys; print(json.load(sys.stdin).get('tenant',''))" < "$f" 2>/dev/null || echo "unknown")
+      local_device=$(python3 -c "import json,sys; print(json.load(sys.stdin).get('device_id',''))" < "$f" 2>/dev/null || echo "unknown")
 
       if [ "$local_tenant" = "default" ]; then
         # Privileged roles (registry, facilitator, etc.)

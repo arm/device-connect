@@ -48,6 +48,13 @@ async def device_detail_page(request: web.Request):
     tenant = user["tenant"]
     device_name = request.match_info["name"]
 
+    # Verify the device belongs to the requesting user's tenant (admins bypass)
+    cred_data = credentials.get_credential_data(f"{device_name}.creds.json")
+    if cred_data and user.get("role") != "admin":
+        cred_tenant = cred_data.get("tenant", "")
+        if cred_tenant != tenant:
+            raise web.HTTPForbidden(text="Access denied: device belongs to another tenant")
+
     # Try to get live data from registry
     device = None
     try:
@@ -57,7 +64,6 @@ async def device_detail_page(request: web.Request):
 
     if not device:
         # Fallback to credential data
-        cred_data = credentials.get_credential_data(f"{device_name}.creds.json")
         device = {
             "device_id": device_name,
             "device_type": "",

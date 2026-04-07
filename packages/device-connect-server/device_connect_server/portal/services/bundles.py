@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .. import config
 from . import credentials
-from .backend import get_backend
+from .backend import get_backend, validate_name
 
 
 def create_bundle(tenant: str, public_host: str = "") -> bytes:
@@ -15,6 +15,7 @@ def create_bundle(tenant: str, public_host: str = "") -> bytes:
 
     Returns the zip file as bytes.
     """
+    validate_name(tenant, "tenant")
     backend = get_backend()
     backend_name = backend.backend_name()
     broker_info = backend.broker_display_info()

@@ -1623,11 +1623,11 @@ class DeviceRuntime:
         Uses ``_subscription_lock`` to prevent concurrent invocations
         from rapid reconnects.
         """
-        if self._subscription_lock.locked():
+        if not self._subscription_lock.acquire_nowait():
             self._logger.debug("Subscription re-establishment already in progress, skipping")
             return
 
-        async with self._subscription_lock:
+        try:
             delay = 1
             while True:
                 try:
@@ -1652,6 +1652,8 @@ class DeviceRuntime:
                     )
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 30)
+        finally:
+            self._subscription_lock.release()
 
     def _handle_registration_reply(self, data: bytes) -> None:
         """Parse registry response and update local registration metadata."""
