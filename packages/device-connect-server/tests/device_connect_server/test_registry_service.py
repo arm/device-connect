@@ -24,6 +24,7 @@ from device_connect_server.registry.service.registry import (  # noqa: E402
     _kv_key,
     register,
     refresh,
+    has_lease,
     list_devices,
     update_status,
 )
@@ -379,6 +380,80 @@ class TestRefreshHeartbeat:
 
         lease_a.refresh.assert_called_once()
         lease_b.refresh.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# TestHasLease
+# ---------------------------------------------------------------------------
+
+
+class TestHasLease:
+    """Verify has_lease() on a DeviceRegistry instance."""
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_has_lease_exists(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        mock_client.lease.return_value = MagicMock()
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        reg.register("default", "cam-001", {"id": "cam-001"}, ttl=30)
+
+        assert reg.has_lease("default", "cam-001") is True
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_has_lease_missing(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+
+        assert reg.has_lease("default", "unknown-device") is False
+
+
+class TestModuleHasLease:
+    """Verify the module-level has_lease() wrapper."""
+
+    @patch("device_connect_server.registry.service.registry._REGISTRY")
+    def test_module_has_lease(self, mock_reg):
+        mock_reg.has_lease.return_value = True
+        result = has_lease("default", "cam-001")
+        mock_reg.has_lease.assert_called_once_with("default", "cam-001")
+        assert result is True
+
+
+# ---------------------------------------------------------------------------
+# TestRefreshLeaseRecovery
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshLeaseRecovery:
+    """Verify refresh() recovers a lost lease from etcd data."""
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_refresh_lease_recovery(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        existing = {"device_id": "cam-001", "status": {"online": True}}
+        mock_client.get.return_value = [json.dumps(existing)]
+        new_lease = MagicMock()
+        mock_client.lease.return_value = new_lease
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        # No lease in leases dict — simulates service restart
+        assert "default/cam-001" not in reg.leases
+
+        reg.refresh("default", "cam-001", ttl=15)
+
+        # A new lease should have been created
+        mock_client.lease.assert_called_once_with(ttl=15)
+        # Data should have been re-stored with the new lease
+        expected_key = "/device-connect/default/devices/cam-001"
+        mock_client.put.assert_called_once_with(
+            expected_key, json.dumps(existing), lease=new_lease,
+        )
+        # The lease should now be tracked
+        assert reg.leases["default/cam-001"] is new_lease
 
 
 # ---------------------------------------------------------------------------

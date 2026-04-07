@@ -173,10 +173,11 @@ class TestRegisterHandler:
         handler = _make_register_handler(TENANT, messaging)
         await handler(_rpc_request("registerDevice", VALID_REGISTER_PARAMS), "reply-sub")
 
-        # First publish: RPC success response
-        first_call = messaging.publish.call_args_list[0]
-        assert first_call[0][0] == "reply-sub"
-        response = json.loads(first_call[0][1])
+        # _do_register publishes online event first, then handler publishes reply
+        assert messaging.publish.call_count == 2
+        reply_call = messaging.publish.call_args_list[1]
+        assert reply_call[0][0] == "reply-sub"
+        response = json.loads(reply_call[0][1])
         assert response["result"]["status"] == "registered"
         assert response["result"]["device_registration_id"] == FIXED_UUID
 
@@ -191,11 +192,11 @@ class TestRegisterHandler:
         handler = _make_register_handler(TENANT, messaging)
         await handler(_rpc_request("registerDevice", VALID_REGISTER_PARAMS), "reply-sub")
 
-        # Second publish: device/online event
+        # _do_register publishes online event first
         assert messaging.publish.call_count == 2
-        second_call = messaging.publish.call_args_list[1]
-        assert second_call[0][0] == f"device-connect.{TENANT}.device.online"
-        event = json.loads(second_call[0][1])
+        online_call = messaging.publish.call_args_list[0]
+        assert online_call[0][0] == f"device-connect.{TENANT}.device.online"
+        event = json.loads(online_call[0][1])
         assert event["method"] == "device/online"
         assert event["params"]["device_id"] == "camera-001"
 
@@ -565,6 +566,40 @@ class TestHeartbeatHandler:
         handler = _make_hb_handler(TENANT)
         await handler(json.dumps({"online": True}).encode(), None)
         mock_registry.refresh.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_pulls_registration_on_missing_lease(self, mock_registry):
+        messaging = MagicMock()
+        messaging.publish = AsyncMock()
+        messaging.request = AsyncMock(return_value=json.dumps({
+            "jsonrpc": "2.0",
+            "id": "re-reg-cam-001",
+            "result": VALID_REGISTER_PARAMS,
+        }).encode())
+        mock_registry.has_lease.return_value = False
+
+        handler = _make_hb_handler(TENANT, messaging)
+        await handler(json.dumps({"device_id": "cam-001"}).encode(), None)
+
+        # The handler should have pulled registration and called register
+        mock_registry.register.assert_called_once()
+        call_args = mock_registry.register.call_args
+        assert call_args[0][0] == TENANT
+        assert call_args[0][1] == "cam-001"
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_pull_registration_failure_logged(self, mock_registry):
+        messaging = MagicMock()
+        messaging.publish = AsyncMock()
+        messaging.request = AsyncMock(side_effect=RuntimeError("device unreachable"))
+        mock_registry.has_lease.return_value = False
+
+        handler = _make_hb_handler(TENANT, messaging)
+        # Should not raise — exception is logged internally
+        await handler(json.dumps({"device_id": "cam-001"}).encode(), None)
+
+        # register should NOT have been called (pull failed)
+        mock_registry.register.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_heartbeat_registry_exception(self, mock_registry):

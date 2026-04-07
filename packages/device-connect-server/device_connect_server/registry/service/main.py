@@ -46,6 +46,9 @@ NATS_URL = os.getenv("NATS_URL", "")
 _last_seen: dict[str, float] = {}
 _device_ttl: dict[str, int] = {}
 
+_DEFAULT_TTL = 15                # Fallback TTL when device doesn't report one
+_PULL_REGISTRATION_TIMEOUT = 5   # Timeout for requestRegistration RPC
+
 
 def _resolve_tenants() -> List[str]:
     """Resolve the list of tenants to handle.
@@ -259,6 +262,42 @@ class RegisterParams(BaseModel):
     status: DeviceStatus              # location, busy_score, availability
 
 
+# ---------- Shared registration helper ---------- #
+
+async def _do_register(
+    tenant: str,
+    device_id: str,
+    payload: dict,
+    ttl: int,
+    messaging: MessagingClient,
+) -> str:
+    """Store device in etcd, update tracking dicts, emit device/online event.
+
+    Returns the generated ``registration_id``.
+    """
+    registration_id = str(uuid.uuid4())
+    payload.setdefault("registry", {})
+    payload["registry"].update({
+        "device_registration_id": registration_id,
+        "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    await asyncio.to_thread(registry.register, tenant, device_id, payload, ttl)
+    _device_ttl[f"{tenant}/{device_id}"] = ttl
+    _last_seen[f"{tenant}/{device_id}"] = time.time()
+    online_event = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "device/online",
+        "params": {
+            "device_id": device_id,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    }).encode()
+    await messaging.publish(
+        f"device-connect.{tenant}.device.online", online_event,
+    )
+    return registration_id
+
+
 # ---------- Per-tenant handler factories ---------- #
 
 def _make_register_handler(tenant: str, messaging: MessagingClient):
@@ -278,39 +317,16 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
                 )
                 return
             params = RegisterParams(**payload["params"])
-            registration_id = str(uuid.uuid4())
             registry_payload = params.model_dump()
-            registry_payload.setdefault("registry", {})
-            registry_payload["registry"].update(
-                {
-                    "device_registration_id": registration_id,
-                    "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                }
+            registration_id = await _do_register(
+                tenant, params.device_id, registry_payload, params.device_ttl, messaging,
             )
-
-            ttl = params.device_ttl
-            await asyncio.to_thread(registry.register, tenant, params.device_id, registry_payload, ttl)
-            _device_ttl[f"{tenant}/{params.device_id}"] = ttl
-            _last_seen[f"{tenant}/{params.device_id}"] = time.time()
             response = {
                 "status": "registered",
                 "device_registration_id": registration_id,
             }
             await messaging.publish(reply, build_rpc_response(payload.get("id"), response))
-            # emit a device online event
-            event_payload = {
-                "jsonrpc": "2.0",
-                "method": "device/online",
-                "params": {
-                    "device_id": params.device_id,
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }
-            }
-            await messaging.publish(
-                f"device-connect.{tenant}.device.online",
-                json.dumps(event_payload).encode()
-            )
-            logger.info("[device-registry] registered %s (tenant=%s) ttl=%s", params.device_id, tenant, ttl)
+            logger.info("[device-registry] registered %s (tenant=%s) ttl=%s", params.device_id, tenant, params.device_ttl)
         except Exception as ex:
             error_code = -32602 if isinstance(ex, (json.JSONDecodeError, ValueError)) else -32603
             await messaging.publish(
@@ -435,8 +451,7 @@ def _make_hb_handler(tenant: str, messaging=None):
 
             # If the device has no lease (expired or lost after restart),
             # pull full registration info from the device and re-register it.
-            lease_exists = registry._REGISTRY.leases.get(compound_key) is not None
-            if not lease_exists and messaging is not None:
+            if not registry.has_lease(tenant, device_id) and messaging is not None:
                 logger.info(
                     "[device-registry] no lease for %s (tenant=%s), pulling registration",
                     device_id, tenant,
@@ -449,33 +464,16 @@ def _make_hb_handler(tenant: str, messaging=None):
                         "method": "requestRegistration",
                         "params": {},
                     }).encode()
-                    resp_data = await messaging.request(cmd_subject, req, timeout=5)
+                    resp_data = await messaging.request(
+                        cmd_subject, req, timeout=_PULL_REGISTRATION_TIMEOUT,
+                    )
                     resp = json.loads(resp_data)
                     result = resp.get("result", {})
-                    reg_ttl = result.get("device_ttl", 15)
-                    registration_id = str(uuid.uuid4())
-                    result.setdefault("registry", {})
-                    result["registry"].update({
-                        "device_registration_id": registration_id,
-                        "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    })
-                    await asyncio.to_thread(
-                        registry.register, tenant, device_id, result, reg_ttl,
-                    )
-                    _device_ttl[compound_key] = reg_ttl
-                    _last_seen[compound_key] = time.time()
-                    # Emit device/online event
-                    online_payload = json.dumps({
-                        "jsonrpc": "2.0",
-                        "method": "device/online",
-                        "params": {
-                            "device_id": device_id,
-                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        },
-                    }).encode()
-                    await messaging.publish(
-                        f"device-connect.{tenant}.device.online", online_payload,
-                    )
+                    # Validate through the same schema as registerDevice
+                    params = RegisterParams(**result)
+                    reg_payload = params.model_dump()
+                    reg_ttl = params.device_ttl or _DEFAULT_TTL
+                    await _do_register(tenant, device_id, reg_payload, reg_ttl, messaging)
                     logger.info(
                         "[device-registry] re-registered %s via pull (tenant=%s, ttl=%s)",
                         device_id, tenant, reg_ttl,

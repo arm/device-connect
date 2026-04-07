@@ -128,6 +128,10 @@ class DeviceRegistry:
         self.leases[lk] = new_lease
         _logger.info("recovered lease for %s/%s (ttl=%d)", tenant, device_id, ttl)
 
+    def has_lease(self, tenant: str, device_id: str) -> bool:
+        """Check whether an active lease handle exists for ``device_id``."""
+        return self._lease_key(tenant, device_id) in self.leases
+
     def list_devices(
         self,
         tenant: str,
@@ -242,6 +246,11 @@ def list_devices(
 def get_device(tenant: str, device_id: str) -> dict | None:
     """Return a single device by direct key lookup."""
     return _REGISTRY.get_device(tenant, device_id)
+
+
+def has_lease(tenant: str, device_id: str) -> bool:
+    """Check whether an active lease handle exists for ``device_id``."""
+    return _REGISTRY.has_lease(tenant, device_id)
 
 
 def describe_fleet(tenant: str) -> dict:
