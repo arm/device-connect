@@ -2,7 +2,6 @@
 
 import base64
 import logging
-import os
 from pathlib import Path
 
 import aiohttp_jinja2

@@ -37,7 +37,6 @@ async def add_user(username: str, password: str) -> None:
     """
     async with _lock:
         passwd = _passwd_path()
-        flag = "-c" if not passwd.exists() else "-b"
         # -c creates (overwrites) the file; -b uses batch mode.
         # When creating we still need -b for batch (non-interactive).
         args = ["mosquitto_passwd", "-b"]

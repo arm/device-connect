@@ -3,7 +3,6 @@
 import asyncio
 import logging
 
-from .. import config
 from . import credentials
 
 logger = logging.getLogger(__name__)
@@ -39,7 +38,6 @@ async def run_verification() -> list[dict]:
     Returns list of test results: [{name, status, detail}]
     """
     results = []
-    nats_url = f"nats://{config.NATS_HOST}:{config.NATS_PORT}"
 
     # Find privileged creds
     priv_creds = credentials.list_credentials(tenant="default")

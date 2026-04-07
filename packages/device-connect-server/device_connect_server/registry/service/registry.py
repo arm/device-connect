@@ -18,9 +18,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-_logger = logging.getLogger(__name__)
-
 import etcd3gw
+
+_logger = logging.getLogger(__name__)
 
 ETCD_HOST = os.getenv("ETCD_HOST", "localhost")
 ETCD_PORT = int(os.getenv("ETCD_PORT", "2379"))

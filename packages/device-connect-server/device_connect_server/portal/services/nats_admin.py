@@ -19,7 +19,7 @@ async def reload_nats() -> dict:
     # Try to signal the NATS container
     try:
         proc = await asyncio.create_subprocess_exec(
-            "docker", "kill", f"--signal=SIGHUP", config.NATS_CONTAINER,
+            "docker", "kill", "--signal=SIGHUP", config.NATS_CONTAINER,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
