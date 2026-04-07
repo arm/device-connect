@@ -357,7 +357,7 @@ class SoilSensorDriver(DeviceDriver):
 
 
 async def run():
-    device = DeviceRuntime(driver=SoilSensorDriver())
+    device = DeviceRuntime(driver=SoilSensorDriver(), ttl=60)
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
     for sig_ in (signal.SIGINT, signal.SIGTERM):
@@ -467,7 +467,7 @@ class IrrigationPumpDriver(DeviceDriver):
 
 
 async def run():
-    device = DeviceRuntime(driver=IrrigationPumpDriver())
+    device = DeviceRuntime(driver=IrrigationPumpDriver(), ttl=60)
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
     for sig_ in (signal.SIGINT, signal.SIGTERM):
@@ -558,13 +558,16 @@ class GreenhouseControllerDriver(DeviceDriver):
         }
 
     async def _find_pump(self) -> str | None:
-        """Discover the first irrigation pump on the network."""
-        try:
-            pumps = await self.list_devices(device_type="irrigation_pump")
-            if pumps:
-                return pumps[0]["device_id"]
-        except Exception as e:
-            log.warning("Pump discovery failed: %s", e)
+        """Discover the first irrigation pump on the network (with retry)."""
+        for attempt in range(3):
+            try:
+                pumps = await self.list_devices(device_type="irrigation_pump")
+                if pumps:
+                    return pumps[0]["device_id"]
+            except Exception as e:
+                log.warning("Pump discovery attempt %d failed: %s", attempt + 1, e)
+            if attempt < 2:
+                await asyncio.sleep(2)
         return None
 
     @rpc()
@@ -616,7 +619,7 @@ class GreenhouseControllerDriver(DeviceDriver):
 
 
 async def run():
-    device = DeviceRuntime(driver=GreenhouseControllerDriver())
+    device = DeviceRuntime(driver=GreenhouseControllerDriver(), ttl=60)
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
     for sig_ in (signal.SIGINT, signal.SIGTERM):

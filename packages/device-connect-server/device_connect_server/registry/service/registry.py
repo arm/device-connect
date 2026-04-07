@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
+
+_logger = logging.getLogger(__name__)
 
 import etcd3gw
 
@@ -95,11 +98,35 @@ class DeviceRegistry:
         self.client.put(self._key(tenant, device_id), json.dumps(payload), lease=lease)
         self.leases[self._lease_key(tenant, device_id)] = lease
 
-    def refresh(self, tenant: str, device_id: str) -> None:
-        """Refresh the lease for ``device_id`` if it exists."""
-        lease = self.leases.get(self._lease_key(tenant, device_id))
+    def refresh(self, tenant: str, device_id: str, ttl: int | None = None) -> None:
+        """Refresh the lease for ``device_id``, recovering if the lease handle was lost.
+
+        After a registry service restart the in-memory ``leases`` dict is
+        empty.  If a heartbeat arrives for a device that still has data in
+        etcd but no lease handle, we create a fresh lease and re-store the
+        data so the device stays alive instead of silently expiring.
+        """
+        lk = self._lease_key(tenant, device_id)
+        lease = self.leases.get(lk)
         if lease:
             lease.refresh()
+            return
+
+        # No lease handle — attempt recovery
+        if ttl is None:
+            return  # Cannot recover without TTL
+        key = self._key(tenant, device_id)
+        results = self.client.get(key)
+        if not results:
+            return  # Device data already gone from etcd
+        try:
+            doc = json.loads(results[0])
+        except (json.JSONDecodeError, TypeError):
+            return
+        new_lease = self.client.lease(ttl=ttl)
+        self.client.put(key, json.dumps(doc), lease=new_lease)
+        self.leases[lk] = new_lease
+        _logger.info("recovered lease for %s/%s (ttl=%d)", tenant, device_id, ttl)
 
     def list_devices(
         self,
@@ -198,9 +225,9 @@ def register(tenant: str, device_id: str, payload: dict, ttl: int) -> None:
     _REGISTRY.register(tenant, device_id, payload, ttl)
 
 
-def refresh(tenant: str, device_id: str) -> None:
+def refresh(tenant: str, device_id: str, ttl: int | None = None) -> None:
     """Refresh the lease for ``device_id`` if present."""
-    _REGISTRY.refresh(tenant, device_id)
+    _REGISTRY.refresh(tenant, device_id, ttl=ttl)
 
 
 def list_devices(
