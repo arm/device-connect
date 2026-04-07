@@ -526,7 +526,7 @@ class TestHeartbeatHandler:
         data = json.dumps({"device_id": "cam-001", "online": True}).encode()
         await handler(data, None)
 
-        mock_registry.refresh.assert_called_once_with(TENANT, "cam-001")
+        mock_registry.refresh.assert_called_once_with(TENANT, "cam-001", None)
         mock_registry.update_status.assert_called_once_with(
             TENANT, "cam-001", {"online": True},
         )

@@ -23,6 +23,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -74,30 +75,49 @@ class RegistryClient:
         method: str,
         params: Optional[Dict[str, Any]] = None,
         timeout: Optional[float] = None,
+        retries: int = 3,
     ) -> Any:
-        """Send a JSON-RPC 2.0 request and return the result."""
+        """Send a JSON-RPC 2.0 request and return the result.
+
+        Retries on ``RequestTimeoutError`` with exponential backoff.
+        Server-side errors (``RuntimeError``) are raised immediately.
+        """
         timeout = timeout or self._timeout
-        req_id = f"rpc-{uuid.uuid4().hex[:12]}"
-        payload: Dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "method": method,
-        }
-        if params:
-            payload["params"] = params
+        delay = 1
+        last_err: Optional[Exception] = None
+        for attempt in range(1, retries + 1):
+            req_id = f"rpc-{uuid.uuid4().hex[:12]}"
+            payload: Dict[str, Any] = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": method,
+            }
+            if params:
+                payload["params"] = params
 
-        response_data = await self._client.request(
-            subject, json.dumps(payload).encode(), timeout=timeout,
-        )
-        response = json.loads(response_data)
+            try:
+                response_data = await self._client.request(
+                    subject, json.dumps(payload).encode(), timeout=timeout,
+                )
+                response = json.loads(response_data)
 
-        if "error" in response:
-            error = response["error"]
-            raise RuntimeError(
-                f"Registry error ({error.get('code', -1)}): "
-                f"{error.get('message', 'Unknown error')}"
-            )
-        return response.get("result")
+                if "error" in response:
+                    error = response["error"]
+                    raise RuntimeError(
+                        f"Registry error ({error.get('code', -1)}): "
+                        f"{error.get('message', 'Unknown error')}"
+                    )
+                return response.get("result")
+            except RequestTimeoutError as e:
+                last_err = e
+                if attempt < retries:
+                    logger.warning(
+                        "Registry request %s timed out (attempt %d/%d), retrying in %ss",
+                        method, attempt, retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30)
+        raise last_err  # type: ignore[misc]
 
     # ── DiscoveryProvider interface ──────────────────────────────────
 

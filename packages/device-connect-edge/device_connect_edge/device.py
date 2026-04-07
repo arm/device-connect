@@ -1014,8 +1014,10 @@ class DeviceRuntime:
                 try:
                     if self.messaging.is_closed:
                         await self._connect_messaging()
+                    reconnect_delay = 1
                     while not self.messaging.is_connected:
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, 30)
                 except Exception as e:
                     self._logger.error("Heartbeat reconnect failed: %s, will retry next interval", e)
                     await asyncio.sleep(self._heartbeat_interval)
@@ -1024,7 +1026,7 @@ class DeviceRuntime:
                     try:
                         await self._register(force=True)
                     except Exception as e:
-                        self._logger.error("Device re-registration failed after reconnect: %s", e)
+                        self._logger.error("Re-registration after reconnect failed: %s", e)
 
             # Send heartbeat
             try:
@@ -1172,6 +1174,7 @@ class DeviceRuntime:
             self._logger.info(f"{self._messaging_backend.upper()} reconnected")
             if not self._d2d_mode:
                 self._track_task(asyncio.create_task(self._register(force=True)))
+            self._track_task(asyncio.create_task(self._resubscribe_after_reconnect()))
             await self._notify_conn_state(True)
 
         # Create messaging client based on backend
@@ -1635,6 +1638,38 @@ class DeviceRuntime:
 
         self._logger.debug("Tearing down DeviceDriver subscriptions")
         await self._driver.teardown_subscriptions()
+
+    async def _resubscribe_after_reconnect(self) -> None:
+        """Re-establish event subscriptions after a messaging reconnect.
+
+        After extended disconnections (e.g. laptop sleep), auto-resubscribe
+        may not restore all subscriptions.  This explicitly tears down and
+        recreates ``@on`` event subscriptions with exponential backoff.
+        """
+        delay = 1
+        while True:
+            try:
+                if not self.messaging.is_connected:
+                    await asyncio.sleep(1)
+                    continue
+
+                if self._driver is not None:
+                    try:
+                        from device_connect_edge.drivers.base import DeviceDriver
+                        if isinstance(self._driver, DeviceDriver):
+                            self._logger.info("Re-establishing event subscriptions after reconnect")
+                            await self._driver.teardown_subscriptions()
+                            await self._driver.setup_subscriptions()
+                            self._logger.info("Event subscriptions re-established")
+                    except ImportError:
+                        pass
+                break
+            except Exception as e:
+                self._logger.warning(
+                    "Subscription re-establishment failed: %s; retrying in %ss", e, delay
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30)
 
     def _handle_registration_reply(self, data: bytes) -> None:
         """Parse registry response and update local registration metadata."""

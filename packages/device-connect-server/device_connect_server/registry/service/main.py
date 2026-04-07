@@ -489,9 +489,11 @@ def _make_hb_handler(tenant: str):
             data = json.loads(data_bytes)
             device_id = data.pop("device_id")
             # Update last_seen immediately (before blocking etcd calls)
-            _last_seen[f"{tenant}/{device_id}"] = time.time()
-            # Run blocking etcd calls in a thread to avoid blocking the event loop
-            await asyncio.to_thread(registry.refresh, tenant, device_id)
+            compound_key = f"{tenant}/{device_id}"
+            _last_seen[compound_key] = time.time()
+            # Pass TTL so refresh() can recover a lost lease after service restart
+            ttl = _device_ttl.get(compound_key)
+            await asyncio.to_thread(registry.refresh, tenant, device_id, ttl)
             await asyncio.to_thread(registry.update_status, tenant, device_id, data)
             logger.debug("[device-registry] heartbeat from %s (tenant=%s)", device_id, tenant)
         except Exception as e:

@@ -399,7 +399,7 @@ class TestModuleLevelHelpers:
     @patch("device_connect_server.registry.service.registry._REGISTRY")
     def test_module_refresh(self, mock_reg):
         refresh("default", "cam-001")
-        mock_reg.refresh.assert_called_once_with("default", "cam-001")
+        mock_reg.refresh.assert_called_once_with("default", "cam-001", ttl=None)
 
     @patch("device_connect_server.registry.service.registry._REGISTRY")
     def test_module_list_devices(self, mock_reg):
