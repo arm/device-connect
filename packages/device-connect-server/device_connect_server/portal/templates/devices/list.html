@@ -114,6 +114,11 @@ python my_device.py</pre>
           <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
           run_agent.py
         </a>
+        <a href="/api/devices/agent-creds"
+           class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          {{ tenant }}-agent.creds.json
+        </a>
       </div>
       <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">pip install \
   'device-connect-edge@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-edge' \
@@ -130,7 +135,7 @@ export NATS_CREDENTIALS_FILE=./{% if credentials|length > 1 %}{{ credentials[1].
 export NATS_CREDENTIALS_FILE=./{% if credentials|length > 2 %}{{ credentials[2].filename }}{% else %}{{ credentials[0].filename }}{% endif %} && python greenhouse_ctrl.py
 
 # ── Terminal 4 — AI agent (Arm internal OpenAI proxy) ──
-export NATS_CREDENTIALS_FILE=./{{ credentials[0].filename }}
+export NATS_CREDENTIALS_FILE=./{{ tenant }}-agent.creds.json
 export DEVICE_CONNECT_ZONE={{ tenant }}
 export OPENAI_API_KEY=&lt;your-arm-proxy-token&gt;
 export OPENAI_BASE_URL=https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1

@@ -14,6 +14,7 @@ def setup_routes(app: web.Application):
     app.router.add_post("/api/devices", create_device)
     app.router.add_get("/api/devices/starter-script", download_starter_script)
     app.router.add_get("/api/devices/agent-script", download_agent_script)
+    app.router.add_get("/api/devices/agent-creds", download_agent_creds)
     app.router.add_get("/api/devices/demo-bundle", download_demo_bundle)
     app.router.add_get("/api/devices/{name}/creds", download_credential)
     app.router.add_get("/api/devices/bundle", download_bundle)
@@ -299,7 +300,7 @@ Usage:
 
     export MESSAGING_BACKEND=nats
     export NATS_URL=nats://<host>:<port>
-    export NATS_CREDENTIALS_FILE=./<your-device>.creds.json
+    export NATS_CREDENTIALS_FILE=./<your-tenant>-agent.creds.json
     export DEVICE_CONNECT_ZONE=<your-tenant>
     export OPENAI_API_KEY=<arm-proxy-token>
     export OPENAI_BASE_URL=https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1
@@ -482,6 +483,50 @@ async def download_agent_script(request: web.Request):
         content_type="text/x-python",
         headers={
             "Content-Disposition": 'attachment; filename="run_agent.py"',
+        },
+    )
+
+
+async def download_agent_creds(request: web.Request):
+    """Get-or-create the per-tenant agent credential and stream it back.
+
+    The agent uses the same JWT scope as a device (``device-connect.{tenant}.>``)
+    but is named ``{tenant}-agent`` so it doesn't collide with real device IDs
+    or get counted in the device list.
+    """
+    user = request["user"]
+    tenant = user["tenant"]
+    agent_name = f"{tenant}-agent"
+    filename = f"{agent_name}.creds.json"
+
+    cred_path = credentials.get_credential(filename)
+    if not cred_path:
+        backend = get_backend()
+        if not backend.is_bootstrapped():
+            raise web.HTTPServiceUnavailable(
+                text="System not bootstrapped — ask admin to run setup first",
+            )
+        try:
+            broker_info = backend.broker_display_info()
+            await backend.add_device(
+                tenant, agent_name,
+                host=broker_info["host"], port=broker_info["port"],
+            )
+            await backend.reload_broker()
+        except Exception as e:
+            raise web.HTTPInternalServerError(
+                text=f"Failed to create agent credential: {e}",
+            )
+        cred_path = credentials.get_credential(filename)
+        if not cred_path:
+            raise web.HTTPInternalServerError(
+                text="Agent credential created but file not found",
+            )
+
+    return web.FileResponse(
+        cred_path,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
 
