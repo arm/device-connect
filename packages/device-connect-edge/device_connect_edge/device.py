@@ -1051,9 +1051,9 @@ class DeviceRuntime:
             # Proactive re-registration guard: heartbeats are fire-and-forget
             # publishes — they can silently fail to reach the registry (degraded
             # connection, registry restart).  _register uses request-reply, so
-            # it gives actual confirmation.  Re-register every TTL to prevent
-            # the device from silently disappearing from the registry.
-            if not self._d2d_mode and time.time() - last_confirmed_registration > self.ttl:
+            # it gives actual confirmation.  Re-register every 2×TTL to catch
+            # silent heartbeat loss without being noisy during stable operation.
+            if not self._d2d_mode and time.time() - last_confirmed_registration > self.ttl * 2:
                 try:
                     self._logger.debug("Proactive re-registration (ttl guard)")
                     await self._register(force=True)
