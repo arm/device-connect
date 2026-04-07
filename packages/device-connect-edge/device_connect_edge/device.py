@@ -997,6 +997,7 @@ class DeviceRuntime:
 
         subj = f"device-connect.{self.tenant}.{self.device_id}.heartbeat"
         last_ok = time.time()
+        last_confirmed_registration = time.time()
         self._logger.debug(f"Heartbeat loop started, subject={subj}, interval={self._heartbeat_interval}")
         while True:
             # Build heartbeat payload
@@ -1025,6 +1026,7 @@ class DeviceRuntime:
                 if not self._d2d_mode:
                     try:
                         await self._register(force=True)
+                        last_confirmed_registration = time.time()
                     except Exception as e:
                         self._logger.error("Re-registration after reconnect failed: %s", e)
 
@@ -1042,8 +1044,22 @@ class DeviceRuntime:
                     try:
                         await self._register(force=True)
                         last_ok = time.time()
+                        last_confirmed_registration = time.time()
                     except Exception as e2:
                         self._logger.error("Device re-registration failed after heartbeat error: %s", e2)
+
+            # Proactive re-registration guard: heartbeats are fire-and-forget
+            # publishes — they can silently fail to reach the registry (degraded
+            # connection, registry restart).  _register uses request-reply, so
+            # it gives actual confirmation.  Re-register every TTL to prevent
+            # the device from silently disappearing from the registry.
+            if not self._d2d_mode and time.time() - last_confirmed_registration > self.ttl:
+                try:
+                    self._logger.debug("Proactive re-registration (ttl guard)")
+                    await self._register(force=True)
+                    last_confirmed_registration = time.time()
+                except Exception as e:
+                    self._logger.warning("Proactive re-registration failed: %s", e)
 
             await asyncio.sleep(self._heartbeat_interval)
 
