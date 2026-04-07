@@ -7,11 +7,30 @@ through the active backend implementation.
 
 import json
 import logging
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
 from .. import config
+
+# Tenant and device names flow into NATS subjects, Zenoh key expressions,
+# MQTT ACL rules, TLS certificate CNs, and file paths.  A strict allowlist
+# prevents injection across all those layers.
+_SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+
+
+def validate_name(value: str, label: str = "name") -> str:
+    """Validate a tenant or device name is safe for use in subjects/ACLs/certs/paths.
+
+    Raises ValueError if invalid.
+    """
+    if not _SAFE_NAME_RE.match(value):
+        raise ValueError(
+            f"Invalid {label}: must start with alphanumeric, contain only "
+            f"alphanumeric/dot/hyphen/underscore, and be 1-64 characters"
+        )
+    return value
 
 logger = logging.getLogger(__name__)
 

@@ -86,6 +86,19 @@ async def generate_ca() -> tuple[Path, Path]:
     return ca_cert, ca_key
 
 
+def _validate_cn(value: str, label: str = "CN") -> str:
+    """Validate a value is safe for use as an OpenSSL certificate CN.
+
+    Prevents injection of extra subject fields via slashes or special chars.
+    """
+    import re
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$', value):
+        raise PkiError(
+            f"Invalid {label}: must be alphanumeric with dots/hyphens/underscores, 1-64 chars"
+        )
+    return value
+
+
 async def generate_server_cert(
     hostname: str,
     name: str = "zenoh",
@@ -128,6 +141,7 @@ async def generate_server_cert(
 
     try:
         # Generate CSR
+        _validate_cn(hostname, "hostname")
         await _run_openssl(
             "req", "-new",
             "-key", str(server_key),
@@ -181,6 +195,7 @@ async def generate_client_cert(
     csr_path = d / f"{name}.csr"
 
     cn = common_name or name
+    _validate_cn(cn, "certificate CN")
 
     # Generate client key
     await _run_openssl("genrsa", "-out", str(client_key), "2048")

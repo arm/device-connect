@@ -1,5 +1,7 @@
 """Admin views: dashboard, view-as-user, health check, setup, broker reload."""
 
+import html as _html
+
 import aiohttp_jinja2
 from aiohttp import web
 
@@ -195,6 +197,22 @@ async def admin_setup_submit(request: web.Request):
         )
 
     try:
+        port_int = int(port)
+        if not (1 <= port_int <= 65535):
+            raise ValueError
+    except (ValueError, TypeError):
+        return web.Response(
+            text='<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">Invalid port number</div>',
+            content_type="text/html",
+        )
+
+    if backend_name not in ("nats", "zenoh", "mqtt"):
+        return web.Response(
+            text='<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">Invalid backend type</div>',
+            content_type="text/html",
+        )
+
+    try:
         reset_backend()
         backend = get_backend(backend_name)
         result = await backend.bootstrap(host, port)
@@ -203,10 +221,10 @@ async def admin_setup_submit(request: web.Request):
         details = []
         for key, val in result.items():
             if key == "privileged_creds":
-                details.append(f'<p class="text-xs text-green-700">Privileged credentials: {", ".join(val)}</p>')
+                details.append(f'<p class="text-xs text-green-700">Privileged credentials: {_html.escape(", ".join(val))}</p>')
             elif isinstance(val, str):
-                label = key.replace("_", " ").title()
-                details.append(f'<p class="text-xs text-green-700">{label}: {val}</p>')
+                label = _html.escape(key.replace("_", " ").title())
+                details.append(f'<p class="text-xs text-green-700">{label}: {_html.escape(val)}</p>')
         details_html = "\n".join(details)
 
         html = (
@@ -220,7 +238,7 @@ async def admin_setup_submit(request: web.Request):
         return web.Response(text=html, content_type="text/html")
     except Exception as e:
         return web.Response(
-            text=f'<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">Bootstrap failed: {e}</div>',
+            text=f'<div class="bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">Bootstrap failed: {_html.escape(str(e))}</div>',
             content_type="text/html",
         )
 
@@ -231,11 +249,11 @@ async def admin_broker_reload(request: web.Request):
     result = await backend.reload_broker()
     if result["success"]:
         return web.Response(
-            text=f'<div class="rounded-lg p-3 bg-green-50 text-green-700 text-sm border border-green-200">{result["message"]}</div>',
+            text=f'<div class="rounded-lg p-3 bg-green-50 text-green-700 text-sm border border-green-200">{_html.escape(result["message"])}</div>',
             content_type="text/html",
         )
     else:
         return web.Response(
-            text=f'<div class="rounded-lg p-3 bg-yellow-50 text-yellow-700 text-sm border border-yellow-200">{result["message"]}</div>',
+            text=f'<div class="rounded-lg p-3 bg-yellow-50 text-yellow-700 text-sm border border-yellow-200">{_html.escape(result["message"])}</div>',
             content_type="text/html",
         )

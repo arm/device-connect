@@ -7,7 +7,7 @@ from aiohttp import web
 
 from .. import config
 from ..services import credentials, bundles, registry_client
-from ..services.backend import get_backend
+from ..services.backend import get_backend, validate_name
 
 
 def setup_routes(app: web.Application):
@@ -97,6 +97,14 @@ async def create_device(request: web.Request):
 
     # Prefix with tenant name for uniqueness
     full_name = f"{tenant}-{device_name}"
+
+    try:
+        validate_name(full_name, "device name")
+    except ValueError as e:
+        return web.Response(
+            text=f'<div class="px-5 py-3 text-sm text-red-600">{_html.escape(str(e))}</div>',
+            content_type="text/html",
+        )
 
     backend = get_backend()
     if not backend.is_bootstrapped():

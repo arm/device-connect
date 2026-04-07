@@ -8,7 +8,7 @@ from aiohttp import web
 
 from ..app import set_session, clear_session
 from ..services import users
-from ..services.backend import get_backend
+from ..services.backend import get_backend, validate_name
 
 
 def setup_routes(app: web.Application):
@@ -106,6 +106,7 @@ async def signup_submit(request: web.Request):
     backend = get_backend()
     if backend.is_bootstrapped():
         try:
+            validate_name(username, "tenant")
             broker_info = backend.broker_display_info()
             await backend.create_tenant(
                 username, num_devices=3,

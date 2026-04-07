@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import secrets
 from pathlib import Path
 from typing import Any
@@ -264,6 +265,7 @@ class MqttBackend(MessagingBackendService):
         output_path = config.CREDS_DIR / f"{name}.creds.json"
         with open(output_path, "w") as f:
             json.dump(creds_data, f, indent=2)
+        os.chmod(output_path, 0o600)
 
         logger.info("Created MQTT credentials: %s (tenant=%s)", output_path, tenant)
         return output_path

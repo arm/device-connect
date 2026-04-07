@@ -40,7 +40,10 @@ def list_credentials(tenant: str | None = None) -> list[dict]:
 
 def get_credential(filename: str) -> Path | None:
     """Get the full path to a credential file. Returns None if not found."""
-    path = config.CREDS_DIR / filename
+    path = (config.CREDS_DIR / filename).resolve()
+    # Prevent path traversal — resolved path must stay inside CREDS_DIR
+    if not path.is_relative_to(config.CREDS_DIR.resolve()):
+        return None
     if path.exists() and path.suffix == ".json":
         return path
     return None

@@ -44,11 +44,7 @@ async def dashboard_page(request: web.Request):
 
 async def live_devices_fragment(request: web.Request):
     """Return the live devices table as an HTML fragment for htmx polling."""
-    # Allow tenant override for admin view-as-user
-    tenant = request.query.get("tenant")
-    if not tenant:
-        user = request["user"]
-        tenant = user["tenant"]
+    tenant = _resolve_tenant(request)
 
     devices = []
     try:
@@ -114,7 +110,7 @@ async def event_stream(request: web.Request):
     try:
         client = await backend.rpc_connect()
         subject = f"device-connect.{tenant}.{device_id}.event.{event_name}"
-        queue = asyncio.Queue()
+        queue = asyncio.Queue(maxsize=256)
 
         async def on_msg(msg_data, _subject=None):
             await queue.put(msg_data)
