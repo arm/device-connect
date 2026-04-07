@@ -479,7 +479,7 @@ def _make_list_handler(
     return rpc_discovery
 
 
-def _make_hb_handler(tenant: str):
+def _make_hb_handler(tenant: str, messaging=None):
     """Create a heartbeat handler bound to ``tenant``."""
 
     async def hb_handler(data_bytes: bytes, reply: Optional[str]):
@@ -496,6 +496,59 @@ def _make_hb_handler(tenant: str):
             await asyncio.to_thread(registry.refresh, tenant, device_id, ttl)
             await asyncio.to_thread(registry.update_status, tenant, device_id, data)
             logger.debug("[device-registry] heartbeat from %s (tenant=%s)", device_id, tenant)
+
+            # If the device has no lease (expired or lost after restart),
+            # pull full registration info from the device and re-register it.
+            lease_exists = registry._REGISTRY.leases.get(compound_key) is not None
+            if not lease_exists and messaging is not None:
+                logger.info(
+                    "[device-registry] no lease for %s (tenant=%s), pulling registration",
+                    device_id, tenant,
+                )
+                try:
+                    cmd_subject = f"device-connect.{tenant}.{device_id}.cmd"
+                    req = json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": f"re-reg-{device_id}-{int(time.time()*1000)}",
+                        "method": "requestRegistration",
+                        "params": {},
+                    }).encode()
+                    resp_data = await messaging.request(cmd_subject, req, timeout=5)
+                    resp = json.loads(resp_data)
+                    result = resp.get("result", {})
+                    reg_ttl = result.get("device_ttl", 15)
+                    registration_id = str(uuid.uuid4())
+                    result.setdefault("registry", {})
+                    result["registry"].update({
+                        "device_registration_id": registration_id,
+                        "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    })
+                    await asyncio.to_thread(
+                        registry.register, tenant, device_id, result, reg_ttl,
+                    )
+                    _device_ttl[compound_key] = reg_ttl
+                    _last_seen[compound_key] = time.time()
+                    # Emit device/online event
+                    online_payload = json.dumps({
+                        "jsonrpc": "2.0",
+                        "method": "device/online",
+                        "params": {
+                            "device_id": device_id,
+                            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        },
+                    }).encode()
+                    await messaging.publish(
+                        f"device-connect.{tenant}.device.online", online_payload,
+                    )
+                    logger.info(
+                        "[device-registry] re-registered %s via pull (tenant=%s, ttl=%s)",
+                        device_id, tenant, reg_ttl,
+                    )
+                except Exception as pull_err:
+                    logger.warning(
+                        "[device-registry] failed to pull registration from %s: %s",
+                        device_id, pull_err,
+                    )
         except Exception as e:
             logger.exception("[device-registry] heartbeat error for %s: %s", device_id, e)
 
@@ -546,7 +599,7 @@ async def main() -> None:
 
     async def _wildcard_heartbeat(data: bytes, subject: str, reply):
         tenant = _extract_tenant(subject)
-        await _make_hb_handler(tenant)(data, reply)
+        await _make_hb_handler(tenant, messaging)(data, reply)
 
     await messaging.subscribe_with_subject(
         "device-connect.*.registry",

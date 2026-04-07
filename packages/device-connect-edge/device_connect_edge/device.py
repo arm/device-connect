@@ -941,6 +941,23 @@ class DeviceRuntime:
                 self._logger.error("Event queue still full after drop; event lost: %s", event)
 
 
+    def _build_registration_params(self) -> dict:
+        """Build the registration payload shared by _register and requestRegistration."""
+        caps = self._driver.capabilities if self._driver else self.capabilities
+        params = {
+            "device_id": self.device_id,
+            "device_ttl": self.ttl,
+            "capabilities": caps.model_dump(),
+            "identity": self.identity,
+            "status": {
+                **self.status,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+        }
+        if hasattr(self, '_attestation_token') and self._attestation_token:
+            params["attestation"] = self._attestation_token
+        return params
+
     async def _register(self, force: bool = False) -> None:
         """Register the device with the Device Connect registry, retrying on failure."""
 
@@ -961,21 +978,7 @@ class DeviceRuntime:
             delay = 1 # initial retry delay in seconds
             while True:
                 req_id = f"{self.device_id}-{int(time.time()*1000)}"
-                # Get capabilities dynamically from driver if available (supports runtime capability loading)
-                caps = self._driver.capabilities if self._driver else self.capabilities
-                params = {
-                    "device_id": self.device_id,
-                    "device_ttl": self.ttl,
-                    "capabilities": caps.model_dump(),
-                    "identity": self.identity,
-                    "status": {
-                        **self.status,
-                        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                }
-                # Phase 3: Include attestation token if available
-                if hasattr(self, '_attestation_token') and self._attestation_token:
-                    params["attestation"] = self._attestation_token
+                params = self._build_registration_params()
                 try:
                     self._logger.info("Registering device")
                     response_data = await self.messaging.request(
@@ -997,7 +1000,6 @@ class DeviceRuntime:
 
         subj = f"device-connect.{self.tenant}.{self.device_id}.heartbeat"
         last_ok = time.time()
-        last_confirmed_registration = time.time()
         self._logger.debug(f"Heartbeat loop started, subject={subj}, interval={self._heartbeat_interval}")
         while True:
             # Build heartbeat payload
@@ -1026,7 +1028,6 @@ class DeviceRuntime:
                 if not self._d2d_mode:
                     try:
                         await self._register(force=True)
-                        last_confirmed_registration = time.time()
                     except Exception as e:
                         self._logger.error("Re-registration after reconnect failed: %s", e)
 
@@ -1044,22 +1045,8 @@ class DeviceRuntime:
                     try:
                         await self._register(force=True)
                         last_ok = time.time()
-                        last_confirmed_registration = time.time()
                     except Exception as e2:
                         self._logger.error("Device re-registration failed after heartbeat error: %s", e2)
-
-            # Proactive re-registration guard: heartbeats are fire-and-forget
-            # publishes — they can silently fail to reach the registry (degraded
-            # connection, registry restart).  _register uses request-reply, so
-            # it gives actual confirmation.  Re-register every 2×TTL to catch
-            # silent heartbeat loss without being noisy during stable operation.
-            if not self._d2d_mode and time.time() - last_confirmed_registration > self.ttl * 2:
-                try:
-                    self._logger.debug("Proactive re-registration (ttl guard)")
-                    await self._register(force=True)
-                    last_confirmed_registration = time.time()
-                except Exception as e:
-                    self._logger.warning("Proactive re-registration failed: %s", e)
 
             await asyncio.sleep(self._heartbeat_interval)
 
@@ -1078,6 +1065,15 @@ class DeviceRuntime:
                     return
 
                 params_dict = payload.get("params", {})
+
+                # Built-in runtime method: registry pulls registration info
+                if method == "requestRegistration":
+                    if reply_subject:
+                        result = self._build_registration_params()
+                        await self.messaging.publish(
+                            reply_subject, build_rpc_response(payload["id"], result)
+                        )
+                    return
 
                 # Extract trace metadata for cross-device RPC correlation
                 dc_meta = params_dict.pop("_dc_meta", {})
