@@ -118,7 +118,7 @@ echo "     ./manage_tenants.sh create alpha --devices 5 --nats-host ${NATS_HOST}
 echo "     ./manage_tenants.sh create-batch alpha,beta,gamma --devices 5 --nats-host ${NATS_HOST}"
 echo ""
 echo "  2. Start infrastructure:"
-echo "     DC_TENANTS=alpha,beta,gamma docker compose -f infra/docker-compose-multitenant.yml up -d"
+echo "     DC_TENANTS=alpha,beta,gamma docker compose -f infra/docker-compose-multitenant-nats.yml up -d"
 echo ""
 echo "  3. Verify isolation:"
 echo "     ./verify_tenants.sh --nats-host ${NATS_HOST}"

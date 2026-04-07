@@ -302,7 +302,7 @@ case "$COMMAND" in
       echo "    Sent SIGHUP to ${NATS_CONTAINER} — config reloaded"
     else
       echo "    Container '${NATS_CONTAINER}' not running. Start it with:"
-      echo "    docker compose -f infra/docker-compose-multitenant.yml up -d"
+      echo "    docker compose -f infra/docker-compose-multitenant-nats.yml up -d"
     fi
     ;;
 

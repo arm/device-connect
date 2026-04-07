@@ -85,4 +85,10 @@ def ensure_admin():
     """Seed the admin account if it doesn't exist."""
     if not get_user(config.ADMIN_USER):
         create_user(config.ADMIN_USER, config.ADMIN_PASS, role="admin")
-        logger.info("Seeded admin account: %s", config.ADMIN_USER)
+        if config.ADMIN_PASS_GENERATED:
+            logger.warning(
+                "Generated admin password (set ADMIN_PASS env var to override): %s",
+                config.ADMIN_PASS,
+            )
+        else:
+            logger.info("Seeded admin account: %s", config.ADMIN_USER)

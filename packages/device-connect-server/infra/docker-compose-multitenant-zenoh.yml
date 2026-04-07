@@ -97,7 +97,7 @@ services:
       ETCD_HOST: etcd
       ETCD_PORT: "2379"
       ADMIN_USER: ${ADMIN_USER:-admin}
-      ADMIN_PASS: ${ADMIN_PASS:-qwe123}
+      # ADMIN_PASS: set via env var or .env file; auto-generated if omitted
       SECURITY_INFRA_DIR: /app/security_infra
       CREDS_DIR: /root/.device-connect/credentials
     volumes:

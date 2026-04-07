@@ -118,7 +118,7 @@ Each device token is a `.creds.json` file containing a JWT scoped to `device-con
 ```bash
 # Set DC_TENANTS to the comma-separated list of tenants you created:
 DC_TENANTS=alpha,beta,gamma,delta \
-  docker compose -f ../infra/docker-compose-multitenant.yml up -d
+  docker compose -f ../infra/docker-compose-multitenant-nats.yml up -d
 ```
 
 This starts:
@@ -191,7 +191,7 @@ All tenant management is done with `manage_tenants.sh`. Changes take effect afte
 Then update `DC_TENANTS` in your docker-compose `.env` to include the new tenant and restart the registry:
 
 ```bash
-docker compose -f ../infra/docker-compose-multitenant.yml up -d dc-registry
+docker compose -f ../infra/docker-compose-multitenant-nats.yml up -d dc-registry
 ```
 
 ### Add a device to an existing tenant
@@ -334,7 +334,7 @@ The device will register in the `alpha` tenant, and only devices within `alpha` 
 | `DC_NSC_OPERATOR` | `setup_jwt_auth.sh` | NATS operator name (default: `device-connect-operator`) |
 | `DC_NSC_ACCOUNT` | `setup_jwt_auth.sh`, `gen_creds.sh` | NATS account name (default: `DEVICE_CONNECT`) |
 | `NATS_HOST` | `gen_creds.sh`, `manage_tenants.sh` | Default NATS host if `--nats-host` not passed |
-| `DC_TENANTS` | `docker-compose-multitenant.yml` | Comma-separated tenant list for the registry service |
+| `DC_TENANTS` | `docker-compose-multitenant-nats.yml` | Comma-separated tenant list for the registry service |
 
 ## TLS Certificates
 

@@ -255,7 +255,7 @@ cd security_infra
 ./manage_tenants.sh create-batch alpha,beta,gamma --devices 5 --nats-host dc.example.com
 
 # 3. Start infrastructure
-DC_TENANTS=alpha,beta,gamma docker compose -f ../infra/docker-compose-multitenant.yml up -d
+DC_TENANTS=alpha,beta,gamma docker compose -f ../infra/docker-compose-multitenant-nats.yml up -d
 
 # 4. Verify isolation
 ./verify_tenants.sh --nats-host dc.example.com

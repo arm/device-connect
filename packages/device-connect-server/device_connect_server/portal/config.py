@@ -1,12 +1,13 @@
 """Portal configuration — paths, env vars, defaults."""
 
 import os
+import secrets
 from pathlib import Path
 
 # Portal server
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "8080"))
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "0.0.0.0")
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "device-connect-portal-secret-change-me")
+SESSION_SECRET = os.environ.get("SESSION_SECRET") or secrets.token_urlsafe(32)
 
 # Messaging backend (optional override; otherwise auto-detected from etcd)
 MESSAGING_BACKEND = os.environ.get("MESSAGING_BACKEND", "")
@@ -32,7 +33,8 @@ ETCD_PORT = int(os.environ.get("ETCD_PORT", "2379"))
 
 # Admin credentials
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASS = os.environ.get("ADMIN_PASS", "qwe123")
+ADMIN_PASS = os.environ.get("ADMIN_PASS") or secrets.token_urlsafe(16)
+ADMIN_PASS_GENERATED = "ADMIN_PASS" not in os.environ
 
 # Paths
 SECURITY_INFRA_DIR = Path(os.environ.get(

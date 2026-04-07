@@ -35,7 +35,7 @@ This is the recommended way to run the portal. It starts NATS, etcd, the registr
 cd packages/device-connect-server
 
 # 1. Start the full stack
-docker compose -f infra/docker-compose-multitenant.yml up -d --build portal
+docker compose -f infra/docker-compose-multitenant-nats.yml up -d --build portal
 
 # 2. Open the portal
 open http://localhost:8080
@@ -43,7 +43,7 @@ open http://localhost:8080
 
 That's it. On first launch:
 
-1. Log in as **admin** / **qwe123**
+1. Log in as **admin** with the password from the container logs (or the `ADMIN_PASS` env var if you set one)
 2. Go to **Admin > Setup** and enter the NATS host (use `nats` if running inside Docker, or your machine's IP if devices connect from outside)
 3. The bootstrap creates the NATS operator, account, and privileged credentials
 
@@ -80,14 +80,14 @@ All settings are via environment variables:
 |----------|---------|-------------|
 | `PORTAL_PORT` | `8080` | HTTP listen port |
 | `PORTAL_HOST` | `0.0.0.0` | HTTP listen address |
-| `SESSION_SECRET` | (built-in) | Secret key for signing session cookies. **Change in production.** |
+| `SESSION_SECRET` | (auto-generated) | Secret key for signing session cookies. Set explicitly for stable sessions across restarts. |
 | `NATS_HOST` | `localhost` | NATS server hostname (embedded in generated credentials) |
 | `NATS_PORT` | `4222` | NATS server port |
 | `NATS_CONTAINER` | `dc-nats` | Docker container name for NATS (used by Reload NATS) |
 | `ETCD_HOST` | `localhost` | etcd server hostname |
 | `ETCD_PORT` | `2379` | etcd server port |
 | `ADMIN_USER` | `admin` | Admin account username (seeded on startup) |
-| `ADMIN_PASS` | `qwe123` | Admin account password (seeded on startup) |
+| `ADMIN_PASS` | (auto-generated) | Admin account password (seeded on startup; logged to console if generated) |
 | `SECURITY_INFRA_DIR` | `../security_infra` | Path to the `security_infra/` directory containing `.nsc/` state |
 | `CREDS_DIR` | `~/.device-connect/credentials` | Path where credential JSON files are written |
 | `DC_NSC_ACCOUNT` | `DEVICE_CONNECT` | NSC account name |
