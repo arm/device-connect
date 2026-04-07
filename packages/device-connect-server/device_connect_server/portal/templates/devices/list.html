@@ -95,6 +95,54 @@ pip install device-connect-edge@git+https://github.com/arm/device-connect.git@fe
 export NATS_URL=nats://{{ public_host }}:{{ nats_port }}
 python my_device.py</pre>
     </div>
+    <div>
+      <p class="text-xs font-medium text-gray-500 mb-2">4. Run all devices and orchestrate using an agent</p>
+      <p class="text-xs text-gray-500 mb-2">
+        Spin up an LLM agent that listens to your fleet and acts on it. Download the starter
+        script — it discovers your devices, batches incoming events, and lets the model call
+        <code class="bg-gray-100 px-1 rounded">list_devices</code>,
+        <code class="bg-gray-100 px-1 rounded">get_device_functions</code>, and
+        <code class="bg-gray-100 px-1 rounded">invoke_device</code> to react. Inference runs
+        through Arm's internal OpenAI proxy — generate an API key at
+        <a href="https://openai-api-proxy.geo.arm.com/"
+           class="text-indigo-600 hover:underline" target="_blank" rel="noopener">openai-api-proxy.geo.arm.com</a>
+        (Arm VPN required).
+      </p>
+      <div class="flex flex-wrap gap-3 mb-3">
+        <a href="/api/devices/agent-script"
+           class="inline-flex items-center px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          run_agent.py
+        </a>
+      </div>
+      <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">pip install \
+  'device-connect-edge@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-edge' \
+  'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-agent-tools' \
+  'strands-agents[openai]'
+
+# Common env (every terminal)
+export MESSAGING_BACKEND=nats
+export NATS_URL=nats://{{ public_host }}:{{ nats_port }}
+
+# ── Terminals 1–3 — run each device with its own creds ──
+export NATS_CREDENTIALS_FILE=./{{ credentials[0].filename }} && python soil_sensor.py
+export NATS_CREDENTIALS_FILE=./{% if credentials|length > 1 %}{{ credentials[1].filename }}{% else %}{{ credentials[0].filename }}{% endif %} && python irrigation_pump.py
+export NATS_CREDENTIALS_FILE=./{% if credentials|length > 2 %}{{ credentials[2].filename }}{% else %}{{ credentials[0].filename }}{% endif %} && python greenhouse_ctrl.py
+
+# ── Terminal 4 — AI agent (Arm internal OpenAI proxy) ──
+export NATS_CREDENTIALS_FILE=./{{ credentials[0].filename }}
+export DEVICE_CONNECT_ZONE={{ tenant }}
+export OPENAI_API_KEY=&lt;your-arm-proxy-token&gt;
+export OPENAI_BASE_URL=https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1
+export OPENAI_INSECURE=1
+
+python run_agent.py</pre>
+      <p class="text-xs text-gray-500 mt-2">
+        The agent subscribes to <code class="bg-gray-100 px-1 rounded">device-connect.{{ tenant }}.*.event.&gt;</code>,
+        batches events every ~12s, sends them to the LLM, and the model decides which
+        <code class="bg-gray-100 px-1 rounded">invoke_device</code> calls to make.
+      </p>
+    </div>
   </div>
 </div>
 {% endif %}
