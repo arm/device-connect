@@ -6,12 +6,13 @@ import re
 import aiohttp_jinja2
 from aiohttp import web
 
-from ..app import set_session, clear_session
+from ..app import set_session, clear_session, _get_session
 from ..services import users
 from ..services.backend import get_backend, validate_name
 
 
 def setup_routes(app: web.Application):
+    app.router.add_get("/", root_page)
     app.router.add_get("/login", login_page)
     app.router.add_post("/login", login_submit)
     app.router.add_get("/signup", signup_page)
@@ -19,7 +20,19 @@ def setup_routes(app: web.Application):
     app.router.add_post("/logout", logout)
 
 
+async def root_page(request: web.Request):
+    session = await _get_session(request)
+    if session.get("username"):
+        target = "/admin" if session.get("role") == "admin" else "/dashboard"
+        raise web.HTTPFound(target)
+    raise web.HTTPFound("/login")
+
+
 async def login_page(request: web.Request):
+    session = await _get_session(request)
+    if session.get("username"):
+        target = "/admin" if session.get("role") == "admin" else "/dashboard"
+        raise web.HTTPFound(target)
     return aiohttp_jinja2.render_template("login.html", request, {"error": None})
 
 
@@ -62,6 +75,10 @@ async def login_submit(request: web.Request):
 
 
 async def signup_page(request: web.Request):
+    session = await _get_session(request)
+    if session.get("username"):
+        target = "/admin" if session.get("role") == "admin" else "/dashboard"
+        raise web.HTTPFound(target)
     return aiohttp_jinja2.render_template("signup.html", request, {"error": None})
 
 
@@ -102,6 +119,14 @@ async def signup_submit(request: web.Request):
             return web.Response(text=error_html, content_type="text/html")
         return aiohttp_jinja2.render_template("signup.html", request, {"error": escaped})
 
+    # Fail fast if user already exists — avoid expensive tenant provisioning
+    if users.get_user(username):
+        error = _html.escape(f"User '{username}' already exists")
+        error_html = f'<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{error}</div>'
+        if _is_htmx(request):
+            return web.Response(text=error_html, content_type="text/html")
+        return aiohttp_jinja2.render_template("signup.html", request, {"error": error})
+
     # Create tenant namespace first — if this fails, don't create the user
     backend = get_backend()
     if backend.is_bootstrapped():
@@ -112,15 +137,17 @@ async def signup_submit(request: web.Request):
                 host=broker_info["host"], port=broker_info["port"],
             )
             await backend.reload_broker()
-        except Exception:
+        except Exception as exc:
             import logging
             logging.getLogger(__name__).exception(
                 "Tenant creation failed during signup for user '%s'", username,
             )
-            error_html = '<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">Signup failed: could not provision tenant</div>'
+            detail = _html.escape(f"{type(exc).__name__}: {exc}")
+            error_msg = f"Signup failed: could not provision tenant ({detail})"
+            error_html = f'<div class="mb-4 rounded-lg p-3 bg-red-50 text-red-700 text-sm border border-red-200">{error_msg}</div>'
             if _is_htmx(request):
                 return web.Response(text=error_html, content_type="text/html")
-            return aiohttp_jinja2.render_template("signup.html", request, {"error": "Signup failed: could not provision tenant"})
+            return aiohttp_jinja2.render_template("signup.html", request, {"error": error_msg})
 
     # Create user account only after tenant is provisioned
     try:

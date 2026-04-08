@@ -16,7 +16,7 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
 # Routes that don't require authentication
-PUBLIC_ROUTES = {"/login", "/signup", "/api/login", "/api/signup"}
+PUBLIC_ROUTES = {"/", "/login", "/signup", "/api/login", "/api/signup"}
 
 
 @web.middleware
