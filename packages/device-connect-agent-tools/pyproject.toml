@@ -37,12 +37,19 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-timeout>=2.0",
 ]
+fuzz = [
+    "hypothesis>=6.0",
+    "coverage>=7.0",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 markers = [
     "integration: requires live Device Connect infrastructure (NATS/Zenoh + registry)",
 ]
+
+[tool.setuptools.packages.find]
+include = ["device_connect_agent_tools*"]
 
 [project.urls]
 Homepage = "https://github.com/arm/device-connect"

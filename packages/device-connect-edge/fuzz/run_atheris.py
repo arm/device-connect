@@ -1,10 +1,10 @@
 """Runner for all atheris fuzz targets with markdown report generation.
 
-Runs each fuzz target, captures results, and writes a summary report
-to atheris-report.md.
+Runs each fuzz target across all packages, captures results, and writes
+a single combined summary report to atheris-report.md.
 
 Usage:
-    python fuzz/run_atheris.py --iterations=50000
+    python packages/device-connect-edge/fuzz/run_atheris.py --iterations=50000
 """
 
 import argparse
@@ -17,28 +17,60 @@ import time
 from pathlib import Path
 
 FUZZ_DIR = Path(__file__).parent
-PROJECT_DIR = FUZZ_DIR.parent
+# Resolve to repo root (3 levels up from fuzz/ inside a package)
+REPO_ROOT = FUZZ_DIR.parent.parent.parent
 
 TARGETS = [
+    # ── device-connect-edge ──
     {
-        "name": "JSON-RPC Commands",
+        "name": "Edge: JSON-RPC Commands",
+        "package": "packages/device-connect-edge",
         "script": "fuzz/fuzz_jsonrpc_cmd.py",
         "corpus": "fuzz/corpus/jsonrpc_cmd/",
     },
     {
-        "name": "NATS Credentials",
+        "name": "Edge: NATS Credentials",
+        "package": "packages/device-connect-edge",
         "script": "fuzz/fuzz_nats_creds.py",
         "corpus": "fuzz/corpus/nats_creds/",
     },
     {
-        "name": "Pydantic Models",
+        "name": "Edge: Pydantic Models",
+        "package": "packages/device-connect-edge",
         "script": "fuzz/fuzz_pydantic_models.py",
         "corpus": "fuzz/corpus/pydantic_models/",
     },
     {
-        "name": "Credentials JSON",
+        "name": "Edge: Credentials JSON",
+        "package": "packages/device-connect-edge",
         "script": "fuzz/fuzz_credentials_json.py",
         "corpus": "fuzz/corpus/credentials_json/",
+    },
+    # ── device-connect-server ──
+    {
+        "name": "Server: Credentials Loader",
+        "package": "packages/device-connect-server",
+        "script": "fuzz/fuzz_credentials.py",
+        "corpus": "fuzz/corpus/credentials_json/",
+    },
+    {
+        "name": "Server: PIN Parsing",
+        "package": "packages/device-connect-server",
+        "script": "fuzz/fuzz_commissioning.py",
+        "corpus": "fuzz/corpus/commissioning/",
+    },
+    # ── device-connect-agent-tools ──
+    {
+        "name": "Agent: Tool Name Parsing",
+        "package": "packages/device-connect-agent-tools",
+        "script": "fuzz/fuzz_schema.py",
+        "corpus": "fuzz/corpus/tool_names/",
+    },
+    {
+        "name": "Agent: JSON-RPC Parsing",
+        "package": "packages/device-connect-agent-tools",
+        "script": "fuzz/fuzz_jsonrpc_parsing.py",
+        "corpus": "fuzz/corpus/jsonrpc_messages/",
     },
 ]
 
@@ -50,7 +82,8 @@ def run_target(target, iterations):
     write auto-generated entries into the seed corpus directory.
     Seeds are copied in, and the temp dir is cleaned up after the run.
     """
-    seed_dir = PROJECT_DIR / target["corpus"]
+    pkg_dir = REPO_ROOT / target["package"]
+    seed_dir = pkg_dir / target["corpus"]
     tmp_corpus = tempfile.mkdtemp(prefix=f"fuzz-corpus-{target['script'].split('/')[-1]}-")
 
     # Copy seed files into the temp corpus
@@ -60,7 +93,7 @@ def run_target(target, iterations):
 
     cmd = [
         sys.executable,
-        str(PROJECT_DIR / target["script"]),
+        str(pkg_dir / target["script"]),
         tmp_corpus,
         f"-atheris_runs={iterations}",
     ]
@@ -70,7 +103,7 @@ def run_target(target, iterations):
         cmd,
         capture_output=True,
         text=True,
-        cwd=str(PROJECT_DIR),
+        cwd=str(REPO_ROOT),
     )
     elapsed = time.time() - start
 
@@ -78,7 +111,7 @@ def run_target(target, iterations):
     shutil.rmtree(tmp_corpus, ignore_errors=True)
 
     # Check for crash files created during this run
-    crashes = glob.glob(str(PROJECT_DIR / "crash-*"))
+    crashes = glob.glob(str(REPO_ROOT / "crash-*"))
 
     return {
         "name": target["name"],
@@ -162,7 +195,7 @@ def main():
     args = parser.parse_args()
 
     # Clean old crash files
-    for f in glob.glob(str(PROJECT_DIR / "crash-*")):
+    for f in glob.glob(str(REPO_ROOT / "crash-*")):
         Path(f).unlink()
 
     results = []
@@ -179,7 +212,7 @@ def main():
         else:
             print(f"  Clean ({result['elapsed']:.1f}s)", flush=True)
 
-    report_path = PROJECT_DIR / "atheris-report.md"
+    report_path = REPO_ROOT / "atheris-report.md"
     generate_report(results, report_path)
     print(f"\nReport written to {report_path}")
 

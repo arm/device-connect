@@ -51,6 +51,10 @@ dev = [
     "pytest-timeout>=2.0",
     "device-connect-server[security]",
 ]
+fuzz = [
+    "hypothesis>=6.0",
+    "coverage>=7.0",
+]
 all = [
     "device-connect-server[security,telemetry,state,logging,mqtt,dev]",
 ]

@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"event/objectDetected","params":{"device_id":"cam-01","label":"person","confidence":0.95}}

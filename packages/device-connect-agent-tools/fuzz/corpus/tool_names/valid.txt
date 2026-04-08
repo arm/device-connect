@@ -1,0 +1,1 @@
+camera-01::captureImage
