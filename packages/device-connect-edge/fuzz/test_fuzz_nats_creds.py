@@ -75,9 +75,11 @@ def test_parse_nats_creds_roundtrip(content):
             f.write(full)
         result = MessagingConfig._parse_nats_creds_file(path)
         assert isinstance(result, dict)
-        if "jwt" in result:
-            # .strip() normalizes \r\n to \n, so compare stripped versions
-            assert result["jwt"].strip() in full
+        # Markers are present, so jwt and nkey_seed should be extracted
+        assert "jwt" in result
+        assert "nkey_seed" in result
+        assert isinstance(result["jwt"], str)
+        assert isinstance(result["nkey_seed"], str)
     finally:
         try:
             os.unlink(path)

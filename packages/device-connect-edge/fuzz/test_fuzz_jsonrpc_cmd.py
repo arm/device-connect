@@ -62,7 +62,7 @@ def test_jsonrpc_raw_bytes_never_crashes(data):
     if not isinstance(payload, dict):
         return
 
-    method = payload.get("method")
+    payload.get("method")
     if "id" not in payload:
         return
 

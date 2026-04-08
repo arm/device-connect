@@ -58,8 +58,8 @@ def main():
     icon = "\u2705" if status == "pass" else "\u274c"
 
     print(f"## {icon} Hypothesis Fuzz Tests\n")
-    print(f"| Metric | Count |")
-    print(f"|--------|-------|")
+    print("| Metric | Count |")
+    print("|--------|-------|")
     print(f"| Total tests | {total} |")
     print(f"| Passed | {passed} |")
     print(f"| Failed | {failed} |")

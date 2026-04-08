@@ -42,9 +42,9 @@ def TestOneInput(data: bytes) -> None:
     # Extract _dc_meta (trace metadata)
     dc_meta = params_dict.pop("_dc_meta", {})
     if isinstance(dc_meta, dict):
-        source_device = dc_meta.get("source_device")
+        dc_meta.get("source_device")
         # Exercise OTel context extraction
-        parent_ctx = extract_from_meta(dc_meta)
+        extract_from_meta(dc_meta)
 
     # Exercise response building
     from device_connect_edge.device import build_rpc_response, build_rpc_error

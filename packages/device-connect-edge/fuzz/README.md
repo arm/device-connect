@@ -147,6 +147,31 @@ python -m coverage html
 open htmlcov/index.html
 ```
 
+### Deep Fuzzing (recommended for thorough testing)
+
+The commands above are quick smoke tests. For thorough bug discovery comparable to
+an AFL campaign, run atheris for **hours** using `-max_total_time` (in seconds):
+
+```bash
+# 1 hour per target
+python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/ -max_total_time=3600
+
+# 8 hours overnight
+python fuzz/fuzz_credentials_json.py fuzz/corpus/credentials_json/ -max_total_time=28800
+
+# Run indefinitely until you Ctrl+C (like AFL)
+python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/
+```
+
+**`-atheris_runs` vs `-max_total_time`**: `-atheris_runs=50000` caps iterations and
+finishes in seconds — useful for CI gates. `-max_total_time=3600` runs for a fixed
+duration regardless of iteration count — useful for deep fuzzing. Without either flag,
+atheris runs **indefinitely** until interrupted, just like AFL.
+
+**Why short runs find less**: Python fuzzing is slower than C-based AFL (~1,000–7,000
+exec/s vs 10,000–50,000 exec/s). Short iteration-capped runs are smoke tests, not
+deep campaigns. Run for hours on a dedicated machine for best results.
+
 ### Atheris Results
 
 - **Crashes** are saved as `crash-<hash>` files in the current directory
@@ -252,7 +277,7 @@ Both jobs run in parallel with unit tests and do not block integration tests.
 ### Where findings are published
 
 Findings from both tools are published to the **GitHub Actions job summary** — visible on
-the Actions tab under each run's **Summary** section. No need to dig through logs.
+the Actions tab under each run's **Summary** section (scroll down past the job list).
 
 **Hypothesis**: pytest produces a JUnit XML report, which `fuzz/report_hypothesis.py` converts
 to a markdown summary showing pass/fail counts and expandable tracebacks for each failure.
@@ -261,26 +286,3 @@ The JUnit XML is also uploaded as an artifact (retained 30 days).
 **Atheris**: `fuzz/run_atheris.py` runs all targets and generates `atheris-report.md` with a
 results table and expandable crash details. Both the report and any `crash-*` files are
 uploaded as artifacts (retained 30 days).
-
-Example of what appears in the job summary:
-
-```
-## Hypothesis Fuzz Tests
-
-| Metric | Count |
-|--------|-------|
-| Total  | 11    |
-| Passed | 9     |
-| Failed | 2     |
-
-### Findings
-#### 1. test_load_credentials_raw_bytes_never_crashes
-Error: TypeError: argument of type 'int' is not iterable
-```
-
-### Local findings
-
-Local findings are documented in `fuzz/findings/` as markdown reports, separated by tool:
-
-- `fuzz/findings/hypothesis_findings.md` — Bugs found by hypothesis
-- `fuzz/findings/atheris_findings.md` — Bugs found by atheris
