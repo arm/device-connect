@@ -31,8 +31,25 @@ class NscError(Exception):
     """Raised when an nsc command fails."""
 
 
+def _ensure_store_root():
+    """Fix nsc.json store_root when running inside a container.
+
+    setup_deployment.sh writes host-absolute paths; the container mount
+    point differs.  Rewrite once on first call so nsc can find the store.
+    """
+    nsc_json = config.NSC_HOME / "nsc.json"
+    if not nsc_json.exists():
+        return
+    expected = str(config.NSC_HOME / "data" / "nats" / "nsc" / "stores")
+    data = json.loads(nsc_json.read_text())
+    if data.get("store_root") != expected:
+        data["store_root"] = expected
+        nsc_json.write_text(json.dumps(data))
+
+
 async def _run_nsc(*args: str) -> str:
     """Run an nsc command and return stdout. Raises NscError on failure."""
+    _ensure_store_root()
     proc = await asyncio.create_subprocess_exec(
         "nsc", *args,
         stdout=asyncio.subprocess.PIPE,
