@@ -29,6 +29,10 @@ async def auth_middleware(request: web.Request, handler):
 
     session = await _get_session(request)
     if not session.get("username"):
+        if request.headers.get("HX-Request"):
+            resp = web.Response(status=200)
+            resp.headers["HX-Redirect"] = "/login"
+            return resp
         raise web.HTTPFound("/login")
 
     request["user"] = session
