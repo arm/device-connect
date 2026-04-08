@@ -15,6 +15,8 @@ def setup_routes(app: web.Application):
     app.router.add_get("/devices/{name}", device_detail_page)
     app.router.add_post("/api/devices", create_device)
     app.router.add_get("/api/devices/starter-script", download_starter_script)
+    app.router.add_get("/api/devices/agent-script", download_agent_script)
+    app.router.add_get("/api/devices/agent-creds", download_agent_creds)
     app.router.add_get("/api/devices/demo-bundle", download_demo_bundle)
     app.router.add_get("/api/devices/{name}/creds", download_credential)
     app.router.add_get("/api/devices/bundle", download_bundle)
@@ -305,6 +307,253 @@ async def download_starter_script(request: web.Request):
         content_type="text/x-python",
         headers={
             "Content-Disposition": 'attachment; filename="my_device.py"',
+        },
+    )
+
+
+AGENT_SCRIPT = '''\
+#!/usr/bin/env python3
+"""Device Connect — starter AI agent (Strands + OpenAI).
+
+Connects to Device Connect, discovers your fleet, and reacts to device
+events by calling tools (list_devices, get_device_functions, invoke_device).
+LLM inference runs through the Arm internal OpenAI proxy.
+
+Usage:
+    pip install \\
+        'device-connect-edge@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-edge' \\
+        'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-agent-tools' \\
+        'strands-agents[openai]'
+
+    export MESSAGING_BACKEND=nats
+    export NATS_URL=nats://<host>:<port>
+    export NATS_CREDENTIALS_FILE=./<your-tenant>-agent.creds.json
+    export DEVICE_CONNECT_ZONE=<your-tenant>
+    export OPENAI_API_KEY=<arm-proxy-token>
+    export OPENAI_BASE_URL=https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1
+    export OPENAI_INSECURE=1
+
+    python run_agent.py
+"""
+
+import asyncio
+import logging
+import os
+import signal
+from collections import defaultdict
+from typing import Any, Dict, Optional
+
+# ── 1. Force NATS backend BEFORE strands/openai import ──────────────
+os.environ.setdefault("MESSAGING_BACKEND", "nats")
+
+# ── 2. Disable SSL verification globally for the Arm internal proxy ──
+#     (must run BEFORE openai/httpx imports so the patched default sticks)
+if os.environ.get("OPENAI_INSECURE") == "1":
+    import httpx
+    _orig_async = httpx.AsyncClient.__init__
+    _orig_sync = httpx.Client.__init__
+
+    def _patched_async(self, *a, **kw):
+        kw.setdefault("verify", False)
+        _orig_async(self, *a, **kw)
+
+    def _patched_sync(self, *a, **kw):
+        kw.setdefault("verify", False)
+        _orig_sync(self, *a, **kw)
+
+    httpx.AsyncClient.__init__ = _patched_async
+    httpx.Client.__init__ = _patched_sync
+    try:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except Exception:
+        pass
+
+from device_connect_agent_tools.agent import DeviceConnectAgent
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(name)-28s  %(levelname)-7s  %(message)s",
+)
+log = logging.getLogger("agent")
+
+
+class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
+    """DeviceConnectAgent that uses Strands Agent with an OpenAI model."""
+
+    def __init__(
+        self,
+        goal: str,
+        model_id: str = "gpt-4o",
+        max_tokens: int = 4096,
+        client_args: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ):
+        super().__init__(goal=goal, **kwargs)
+        self._model_id = model_id
+        self._max_tokens = max_tokens
+        self._client_args = client_args or {}
+        self._agent = None
+
+    async def prepare(self) -> Dict[str, Any]:
+        from strands import Agent
+        from strands.models.openai import OpenAIModel
+        from device_connect_agent_tools.adapters.strands import (
+            describe_fleet, list_devices, get_device_functions,
+            invoke_device, invoke_device_with_fallback, get_device_status,
+        )
+
+        result = await super().prepare()
+
+        self._agent = Agent(
+            model=OpenAIModel(
+                client_args=self._client_args,
+                model_id=self._model_id,
+                params={"max_tokens": self._max_tokens},
+            ),
+            tools=[
+                describe_fleet, list_devices, get_device_functions,
+                invoke_device, invoke_device_with_fallback, get_device_status,
+            ],
+            system_prompt=self._build_system_prompt(),
+        )
+        return result
+
+    def _run_agent_sync(self, prompt: str) -> str:
+        log.info("Sending prompt to LLM (%d chars)", len(prompt))
+        response = str(self._agent(prompt))
+        log.info("Agent response: %s", response[:200])
+        return response
+
+    def _build_system_prompt(self) -> str:
+        by_type: dict = defaultdict(lambda: {"count": 0, "locations": set()})
+        for d in self.devices:
+            dt = d.get("device_type") or d.get("identity", {}).get("device_type") or "?"
+            loc = d.get("location") or d.get("status", {}).get("location") or "?"
+            by_type[dt]["count"] += 1
+            by_type[dt]["locations"].add(loc)
+
+        lines = []
+        for dt, info in sorted(by_type.items()):
+            locs = ", ".join(sorted(info["locations"]))
+            lines.append(f"  - {info['count']}x {dt} (at: {locs})")
+        fleet = "\\n".join(lines) or "  (none yet — call describe_fleet() to refresh)"
+
+        return (
+            f"You are an AI agent connected to the Device Connect IoT network.\\n\\n"
+            f"YOUR GOAL: {self.goal}\\n\\n"
+            f"FLEET OVERVIEW ({len(self.devices)} devices):\\n{fleet}\\n\\n"
+            f"DISCOVERY TOOLS:\\n"
+            f"  - describe_fleet() — fleet summary\\n"
+            f"  - list_devices(device_type=..., location=...) — browse devices\\n"
+            f"  - get_device_functions(device_id) — see what a device can do\\n"
+            f"  - invoke_device(device_id, function, params) — call a device function\\n\\n"
+            f"INSTRUCTIONS:\\n"
+            f"When you receive device events, you MUST:\\n"
+            f"1. Analyze the events\\n"
+            f"2. Use get_device_functions() to check available functions if needed\\n"
+            f"3. Use invoke_device() to interact with devices\\n"
+            f"4. Report what you found and what actions you took\\n\\n"
+            f"Always provide llm_reasoning when invoking devices.\\n"
+            f"Always call at least one tool per batch of events."
+        )
+
+
+async def main():
+    client_args = {
+        "api_key": os.environ["OPENAI_API_KEY"],
+        "base_url": os.environ.get(
+            "OPENAI_BASE_URL",
+            "https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1",
+        ),
+    }
+    log.info("Using OpenAI base_url=%s", client_args["base_url"])
+
+    agent = StrandsOpenAIDeviceConnectAgent(
+        goal="Monitor the IoT fleet and react to events by calling device tools.",
+        model_id=os.environ.get("OPENAI_MODEL", "gpt-4o"),
+        nats_url=os.environ.get("NATS_URL"),
+        zone=os.environ.get("DEVICE_CONNECT_ZONE", "default"),
+        client_args=client_args,
+    )
+
+    async with agent:
+        log.info("Agent ready — discovered %d devices", len(agent.devices))
+        for d in agent.devices:
+            log.info("  - %s", d.get("device_id") or d)
+
+        loop = asyncio.get_running_loop()
+        stop = asyncio.Event()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, stop.set)
+
+        run_task = asyncio.create_task(agent.run())
+        await stop.wait()
+        await agent.stop()
+        if not run_task.done():
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+'''
+
+
+async def download_agent_script(request: web.Request):
+    """Download a starter AI agent script (Strands + OpenAI via Arm proxy)."""
+    return web.Response(
+        text=AGENT_SCRIPT,
+        content_type="text/x-python",
+        headers={
+            "Content-Disposition": 'attachment; filename="run_agent.py"',
+        },
+    )
+
+
+async def download_agent_creds(request: web.Request):
+    """Get-or-create the per-tenant agent credential and stream it back.
+
+    The agent uses the same JWT scope as a device (``device-connect.{tenant}.>``)
+    but is named ``{tenant}-agent`` so it doesn't collide with real device IDs
+    or get counted in the device list.
+    """
+    user = request["user"]
+    tenant = user["tenant"]
+    agent_name = f"{tenant}-agent"
+    filename = f"{agent_name}.creds.json"
+
+    cred_path = credentials.get_credential(filename)
+    if not cred_path:
+        backend = get_backend()
+        if not backend.is_bootstrapped():
+            raise web.HTTPServiceUnavailable(
+                text="System not bootstrapped — ask admin to run setup first",
+            )
+        try:
+            broker_info = backend.broker_display_info()
+            await backend.add_device(
+                tenant, agent_name,
+                host=broker_info["host"], port=broker_info["port"],
+            )
+            await backend.reload_broker()
+        except Exception as e:
+            raise web.HTTPInternalServerError(
+                text=f"Failed to create agent credential: {e}",
+            )
+        cred_path = credentials.get_credential(filename)
+        if not cred_path:
+            raise web.HTTPInternalServerError(
+                text="Agent credential created but file not found",
+            )
+
+    return web.FileResponse(
+        cred_path,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
 
