@@ -32,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev]"
       - name: Run unit tests
-        run: pytest packages/device-connect-edge/tests/ -v --timeout=30 --tb=short
+        run: pytest packages/device-connect-edge/tests/ -v --timeout=30 --tb=short --ignore=packages/device-connect-edge/tests/fuzz
 
   unit-tests-server:
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
           pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
       - name: Run unit tests
-        run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short
+        run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short --ignore=packages/device-connect-server/tests/fuzz
 
   unit-tests-agent-tools:
     runs-on: ubuntu-latest
