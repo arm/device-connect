@@ -321,8 +321,8 @@ LLM inference runs through the Arm internal OpenAI proxy.
 
 Usage:
     pip install \\
-        'device-connect-edge@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-edge' \\
-        'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-agent-tools' \\
+        'device-connect-edge@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-edge' \\
+        'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-agent-tools' \\
         'strands-agents[openai]'
 
     export MESSAGING_BACKEND=nats

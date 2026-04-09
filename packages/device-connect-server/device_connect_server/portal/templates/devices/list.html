@@ -67,7 +67,7 @@
     <div>
       <p class="text-xs font-medium text-gray-500 mb-2">1. Set up your environment</p>
       <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">python3 -m venv .venv && source .venv/bin/activate
-pip install device-connect-edge@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-edge</pre>
+pip install device-connect-edge@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-edge</pre>
     </div>
     <div>
       <p class="text-xs font-medium text-gray-500 mb-2">2. Download a starter script and your device credentials</p>
@@ -121,8 +121,8 @@ python my_device.py</pre>
         </a>
       </div>
       <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">pip install \
-  'device-connect-edge@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-edge' \
-  'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@feat/multitenant-deployment#subdirectory=packages/device-connect-agent-tools' \
+  'device-connect-edge@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-edge' \
+  'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-agent-tools' \
   'strands-agents[openai]'
 
 # Common env (every terminal)
