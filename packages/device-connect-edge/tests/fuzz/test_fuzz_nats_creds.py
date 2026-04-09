@@ -1,7 +1,7 @@
 """Property-based fuzz tests for NATS .creds file parser.
 
 Run:
-    pytest fuzz/test_fuzz_nats_creds.py -v
+    pytest tests/fuzz/test_fuzz_nats_creds.py -v
 """
 
 import os

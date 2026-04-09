@@ -1,7 +1,7 @@
 """Parse JUnit XML from hypothesis fuzz tests and output a GitHub-flavored markdown summary.
 
 Usage:
-    python fuzz/report_hypothesis.py fuzz-hypothesis-results.xml
+    python tests/fuzz/report_hypothesis.py fuzz-hypothesis-results.xml
 """
 
 import sys

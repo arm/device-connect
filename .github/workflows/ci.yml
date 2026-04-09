@@ -107,13 +107,13 @@ jobs:
           HYPOTHESIS_PROFILE: ci
         run: |
           pytest \
-            packages/device-connect-edge/fuzz/test_fuzz_*.py \
-            packages/device-connect-server/fuzz/test_fuzz_*.py \
-            packages/device-connect-agent-tools/fuzz/test_fuzz_*.py \
+            packages/device-connect-edge/tests/fuzz/test_fuzz_*.py \
+            packages/device-connect-server/tests/fuzz/test_fuzz_*.py \
+            packages/device-connect-agent-tools/tests/fuzz/test_fuzz_*.py \
             -v --timeout=120 --tb=short --junitxml=fuzz-hypothesis-results.xml
       - name: Publish hypothesis findings summary
         if: always()
-        run: python packages/device-connect-edge/fuzz/report_hypothesis.py fuzz-hypothesis-results.xml >> "$GITHUB_STEP_SUMMARY"
+        run: python packages/device-connect-edge/tests/fuzz/report_hypothesis.py fuzz-hypothesis-results.xml >> "$GITHUB_STEP_SUMMARY"
       - name: Upload hypothesis report
         if: always()
         uses: actions/upload-artifact@v5
@@ -139,7 +139,7 @@ jobs:
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[dev,fuzz]"
           pip install atheris
       - name: Run atheris fuzz targets (all packages)
-        run: python packages/device-connect-edge/fuzz/run_atheris.py --iterations=50000
+        run: python packages/device-connect-edge/tests/fuzz/run_atheris.py --iterations=50000
       - name: Publish atheris findings summary
         if: always()
         run: cat atheris-report.md >> "$GITHUB_STEP_SUMMARY"

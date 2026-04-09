@@ -97,21 +97,21 @@ Hypothesis tests run via pytest and work on any platform.
 cd packages/device-connect-edge
 
 # Run all fuzz tests
-pytest fuzz/test_fuzz_*.py -v
+pytest tests/fuzz/test_fuzz_*.py -v
 
 # Run a specific target
-pytest fuzz/test_fuzz_jsonrpc_cmd.py -v
+pytest tests/fuzz/test_fuzz_jsonrpc_cmd.py -v
 
 # Reproducible run with a fixed seed
-pytest fuzz/test_fuzz_jsonrpc_cmd.py -v --hypothesis-seed=0
+pytest tests/fuzz/test_fuzz_jsonrpc_cmd.py -v --hypothesis-seed=0
 
 # Run more examples for deeper coverage
-HYPOTHESIS_PROFILE=ci pytest fuzz/test_fuzz_*.py -v
+HYPOTHESIS_PROFILE=ci pytest tests/fuzz/test_fuzz_*.py -v
 ```
 
 ### Hypothesis Profiles
 
-Two profiles are configured in `fuzz/conftest.py`:
+Two profiles are configured in `tests/fuzz/conftest.py`:
 
 | Profile | Examples per test | Use case |
 |---------|------------------|----------|
@@ -130,19 +130,19 @@ Atheris is best for long-running, coverage-guided campaigns that discover deeper
 cd packages/device-connect-edge
 
 # Quick smoke test (1,000 iterations)
-python fuzz/fuzz_jsonrpc_cmd.py -atheris_runs=1000
+python tests/fuzz/fuzz_jsonrpc_cmd.py -atheris_runs=1000
 
 # 5-minute run with seed corpus
-python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/ -max_total_time=300
+python tests/fuzz/fuzz_jsonrpc_cmd.py tests/fuzz/corpus/jsonrpc_cmd/ -max_total_time=300
 
 # Run all targets (5 min each)
-python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/ -max_total_time=300
-python fuzz/fuzz_nats_creds.py fuzz/corpus/nats_creds/ -max_total_time=300
-python fuzz/fuzz_pydantic_models.py fuzz/corpus/pydantic_models/ -max_total_time=300
-python fuzz/fuzz_credentials_json.py fuzz/corpus/credentials_json/ -max_total_time=300
+python tests/fuzz/fuzz_jsonrpc_cmd.py tests/fuzz/corpus/jsonrpc_cmd/ -max_total_time=300
+python tests/fuzz/fuzz_nats_creds.py tests/fuzz/corpus/nats_creds/ -max_total_time=300
+python tests/fuzz/fuzz_pydantic_models.py tests/fuzz/corpus/pydantic_models/ -max_total_time=300
+python tests/fuzz/fuzz_credentials_json.py tests/fuzz/corpus/credentials_json/ -max_total_time=300
 
 # Run with coverage report
-python -m coverage run fuzz/fuzz_jsonrpc_cmd.py -atheris_runs=100000
+python -m coverage run tests/fuzz/fuzz_jsonrpc_cmd.py -atheris_runs=100000
 python -m coverage html
 open htmlcov/index.html
 ```
@@ -154,13 +154,13 @@ an AFL campaign, run atheris for **hours** using `-max_total_time` (in seconds):
 
 ```bash
 # 1 hour per target
-python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/ -max_total_time=3600
+python tests/fuzz/fuzz_jsonrpc_cmd.py tests/fuzz/corpus/jsonrpc_cmd/ -max_total_time=3600
 
 # 8 hours overnight
-python fuzz/fuzz_credentials_json.py fuzz/corpus/credentials_json/ -max_total_time=28800
+python tests/fuzz/fuzz_credentials_json.py tests/fuzz/corpus/credentials_json/ -max_total_time=28800
 
 # Run indefinitely until you Ctrl+C (like AFL)
-python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/
+python tests/fuzz/fuzz_jsonrpc_cmd.py tests/fuzz/corpus/jsonrpc_cmd/
 ```
 
 **`-atheris_runs` vs `-max_total_time`**: `-atheris_runs=50000` caps iterations and
@@ -176,12 +176,12 @@ deep campaigns. Run for hours on a dedicated machine for best results.
 
 - **Crashes** are saved as `crash-<hash>` files in the current directory
 - **Timeouts** are saved as `timeout-<hash>` files
-- **Reproduce** a crash: `python fuzz/fuzz_jsonrpc_cmd.py crash-<hash>`
+- **Reproduce** a crash: `python tests/fuzz/fuzz_jsonrpc_cmd.py crash-<hash>`
 
 ### Auto-generated corpus cleanup
 
 Atheris writes new corpus entries into the corpus directory as it discovers new
-coverage paths. When using `fuzz/run_atheris.py`, this is handled automatically —
+coverage paths. When using `tests/fuzz/run_atheris.py`, this is handled automatically —
 seeds are copied into a temp directory that is cleaned up after each target runs.
 
 When running atheris harnesses directly, pass a **temporary directory** instead of the
@@ -189,8 +189,8 @@ seed corpus to avoid polluting it:
 
 ```bash
 # Copy seeds to a temp dir, run against it, then delete
-cp -r fuzz/corpus/jsonrpc_cmd/ /tmp/fuzz-corpus
-python fuzz/fuzz_jsonrpc_cmd.py /tmp/fuzz-corpus -max_total_time=300
+cp -r tests/fuzz/corpus/jsonrpc_cmd/ /tmp/fuzz-corpus
+python tests/fuzz/fuzz_jsonrpc_cmd.py /tmp/fuzz-corpus -max_total_time=300
 rm -rf /tmp/fuzz-corpus
 ```
 
@@ -198,10 +198,10 @@ rm -rf /tmp/fuzz-corpus
 
 ## Seed Corpus
 
-The `fuzz/corpus/` directory contains valid example inputs that atheris mutates to find edge cases:
+The `tests/fuzz/corpus/` directory contains valid example inputs that atheris mutates to find edge cases:
 
 ```
-fuzz/corpus/
+tests/fuzz/corpus/
 ├── jsonrpc_cmd/       # Valid JSON-RPC command messages
 ├── nats_creds/        # NATS .creds file samples
 ├── pydantic_models/   # Valid Pydantic model JSON
@@ -215,7 +215,7 @@ Hypothesis generates its own inputs from strategies and does not use the seed co
 ## Adding New Fuzz Targets
 
 1. **Identify a parsing function** that processes external input (network messages, files, configs)
-2. **Create a hypothesis test** in `fuzz/test_fuzz_<name>.py`:
+2. **Create a hypothesis test** in `tests/fuzz/test_fuzz_<name>.py`:
    ```python
    from hypothesis import given, settings
    from hypothesis import strategies as st
@@ -228,7 +228,7 @@ Hypothesis generates its own inputs from strategies and does not use the seed co
        except (ExpectedException1, ExpectedException2):
            pass  # Expected rejections — not bugs
    ```
-3. **Create an atheris harness** in `fuzz/fuzz_<name>.py`:
+3. **Create an atheris harness** in `tests/fuzz/fuzz_<name>.py`:
    ```python
    import atheris, sys
 
@@ -244,7 +244,7 @@ Hypothesis generates its own inputs from strategies and does not use the seed co
    atheris.Setup(sys.argv, TestOneInput)
    atheris.Fuzz()
    ```
-4. **Add seed inputs** to `fuzz/corpus/<name>/`
+4. **Add seed inputs** to `tests/fuzz/corpus/<name>/`
 
 ### Guidelines
 
@@ -263,7 +263,7 @@ Fuzz tests run automatically in GitHub Actions (`.github/workflows/ci.yml`) as t
 
 - Runs on every push/PR to `main`
 - Uses the `ci` profile (20,000 examples per test via `HYPOTHESIS_PROFILE=ci`)
-- Runs all `fuzz/test_fuzz_*.py` tests via pytest
+- Runs all `tests/fuzz/test_fuzz_*.py` tests via pytest
 - No special dependencies — works on `ubuntu-latest` out of the box
 
 ### `fuzz-tests-atheris`
@@ -279,10 +279,10 @@ Both jobs run in parallel with unit tests and do not block integration tests.
 Findings from both tools are published to the **GitHub Actions job summary** — visible on
 the Actions tab under each run's **Summary** section (scroll down past the job list).
 
-**Hypothesis**: pytest produces a JUnit XML report, which `fuzz/report_hypothesis.py` converts
+**Hypothesis**: pytest produces a JUnit XML report, which `tests/fuzz/report_hypothesis.py` converts
 to a markdown summary showing pass/fail counts and expandable tracebacks for each failure.
 The JUnit XML is also uploaded as an artifact (retained 30 days).
 
-**Atheris**: `fuzz/run_atheris.py` runs all targets and generates `atheris-report.md` with a
+**Atheris**: `tests/fuzz/run_atheris.py` runs all targets and generates `atheris-report.md` with a
 results table and expandable crash details. Both the report and any `crash-*` files are
 uploaded as artifacts (retained 30 days).

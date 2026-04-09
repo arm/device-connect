@@ -3,7 +3,7 @@
 Profiles: 'default' for local dev, 'ci' for thorough CI runs.
 
 Select profile via env var:
-    HYPOTHESIS_PROFILE=ci pytest fuzz/test_fuzz_*.py
+    HYPOTHESIS_PROFILE=ci pytest tests/fuzz/test_fuzz_*.py
 """
 
 import os

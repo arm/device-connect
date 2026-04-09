@@ -5,7 +5,7 @@ DeviceCapabilities, FunctionDef, EventDef) with arbitrary JSON input.
 Looks for unexpected exceptions during model_validate().
 
 Run:
-    python fuzz/fuzz_pydantic_models.py fuzz/corpus/pydantic_models/ -max_total_time=300
+    python tests/fuzz/fuzz_pydantic_models.py fuzz/corpus/pydantic_models/ -max_total_time=300
 """
 
 import sys

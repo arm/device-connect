@@ -1,7 +1,7 @@
 """Atheris fuzz target: server CredentialsLoader.
 
 Run:
-    python fuzz/fuzz_credentials.py fuzz/corpus/credentials_json/ -max_total_time=300
+    python tests/fuzz/fuzz_credentials.py fuzz/corpus/credentials_json/ -max_total_time=300
 """
 
 import sys

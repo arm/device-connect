@@ -4,7 +4,7 @@ Exercises MessagingConfig._load_credentials_file() which parses JSON
 credential files and falls back to NATS .creds format on JSONDecodeError.
 
 Run:
-    python fuzz/fuzz_credentials_json.py fuzz/corpus/credentials_json/ -max_total_time=300
+    python tests/fuzz/fuzz_credentials_json.py fuzz/corpus/credentials_json/ -max_total_time=300
 """
 
 import sys

@@ -1,7 +1,7 @@
 """Property-based fuzz tests for PIN parsing.
 
 Run:
-    pytest fuzz/test_fuzz_commissioning.py -v
+    pytest tests/fuzz/test_fuzz_commissioning.py -v
 """
 
 from hypothesis import given, settings

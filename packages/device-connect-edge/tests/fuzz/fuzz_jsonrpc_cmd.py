@@ -5,7 +5,7 @@ which receives raw bytes from the messaging broker and extracts method, id,
 params, and _dc_meta fields.
 
 Run:
-    python fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/ -max_total_time=300
+    python tests/fuzz/fuzz_jsonrpc_cmd.py fuzz/corpus/jsonrpc_cmd/ -max_total_time=300
 """
 
 import sys

@@ -1,7 +1,7 @@
 """Atheris fuzz target: MCP tool name parsing.
 
 Run:
-    python fuzz/fuzz_schema.py fuzz/corpus/tool_names/ -max_total_time=300
+    python tests/fuzz/fuzz_schema.py fuzz/corpus/tool_names/ -max_total_time=300
 """
 
 import sys

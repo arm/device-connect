@@ -1,7 +1,7 @@
 """Atheris fuzz target: PIN parsing.
 
 Run:
-    python fuzz/fuzz_commissioning.py fuzz/corpus/commissioning/ -max_total_time=300
+    python tests/fuzz/fuzz_commissioning.py fuzz/corpus/commissioning/ -max_total_time=300
 """
 
 import sys

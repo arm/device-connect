@@ -1,7 +1,7 @@
 """Property-based fuzz tests for JSON credentials file loader.
 
 Run:
-    pytest fuzz/test_fuzz_credentials_json.py -v
+    pytest tests/fuzz/test_fuzz_credentials_json.py -v
 """
 
 import json

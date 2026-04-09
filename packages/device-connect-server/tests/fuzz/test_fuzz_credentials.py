@@ -1,7 +1,7 @@
 """Property-based fuzz tests for server CredentialsLoader.
 
 Run:
-    pytest fuzz/test_fuzz_credentials.py -v
+    pytest tests/fuzz/test_fuzz_credentials.py -v
 """
 
 import json

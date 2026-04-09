@@ -50,10 +50,6 @@ fuzz = [
     "hypothesis>=6.0",
     "coverage>=7.0",
 ]
-fuzz-atheris = [
-    "atheris>=2.3.0",
-    "device-connect-edge[fuzz]",
-]
 
 [project.urls]
 Homepage = "https://github.com/arm/device-connect"

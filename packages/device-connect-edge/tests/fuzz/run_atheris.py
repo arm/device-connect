@@ -4,7 +4,7 @@ Runs each fuzz target across all packages, captures results, and writes
 a single combined summary report to atheris-report.md.
 
 Usage:
-    python packages/device-connect-edge/fuzz/run_atheris.py --iterations=50000
+    python packages/device-connect-edge/tests/fuzz/run_atheris.py --iterations=50000
 """
 
 import argparse
@@ -17,60 +17,60 @@ import time
 from pathlib import Path
 
 FUZZ_DIR = Path(__file__).parent
-# Resolve to repo root (3 levels up from fuzz/ inside a package)
-REPO_ROOT = FUZZ_DIR.parent.parent.parent
+# Resolve to repo root (4 levels up from tests/fuzz/ inside a package)
+REPO_ROOT = FUZZ_DIR.parent.parent.parent.parent
 
 TARGETS = [
     # ── device-connect-edge ──
     {
         "name": "Edge: JSON-RPC Commands",
         "package": "packages/device-connect-edge",
-        "script": "fuzz/fuzz_jsonrpc_cmd.py",
-        "corpus": "fuzz/corpus/jsonrpc_cmd/",
+        "script": "tests/fuzz/fuzz_jsonrpc_cmd.py",
+        "corpus": "tests/fuzz/corpus/jsonrpc_cmd/",
     },
     {
         "name": "Edge: NATS Credentials",
         "package": "packages/device-connect-edge",
-        "script": "fuzz/fuzz_nats_creds.py",
-        "corpus": "fuzz/corpus/nats_creds/",
+        "script": "tests/fuzz/fuzz_nats_creds.py",
+        "corpus": "tests/fuzz/corpus/nats_creds/",
     },
     {
         "name": "Edge: Pydantic Models",
         "package": "packages/device-connect-edge",
-        "script": "fuzz/fuzz_pydantic_models.py",
-        "corpus": "fuzz/corpus/pydantic_models/",
+        "script": "tests/fuzz/fuzz_pydantic_models.py",
+        "corpus": "tests/fuzz/corpus/pydantic_models/",
     },
     {
         "name": "Edge: Credentials JSON",
         "package": "packages/device-connect-edge",
-        "script": "fuzz/fuzz_credentials_json.py",
-        "corpus": "fuzz/corpus/credentials_json/",
+        "script": "tests/fuzz/fuzz_credentials_json.py",
+        "corpus": "tests/fuzz/corpus/credentials_json/",
     },
     # ── device-connect-server ──
     {
         "name": "Server: Credentials Loader",
         "package": "packages/device-connect-server",
-        "script": "fuzz/fuzz_credentials.py",
-        "corpus": "fuzz/corpus/credentials_json/",
+        "script": "tests/fuzz/fuzz_credentials.py",
+        "corpus": "tests/fuzz/corpus/credentials_json/",
     },
     {
         "name": "Server: PIN Parsing",
         "package": "packages/device-connect-server",
-        "script": "fuzz/fuzz_commissioning.py",
-        "corpus": "fuzz/corpus/commissioning/",
+        "script": "tests/fuzz/fuzz_commissioning.py",
+        "corpus": "tests/fuzz/corpus/commissioning/",
     },
     # ── device-connect-agent-tools ──
     {
         "name": "Agent: Tool Name Parsing",
         "package": "packages/device-connect-agent-tools",
-        "script": "fuzz/fuzz_schema.py",
-        "corpus": "fuzz/corpus/tool_names/",
+        "script": "tests/fuzz/fuzz_schema.py",
+        "corpus": "tests/fuzz/corpus/tool_names/",
     },
     {
         "name": "Agent: JSON-RPC Parsing",
         "package": "packages/device-connect-agent-tools",
-        "script": "fuzz/fuzz_jsonrpc_parsing.py",
-        "corpus": "fuzz/corpus/jsonrpc_messages/",
+        "script": "tests/fuzz/fuzz_jsonrpc_parsing.py",
+        "corpus": "tests/fuzz/corpus/jsonrpc_messages/",
     },
 ]
 
@@ -98,6 +98,9 @@ def run_target(target, iterations):
         f"-atheris_runs={iterations}",
     ]
 
+    # Snapshot existing crash files before this target
+    pre_crashes = set(glob.glob(str(REPO_ROOT / "crash-*")))
+
     start = time.time()
     result = subprocess.run(
         cmd,
@@ -110,8 +113,9 @@ def run_target(target, iterations):
     # Clean up temp corpus
     shutil.rmtree(tmp_corpus, ignore_errors=True)
 
-    # Check for crash files created during this run
-    crashes = glob.glob(str(REPO_ROOT / "crash-*"))
+    # Only attribute NEW crash files to this target
+    post_crashes = set(glob.glob(str(REPO_ROOT / "crash-*")))
+    crashes = sorted(post_crashes - pre_crashes)
 
     return {
         "name": target["name"],

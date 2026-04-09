@@ -136,6 +136,38 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# ── Message parsing helpers (extracted for testability) ─────────────
+
+
+def parse_buffered_payload(data: bytes) -> dict:
+    """Parse raw bytes into a payload dict for buffered subscriptions.
+
+    Always returns a dict — falls back to ``{"raw": ...}`` on any error.
+    """
+    try:
+        payload = json.loads(data.decode())
+        if not isinstance(payload, dict):
+            payload = {"raw": str(payload)[:500]}
+    except Exception:
+        payload = {"raw": data.decode("utf-8", errors="replace")[:500]}
+    return payload
+
+
+def parse_event_payload(data: bytes) -> dict:
+    """Parse raw bytes into a normalized event dict.
+
+    Returns dict with keys ``device_id``, ``event_name``, ``params``.
+    Raises on malformed input (caller should catch).
+    """
+    payload = json.loads(data.decode())
+    if not isinstance(payload, dict):
+        raise ValueError("Expected JSON object")
+    method = payload.get("method", "")
+    dev_id = payload.get("params", {}).get("device_id", "unknown")
+    params = payload.get("params", {})
+    return {"device_id": dev_id, "event_name": method, "params": params}
+
+
 # ── Connection class ────────────────────────────────────────────────
 
 
@@ -397,10 +429,7 @@ class DeviceConnection:
 
         async def _do_subscribe():
             async def _on_msg(data: bytes, msg_subject: str, reply: str = ""):
-                try:
-                    payload = json.loads(data.decode())
-                except Exception:
-                    payload = {"raw": data.decode()[:500]}
+                payload = parse_buffered_payload(data)
                 # Store as (subject, data) tuple
                 self._inbox[name].append((msg_subject, payload))
                 # Trim to prevent unbounded growth
@@ -498,22 +527,13 @@ class DeviceConnection:
 
         async def _on_msg(data: bytes, reply: str = ""):
             try:
-                payload = json.loads(data.decode())
-                method = payload.get("method", "")
-                dev_id = payload.get("params", {}).get("device_id", "unknown")
-                event_name = method
-                params = payload.get("params", {})
-
+                event = parse_event_payload(data)
                 logger.info(
                     "EVENT <- %s::%s  %s",
-                    dev_id, event_name,
-                    json.dumps(params, default=str),
+                    event["device_id"], event["event_name"],
+                    json.dumps(event["params"], default=str),
                 )
-                await buffer.put({
-                    "device_id": dev_id,
-                    "event_name": event_name,
-                    "params": params,
-                })
+                await buffer.put(event)
             except Exception as e:
                 logger.error("Error parsing event: %s", e)
 

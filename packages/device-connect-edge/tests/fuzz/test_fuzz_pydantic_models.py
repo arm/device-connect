@@ -1,7 +1,7 @@
 """Property-based fuzz tests for Pydantic model validation.
 
 Run:
-    pytest fuzz/test_fuzz_pydantic_models.py -v
+    pytest tests/fuzz/test_fuzz_pydantic_models.py -v
 """
 
 import json

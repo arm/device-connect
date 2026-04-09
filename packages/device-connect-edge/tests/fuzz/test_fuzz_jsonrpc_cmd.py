@@ -5,8 +5,8 @@ These tests exercise the same code paths as fuzz_jsonrpc_cmd.py (atheris)
 but run on any platform without needing libFuzzer.
 
 Run:
-    pytest fuzz/test_fuzz_jsonrpc_cmd.py -v
-    pytest fuzz/test_fuzz_jsonrpc_cmd.py -v --hypothesis-seed=0  # reproducible
+    pytest tests/fuzz/test_fuzz_jsonrpc_cmd.py -v
+    pytest tests/fuzz/test_fuzz_jsonrpc_cmd.py -v --hypothesis-seed=0  # reproducible
 """
 
 import json

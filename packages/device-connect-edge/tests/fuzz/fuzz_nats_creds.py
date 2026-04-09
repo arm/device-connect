@@ -5,7 +5,7 @@ string parsing with .find() and slicing to extract JWT and NKey seed
 from NATS credential files.
 
 Run:
-    python fuzz/fuzz_nats_creds.py fuzz/corpus/nats_creds/ -max_total_time=300
+    python tests/fuzz/fuzz_nats_creds.py fuzz/corpus/nats_creds/ -max_total_time=300
 """
 
 import sys

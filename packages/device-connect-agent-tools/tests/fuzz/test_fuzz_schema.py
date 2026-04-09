@@ -1,7 +1,7 @@
 """Property-based fuzz tests for MCP tool name parsing.
 
 Run:
-    pytest fuzz/test_fuzz_schema.py -v
+    pytest tests/fuzz/test_fuzz_schema.py -v
 """
 
 from hypothesis import given, settings
