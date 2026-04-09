@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Health Check{% endblock %}
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">Health Check</h1>
+  <p class="text-sm text-gray-500 mt-1">Verify tenant isolation and system health</p>
+</div>
+
+<div class="mb-6">
+  <button hx-post="/api/admin/health/verify" hx-target="#health-results" hx-swap="innerHTML"
+          hx-indicator="#health-spinner"
+          class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    Run Verification
+  </button>
+  <span id="health-spinner" class="htmx-indicator ml-3 text-sm text-gray-400">Running tests...</span>
+</div>
+
+<div id="health-results">
+  {% if results %}
+  {% include "admin/_health_results.html" %}
+  {% else %}
+  <div class="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
+    Click "Run Verification" to check tenant isolation
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

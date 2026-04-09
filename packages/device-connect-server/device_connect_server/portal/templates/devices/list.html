@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}My Devices{% endblock %}
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">My Devices</h1>
+  <p class="text-sm text-gray-500 mt-1">Manage device credentials for tenant <code class="bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700">{{ tenant }}</code></p>
+</div>
+
+<!-- Create device form -->
+{% if not readonly %}
+<div class="bg-white rounded-xl border border-gray-200 p-5 mb-6">
+  <h3 class="text-sm font-semibold text-gray-900 mb-3">Create New Device</h3>
+  <form hx-post="/api/devices" hx-target="#device-list" hx-swap="afterbegin" hx-on::after-request="if(event.detail.successful) this.reset()">
+    <div class="flex gap-3">
+      <input type="text" name="device_name" required
+             placeholder="e.g., robot-arm-01"
+             pattern="[a-zA-Z0-9_-]+"
+             title="Letters, numbers, hyphens, underscores only"
+             class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent">
+      <button type="submit"
+              class="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+        Create
+      </button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<!-- Credentials table -->
+<div class="bg-white rounded-xl border border-gray-200">
+  <div class="px-5 py-4 border-b border-gray-200">
+    <h2 class="text-lg font-semibold text-gray-900">Device Credentials</h2>
+  </div>
+  <div id="device-list">
+    {% if credentials %}
+    {% for cred in credentials %}
+    <div class="px-5 py-4 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 flex items-center justify-between">
+      <div>
+        <div class="text-sm font-medium text-gray-900">{{ cred.device_id }}</div>
+        <div class="text-xs text-gray-400 mt-0.5">{{ cred.filename }}</div>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="/api/devices/{{ cred.device_id }}/creds"
+           class="inline-flex items-center px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-200 transition-colors">
+          <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Download
+        </a>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="px-5 py-8 text-center">
+      <p class="text-sm text-gray-500">No device credentials yet</p>
+      <p class="text-xs text-gray-400 mt-1">Create a device above to get started</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Getting started -->
+{% if credentials %}
+<div class="bg-white rounded-xl border border-gray-200 mt-6">
+  <div class="px-5 py-4 border-b border-gray-200">
+    <h2 class="text-lg font-semibold text-gray-900">Getting Started</h2>
+  </div>
+  <div class="px-5 py-5 space-y-4">
+    <div>
+      <p class="text-xs font-medium text-gray-500 mb-2">1. Set up your environment</p>
+      <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">python3 -m venv .venv && source .venv/bin/activate
+pip install device-connect-edge@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-edge</pre>
+    </div>
+    <div>
+      <p class="text-xs font-medium text-gray-500 mb-2">2. Download a starter script and your device credentials</p>
+      <div class="flex flex-wrap gap-3">
+        <a href="/api/devices/starter-script"
+           class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          my_device.py
+        </a>
+        <a href="/api/devices/demo-bundle"
+           class="inline-flex items-center px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          Greenhouse Demo (3 devices)
+        </a>
+        <a href="/api/devices/bundle?tenant={{ tenant }}"
+           class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          All credentials (.zip)
+        </a>
+      </div>
+    </div>
+    <div>
+      <p class="text-xs font-medium text-gray-500 mb-2">3. Run your device</p>
+      <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">export NATS_CREDENTIALS_FILE=./{{ credentials[0].filename }}
+export NATS_URL=nats://{{ public_host }}:{{ nats_port }}
+python my_device.py</pre>
+    </div>
+    <div>
+      <p class="text-xs font-medium text-gray-500 mb-2">4. Run all devices and orchestrate using an agent</p>
+      <p class="text-xs text-gray-500 mb-2">
+        Spin up an LLM agent that listens to your fleet and acts on it. Download the starter
+        script — it discovers your devices, batches incoming events, and lets the model call
+        <code class="bg-gray-100 px-1 rounded">list_devices</code>,
+        <code class="bg-gray-100 px-1 rounded">get_device_functions</code>, and
+        <code class="bg-gray-100 px-1 rounded">invoke_device</code> to react. Inference runs
+        through Arm's internal OpenAI proxy — generate an API key at
+        <a href="https://openai-api-proxy.geo.arm.com/"
+           class="text-indigo-600 hover:underline" target="_blank" rel="noopener">openai-api-proxy.geo.arm.com</a>
+        (Arm VPN required).
+      </p>
+      <div class="flex flex-wrap gap-3 mb-3">
+        <a href="/api/devices/agent-script"
+           class="inline-flex items-center px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          run_agent.py
+        </a>
+        <a href="/api/devices/agent-creds"
+           class="inline-flex items-center px-4 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          {{ tenant }}-agent.creds.json
+        </a>
+      </div>
+      <pre class="code-block bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-sm">pip install \
+  'device-connect-edge@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-edge' \
+  'device-connect-agent-tools[strands]@git+https://github.com/arm/device-connect.git@main#subdirectory=packages/device-connect-agent-tools' \
+  'strands-agents[openai]'
+
+# Common env (every terminal)
+export MESSAGING_BACKEND=nats
+export NATS_URL=nats://{{ public_host }}:{{ nats_port }}
+
+# ── Terminals 1–3 — run each device with its own creds ──
+export NATS_CREDENTIALS_FILE=./{{ credentials[0].filename }} && python soil_sensor.py
+export NATS_CREDENTIALS_FILE=./{% if credentials|length > 1 %}{{ credentials[1].filename }}{% else %}{{ credentials[0].filename }}{% endif %} && python irrigation_pump.py
+export NATS_CREDENTIALS_FILE=./{% if credentials|length > 2 %}{{ credentials[2].filename }}{% else %}{{ credentials[0].filename }}{% endif %} && python greenhouse_ctrl.py
+
+# ── Terminal 4 — AI agent (Arm internal OpenAI proxy) ──
+export NATS_CREDENTIALS_FILE=./{{ tenant }}-agent.creds.json
+export DEVICE_CONNECT_ZONE={{ tenant }}
+export OPENAI_API_KEY=&lt;your-arm-proxy-token&gt;
+export OPENAI_BASE_URL=https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1
+export OPENAI_INSECURE=1
+
+python run_agent.py</pre>
+      <p class="text-xs text-gray-500 mt-2">
+        The agent subscribes to <code class="bg-gray-100 px-1 rounded">device-connect.{{ tenant }}.*.event.&gt;</code>,
+        batches events every ~12s, sends them to the LLM, and the model decides which
+        <code class="bg-gray-100 px-1 rounded">invoke_device</code> calls to make.
+      </p>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

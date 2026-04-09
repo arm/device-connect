@@ -326,6 +326,7 @@ class DeviceRuntime:
         self.capabilities = caps_obj
         self.identity = identity_payload
         self.status = status_payload
+        self._explicit_device_id = device_id is not None
         self.device_id = device_id or f"device-{uuid.uuid4().hex[:8]}"
         if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,254}$', self.device_id):
             raise ValueError(
@@ -404,6 +405,12 @@ class DeviceRuntime:
                 self.device_id = creds_device_id
                 self._setup_logger()
                 self._logger.info(f"Using device_id from credentials file: {self.device_id}")
+
+            # Override tenant from credentials file if caller used the default
+            creds_tenant = creds.get("tenant")
+            if creds_tenant and tenant == "default":
+                self.tenant = creds_tenant
+                self._logger.info(f"Using tenant from credentials file: {self.tenant}")
 
         # ===== Messaging Configuration =====
 
@@ -491,6 +498,7 @@ class DeviceRuntime:
         self._registration_expires_at: float = 0.0
         self._heartbeat_interval: float = heartbeat_interval or max(1.0, self.ttl / 3)
         self._registration_lock: asyncio.Lock = asyncio.Lock()
+        self._subscription_lock: asyncio.Lock = asyncio.Lock()
 
         # Messaging client (initialized in run(); first assignment at line 350)
 
@@ -581,8 +589,9 @@ class DeviceRuntime:
         # Try to parse as JSON first
         try:
             creds = json.loads(content)
-            # Validate device_id matches (skip if allow_insecure)
-            if not self.allow_insecure:
+            # Validate device_id matches (skip if allow_insecure or
+            # device_id will be auto-detected from this file)
+            if not self.allow_insecure and self._explicit_device_id:
                 self._validate_device_id_from_creds(creds)
             return creds
         except json.JSONDecodeError:
@@ -927,6 +936,23 @@ class DeviceRuntime:
                 self._logger.error("Event queue still full after drop; event lost: %s", event)
 
 
+    def _build_registration_params(self) -> dict:
+        """Build the registration payload shared by _register and requestRegistration."""
+        caps = self._driver.capabilities if self._driver else self.capabilities
+        params = {
+            "device_id": self.device_id,
+            "device_ttl": self.ttl,
+            "capabilities": caps.model_dump(),
+            "identity": self.identity,
+            "status": {
+                **self.status,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            },
+        }
+        if hasattr(self, '_attestation_token') and self._attestation_token:
+            params["attestation"] = self._attestation_token
+        return params
+
     async def _register(self, force: bool = False) -> None:
         """Register the device with the Device Connect registry, retrying on failure."""
 
@@ -947,18 +973,7 @@ class DeviceRuntime:
             delay = 1 # initial retry delay in seconds
             while True:
                 req_id = f"{self.device_id}-{int(time.time()*1000)}"
-                # Get capabilities dynamically from driver if available (supports runtime capability loading)
-                caps = self._driver.capabilities if self._driver else self.capabilities
-                params = {
-                    "device_id": self.device_id,
-                    "device_ttl": self.ttl,
-                    "capabilities": caps.model_dump(),
-                    "identity": self.identity,
-                    "status": {
-                        **self.status,
-                        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    },
-                }
+                params = self._build_registration_params()
                 try:
                     self._logger.info("Registering device")
                     response_data = await self.messaging.request(
@@ -997,8 +1012,10 @@ class DeviceRuntime:
                 try:
                     if self.messaging.is_closed:
                         await self._connect_messaging()
+                    reconnect_delay = 1
                     while not self.messaging.is_connected:
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, 30)
                 except Exception as e:
                     self._logger.error("Heartbeat reconnect failed: %s, will retry next interval", e)
                     await asyncio.sleep(self._heartbeat_interval)
@@ -1007,7 +1024,7 @@ class DeviceRuntime:
                     try:
                         await self._register(force=True)
                     except Exception as e:
-                        self._logger.error("Device re-registration failed after reconnect: %s", e)
+                        self._logger.error("Re-registration after reconnect failed: %s", e)
 
             # Send heartbeat
             try:
@@ -1043,6 +1060,15 @@ class DeviceRuntime:
                     return
 
                 params_dict = payload.get("params", {})
+
+                # Built-in runtime method: registry pulls registration info
+                if method == "requestRegistration":
+                    if reply_subject:
+                        result = self._build_registration_params()
+                        await self.messaging.publish(
+                            reply_subject, build_rpc_response(payload["id"], result)
+                        )
+                    return
 
                 # Extract trace metadata for cross-device RPC correlation
                 dc_meta = params_dict.pop("_dc_meta", {})
@@ -1155,6 +1181,7 @@ class DeviceRuntime:
             self._logger.info(f"{self._messaging_backend.upper()} reconnected")
             if not self._d2d_mode:
                 self._track_task(asyncio.create_task(self._register(force=True)))
+            self._track_task(asyncio.create_task(self._resubscribe_after_reconnect()))
             await self._notify_conn_state(True)
 
         # Create messaging client based on backend
@@ -1585,6 +1612,48 @@ class DeviceRuntime:
 
         self._logger.debug("Tearing down DeviceDriver subscriptions")
         await self._driver.teardown_subscriptions()
+
+    async def _resubscribe_after_reconnect(self) -> None:
+        """Re-establish event subscriptions after a messaging reconnect.
+
+        After extended disconnections (e.g. laptop sleep), auto-resubscribe
+        may not restore all subscriptions.  This explicitly tears down and
+        recreates ``@on`` event subscriptions with exponential backoff.
+
+        Uses ``_subscription_lock`` to prevent concurrent invocations
+        from rapid reconnects.
+        """
+        if not self._subscription_lock.acquire_nowait():
+            self._logger.debug("Subscription re-establishment already in progress, skipping")
+            return
+
+        try:
+            delay = 1
+            while True:
+                try:
+                    if not self.messaging.is_connected:
+                        await asyncio.sleep(1)
+                        continue
+
+                    if self._driver is not None:
+                        try:
+                            from device_connect_edge.drivers.base import DeviceDriver
+                            if isinstance(self._driver, DeviceDriver):
+                                self._logger.info("Re-establishing event subscriptions after reconnect")
+                                await self._driver.teardown_subscriptions()
+                                await self._driver.setup_subscriptions()
+                                self._logger.info("Event subscriptions re-established")
+                        except ImportError:
+                            pass
+                    break
+                except Exception as e:
+                    self._logger.warning(
+                        "Subscription re-establishment failed: %s; retrying in %ss", e, delay
+                    )
+                    await asyncio.sleep(delay)
+                    delay = min(delay * 2, 30)
+        finally:
+            self._subscription_lock.release()
 
     def _handle_registration_reply(self, data: bytes) -> None:
         """Parse registry response and update local registration metadata."""

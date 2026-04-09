@@ -46,6 +46,9 @@ NATS_URL = os.getenv("NATS_URL", "")
 _last_seen: dict[str, float] = {}
 _device_ttl: dict[str, int] = {}
 
+_DEFAULT_TTL = 15                # Fallback TTL when device doesn't report one
+_PULL_REGISTRATION_TIMEOUT = 5   # Timeout for requestRegistration RPC
+
 
 def _resolve_tenants() -> List[str]:
     """Resolve the list of tenants to handle.
@@ -259,6 +262,42 @@ class RegisterParams(BaseModel):
     status: DeviceStatus              # location, busy_score, availability
 
 
+# ---------- Shared registration helper ---------- #
+
+async def _do_register(
+    tenant: str,
+    device_id: str,
+    payload: dict,
+    ttl: int,
+    messaging: MessagingClient,
+) -> str:
+    """Store device in etcd, update tracking dicts, emit device/online event.
+
+    Returns the generated ``registration_id``.
+    """
+    registration_id = str(uuid.uuid4())
+    payload.setdefault("registry", {})
+    payload["registry"].update({
+        "device_registration_id": registration_id,
+        "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    await asyncio.to_thread(registry.register, tenant, device_id, payload, ttl)
+    _device_ttl[f"{tenant}/{device_id}"] = ttl
+    _last_seen[f"{tenant}/{device_id}"] = time.time()
+    online_event = json.dumps({
+        "jsonrpc": "2.0",
+        "method": "device/online",
+        "params": {
+            "device_id": device_id,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    }).encode()
+    await messaging.publish(
+        f"device-connect.{tenant}.device.online", online_event,
+    )
+    return registration_id
+
+
 # ---------- Per-tenant handler factories ---------- #
 
 def _make_register_handler(tenant: str, messaging: MessagingClient):
@@ -278,39 +317,16 @@ def _make_register_handler(tenant: str, messaging: MessagingClient):
                 )
                 return
             params = RegisterParams(**payload["params"])
-            registration_id = str(uuid.uuid4())
             registry_payload = params.model_dump()
-            registry_payload.setdefault("registry", {})
-            registry_payload["registry"].update(
-                {
-                    "device_registration_id": registration_id,
-                    "registered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                }
+            registration_id = await _do_register(
+                tenant, params.device_id, registry_payload, params.device_ttl, messaging,
             )
-
-            ttl = params.device_ttl
-            await asyncio.to_thread(registry.register, tenant, params.device_id, registry_payload, ttl)
-            _device_ttl[f"{tenant}/{params.device_id}"] = ttl
-            _last_seen[f"{tenant}/{params.device_id}"] = time.time()
             response = {
                 "status": "registered",
                 "device_registration_id": registration_id,
             }
             await messaging.publish(reply, build_rpc_response(payload.get("id"), response))
-            # emit a device online event
-            event_payload = {
-                "jsonrpc": "2.0",
-                "method": "device/online",
-                "params": {
-                    "device_id": params.device_id,
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                }
-            }
-            await messaging.publish(
-                f"device-connect.{tenant}.device.online",
-                json.dumps(event_payload).encode()
-            )
-            logger.info("[device-registry] registered %s (tenant=%s) ttl=%s", params.device_id, tenant, ttl)
+            logger.info("[device-registry] registered %s (tenant=%s) ttl=%s", params.device_id, tenant, params.device_ttl)
         except Exception as ex:
             error_code = -32602 if isinstance(ex, (json.JSONDecodeError, ValueError)) else -32603
             await messaging.publish(
@@ -415,7 +431,7 @@ def _make_list_handler(
     return rpc_discovery
 
 
-def _make_hb_handler(tenant: str):
+def _make_hb_handler(tenant: str, messaging=None):
     """Create a heartbeat handler bound to ``tenant``."""
 
     async def hb_handler(data_bytes: bytes, reply: Optional[str]):
@@ -425,11 +441,49 @@ def _make_hb_handler(tenant: str):
             data = json.loads(data_bytes)
             device_id = data.pop("device_id")
             # Update last_seen immediately (before blocking etcd calls)
-            _last_seen[f"{tenant}/{device_id}"] = time.time()
-            # Run blocking etcd calls in a thread to avoid blocking the event loop
-            await asyncio.to_thread(registry.refresh, tenant, device_id)
+            compound_key = f"{tenant}/{device_id}"
+            _last_seen[compound_key] = time.time()
+            # Pass TTL so refresh() can recover a lost lease after service restart
+            ttl = _device_ttl.get(compound_key)
+            await asyncio.to_thread(registry.refresh, tenant, device_id, ttl)
+            data.pop("ts", None)  # transient heartbeat timestamp; tracked in _last_seen
             await asyncio.to_thread(registry.update_status, tenant, device_id, data)
             logger.debug("[device-registry] heartbeat from %s (tenant=%s)", device_id, tenant)
+
+            # If the device has no lease (expired or lost after restart),
+            # pull full registration info from the device and re-register it.
+            if not registry.has_lease(tenant, device_id) and messaging is not None:
+                logger.info(
+                    "[device-registry] no lease for %s (tenant=%s), pulling registration",
+                    device_id, tenant,
+                )
+                try:
+                    cmd_subject = f"device-connect.{tenant}.{device_id}.cmd"
+                    req = json.dumps({
+                        "jsonrpc": "2.0",
+                        "id": f"re-reg-{device_id}-{int(time.time()*1000)}",
+                        "method": "requestRegistration",
+                        "params": {},
+                    }).encode()
+                    resp_data = await messaging.request(
+                        cmd_subject, req, timeout=_PULL_REGISTRATION_TIMEOUT,
+                    )
+                    resp = json.loads(resp_data)
+                    result = resp.get("result", {})
+                    # Validate through the same schema as registerDevice
+                    params = RegisterParams(**result)
+                    reg_payload = params.model_dump()
+                    reg_ttl = params.device_ttl or _DEFAULT_TTL
+                    await _do_register(tenant, device_id, reg_payload, reg_ttl, messaging)
+                    logger.info(
+                        "[device-registry] re-registered %s via pull (tenant=%s, ttl=%s)",
+                        device_id, tenant, reg_ttl,
+                    )
+                except Exception as pull_err:
+                    logger.warning(
+                        "[device-registry] failed to pull registration from %s: %s",
+                        device_id, pull_err,
+                    )
         except Exception as e:
             logger.exception("[device-registry] heartbeat error for %s: %s", device_id, e)
 
@@ -460,23 +514,63 @@ async def main() -> None:
     # ACL enforcement (permissive by default — no ACL = visible to all)
     acl_manager = ACLManager()
 
-    # Subscribe per-tenant
-    for tenant in tenants:
-        await messaging.subscribe(
-            f"device-connect.{tenant}.registry",
-            queue="registry",
-            callback=_make_register_handler(tenant, messaging),
-        )
-        await messaging.subscribe(
-            f"device-connect.{tenant}.discovery",
-            queue="orch",
-            callback=_make_list_handler(tenant, messaging, acl_manager),
-        )
-        await messaging.subscribe(
-            f"device-connect.{tenant}.*.heartbeat",
-            callback=_make_hb_handler(tenant),
-        )
-        logger.info("[device-registry] listening on tenant=%s", tenant)
+    # Subscribe using wildcard subjects so new tenants work without restart.
+    # The registry credentials are privileged (device-connect.>), so this is safe.
+    # The tenant is extracted from the subject at runtime.
+
+    def _extract_tenant(subject: str) -> str:
+        """Extract tenant from subject like 'device-connect.{tenant}.registry'."""
+        parts = subject.split(".")
+        return parts[1] if len(parts) >= 3 else "default"
+
+    # Cache per-tenant handlers to avoid re-creating closures on every message
+    _register_handlers: dict[str, Any] = {}
+    _discovery_handlers: dict[str, Any] = {}
+    _heartbeat_handlers: dict[str, Any] = {}
+
+    def _get_register_handler(tenant: str):
+        if tenant not in _register_handlers:
+            _register_handlers[tenant] = _make_register_handler(tenant, messaging)
+        return _register_handlers[tenant]
+
+    def _get_discovery_handler(tenant: str):
+        if tenant not in _discovery_handlers:
+            _discovery_handlers[tenant] = _make_list_handler(tenant, messaging, acl_manager)
+        return _discovery_handlers[tenant]
+
+    def _get_heartbeat_handler(tenant: str):
+        if tenant not in _heartbeat_handlers:
+            _heartbeat_handlers[tenant] = _make_hb_handler(tenant, messaging)
+        return _heartbeat_handlers[tenant]
+
+    # subscribe_with_subject passes (data, subject, reply) to the callback
+    async def _wildcard_register(data: bytes, subject: str, reply):
+        tenant = _extract_tenant(subject)
+        await _get_register_handler(tenant)(data, reply)
+
+    async def _wildcard_discovery(data: bytes, subject: str, reply):
+        tenant = _extract_tenant(subject)
+        await _get_discovery_handler(tenant)(data, reply)
+
+    async def _wildcard_heartbeat(data: bytes, subject: str, reply):
+        tenant = _extract_tenant(subject)
+        await _get_heartbeat_handler(tenant)(data, reply)
+
+    await messaging.subscribe_with_subject(
+        "device-connect.*.registry",
+        queue="registry",
+        callback=_wildcard_register,
+    )
+    await messaging.subscribe_with_subject(
+        "device-connect.*.discovery",
+        queue="orch",
+        callback=_wildcard_discovery,
+    )
+    await messaging.subscribe_with_subject(
+        "device-connect.*.*.heartbeat",
+        callback=_wildcard_heartbeat,
+    )
+    logger.info("[device-registry] listening on all tenants (wildcard)")
 
     # ---- Watch for device deletes ----
     async def offline_monitor():

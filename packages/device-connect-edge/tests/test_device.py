@@ -530,3 +530,90 @@ class TestDeviceRuntimeDeparture:
         assert payload["departing"] is True
         assert payload["device_id"] == "cam-01"
         assert payload["tenant"] == "lab"
+
+
+# ── _build_registration_params ──────────────────────────────────
+
+class TestBuildRegistrationParams:
+    def test_returns_expected_structure(self):
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="sensor-42",
+            tenant="lab",
+            messaging_urls=["nats://localhost:4222"],
+        )
+        rt._attestation_token = "tok-abc-123"
+
+        params = rt._build_registration_params()
+
+        assert params["device_id"] == "sensor-42"
+        assert params["device_ttl"] == rt.ttl
+        assert "functions" in params["capabilities"]
+        assert "events" in params["capabilities"]
+        assert params["identity"]["device_type"] == "stub"
+        assert params["identity"]["manufacturer"] == "Test"
+        assert "ts" in params["status"]
+        assert params["status"]["location"] == "lab"
+        assert params["attestation"] == "tok-abc-123"
+
+    def test_no_attestation_when_unset(self):
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="sensor-43",
+            messaging_urls=["nats://localhost:4222"],
+        )
+
+        params = rt._build_registration_params()
+
+        assert "attestation" not in params
+
+
+# ── _cmd_subscription requestRegistration ───────────────────────
+
+class TestCmdSubscriptionRequestRegistration:
+    @pytest.mark.asyncio
+    async def test_request_registration_returns_payload(self):
+        """requestRegistration built-in RPC publishes registration params to reply_subject."""
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="cam-99",
+            tenant="test",
+            messaging_urls=["nats://localhost:4222"],
+        )
+        rt.messaging = AsyncMock()
+
+        # Build a requestRegistration JSON-RPC message
+        rpc_msg = json.dumps({
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "method": "requestRegistration",
+            "params": {},
+        }).encode()
+
+        # Subscribe captures the on_msg callback
+        rt.messaging.subscribe = AsyncMock()
+        await rt._cmd_subscription()
+        on_msg = rt.messaging.subscribe.call_args[1]["callback"]
+
+        # Invoke the callback with a reply_subject
+        await on_msg(rpc_msg, reply_subject="reply.inbox.1")
+
+        # Verify messaging.publish was called with the reply_subject
+        rt.messaging.publish.assert_called_once()
+        call_args = rt.messaging.publish.call_args[0]
+        assert call_args[0] == "reply.inbox.1"
+
+        # The response should be a valid JSON-RPC response with registration params
+        response = json.loads(call_args[1])
+        assert response["jsonrpc"] == "2.0"
+        assert response["id"] == "req-1"
+        result = response["result"]
+        assert result["device_id"] == "cam-99"
+        assert result["device_ttl"] == rt.ttl
+        assert "capabilities" in result
+        assert "identity" in result
+        assert "status" in result
+        assert "ts" in result["status"]

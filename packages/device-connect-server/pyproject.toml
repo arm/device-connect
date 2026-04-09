@@ -45,6 +45,14 @@ telemetry = [
 state = ["etcd3gw>=2.4.0,<3"]
 logging = ["pymongo"]
 mqtt = ["aiomqtt"]
+portal = [
+    "aiohttp>=3.9.0",
+    "aiohttp-jinja2>=1.6",
+    "Jinja2>=3.1",
+    "bcrypt>=4.0.0",
+    "etcd3gw>=2.4.0,<3",
+    "aiomqtt",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -52,12 +60,13 @@ dev = [
     "device-connect-server[security]",
 ]
 all = [
-    "device-connect-server[security,telemetry,state,logging,mqtt,dev]",
+    "device-connect-server[security,telemetry,state,logging,mqtt,portal,dev]",
 ]
 
 [project.scripts]
 devctl = "device_connect_server.devctl.cli:main"
 statectl = "device_connect_server.statectl.cli:main"
+dc-portal = "device_connect_server.portal.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/arm/device-connect"
@@ -70,3 +79,6 @@ Security = "https://github.com/arm/device-connect?tab=security-ov-file"
 
 [tool.setuptools.packages.find]
 include = ["device_connect_server*"]
+
+[tool.setuptools.package-data]
+"device_connect_server.portal" = ["templates/**/*.html", "static/**/*"]

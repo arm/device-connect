@@ -7,6 +7,7 @@ Server-side runtime for the Device Connect framework. Extends [device-connect-ed
 - [Where This Fits](#where-this-fits)
 - [Install](#install)
 - [Quick Start](#quick-start)
+- [Multi-Tenant Deployment](#multi-tenant-deployment)
 - [CLI Tools](#cli-tools)
 - [Device Commissioning Flow](#device-commissioning-flow)
 - [Testing](#testing)
@@ -240,6 +241,28 @@ rm -f security_infra/*.pem security_infra/*.srl
 
 See [device-connect-edge — Credentials](../device-connect-edge/README.md#credentials) for the credentials file format.
 
+## Multi-Tenant Deployment
+
+For deployments where multiple groups share the same infrastructure (workshops, labs, multi-team environments), you can enforce per-tenant isolation at the NATS broker level using JWT credentials. Each tenant's devices get JWT tokens restricted to their own namespace, making cross-tenant access cryptographically impossible.
+
+```bash
+cd security_infra
+
+# 1. Bootstrap (once)
+./setup_deployment.sh --nats-host dc.example.com
+
+# 2. Create tenants with device tokens
+./manage_tenants.sh create-batch alpha,beta,gamma --devices 5 --nats-host dc.example.com
+
+# 3. Start infrastructure
+DC_TENANTS=alpha,beta,gamma docker compose -f ../infra/docker-compose-multitenant-nats.yml up -d
+
+# 4. Verify isolation
+./verify_tenants.sh --nats-host dc.example.com
+```
+
+Each tenant gets a distributable credential bundle (zip) in `security_infra/tenant-bundles/`. See the full guide in [security_infra/README.md](security_infra/README.md).
+
 ## CLI Tools
 
 ```bash
@@ -279,17 +302,20 @@ Using `camera-001` as an example:
    - Device saves credentials and connects to NATS
 4. **Operate** (every boot): device loads credentials from disk, connects, registers, starts heartbeats
 
-Each device becomes a user under the shared DEVICE-CONNECT account — all users in the same account can communicate over `device-connect.*` subjects:
+Each device becomes a user under the shared DEVICE_CONNECT account. By default all users can communicate over `device-connect.*` subjects. Use `--tenant` to restrict a user's JWT to a specific tenant namespace:
 
 ```
-Operator: dc-operator              (trust root)
-  └─ Account: DEVICE-CONNECT       (shared namespace)
-       ├─ User: registry            (registry service)
-       ├─ User: devctl              (CLI tools)
-       ├─ User: orchestrator        (server coordination)
-       ├─ User: camera-001          (per-device, via --user)
-       └─ User: my-agent            (AI agent, via --user)
+Operator: device-connect-operator   (trust root)
+  └─ Account: DEVICE_CONNECT        (shared namespace)
+       ├─ User: registry             (privileged — device-connect.>)
+       ├─ User: devctl               (privileged — device-connect.>)
+       ├─ User: orchestrator         (privileged — device-connect.>)
+       ├─ User: camera-001           (--user, default tenant)
+       ├─ User: alpha-device-001     (--tenant alpha — device-connect.alpha.>)
+       └─ User: beta-device-001      (--tenant beta — device-connect.beta.>)
 ```
+
+For multi-tenant deployments (workshops, labs), see [Multi-Tenant Deployment](#multi-tenant-deployment) and the full guide in [security_infra/README.md](security_infra/README.md).
 
 See [device-connect-edge — Credentials](../device-connect-edge/README.md#credentials) for how devices consume credentials at runtime.
 
