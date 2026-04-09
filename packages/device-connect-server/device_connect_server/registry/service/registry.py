@@ -203,14 +203,21 @@ class DeviceRegistry:
 
         Merges the new status with existing status to preserve fields
         like battery and online that aren't included in heartbeats.
+        Skips the write if the merged result would be identical,
+        avoiding unnecessary etcd revisions.
         """
+        if not status:
+            return  # nothing to update
         key = self._key(tenant, device_id)
         results = self.client.get(key)
         if not results:
             return  # unknown device, ignore
         doc = json.loads(results[0])
-        # Merge new status with existing status (new values override)
         existing_status = doc.get("status", {})
+        # Skip write if all incoming fields already match
+        if all(existing_status.get(k) == v for k, v in status.items()):
+            return
+        # Merge new status with existing status (new values override)
         existing_status.update(status)
         doc["status"] = existing_status
         lease = self.leases.get(self._lease_key(tenant, device_id))

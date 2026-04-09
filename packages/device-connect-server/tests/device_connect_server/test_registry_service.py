@@ -334,6 +334,50 @@ class TestGetDevice:
         assert stored["status"]["online"] is False
         assert "lease" not in put_call[1] or put_call[1].get("lease") is None
 
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_update_status_skips_write_when_unchanged(self, mock_etcd3gw):
+        """Heartbeat status identical to stored status should not write."""
+        mock_client = _make_mock_etcd_client()
+        existing = {"device_id": "cam-001", "status": {"online": True, "battery": 80}}
+        mock_client.get.return_value = [json.dumps(existing)]
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        reg.update_status("default", "cam-001", {"online": True})
+
+        mock_client.put.assert_not_called()
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_update_status_skips_empty_status(self, mock_etcd3gw):
+        """Empty status dict should short-circuit without reading etcd."""
+        mock_client = _make_mock_etcd_client()
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        reg.update_status("default", "cam-001", {})
+
+        mock_client.get.assert_not_called()
+        mock_client.put.assert_not_called()
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_update_status_writes_new_field(self, mock_etcd3gw):
+        """A new field not in existing status should trigger a write."""
+        mock_client = _make_mock_etcd_client()
+        existing = {"device_id": "cam-001", "status": {"online": True}}
+        mock_client.get.return_value = [json.dumps(existing)]
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        mock_lease = MagicMock()
+        reg.leases["default/cam-001"] = mock_lease
+
+        reg.update_status("default", "cam-001", {"battery": 80})
+
+        put_call = mock_client.put.call_args
+        stored = json.loads(put_call[0][1])
+        assert stored["status"]["online"] is True
+        assert stored["status"]["battery"] == 80
+
 
 # ---------------------------------------------------------------------------
 # TestRefreshHeartbeat

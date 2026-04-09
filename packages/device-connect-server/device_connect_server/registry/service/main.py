@@ -446,6 +446,7 @@ def _make_hb_handler(tenant: str, messaging=None):
             # Pass TTL so refresh() can recover a lost lease after service restart
             ttl = _device_ttl.get(compound_key)
             await asyncio.to_thread(registry.refresh, tenant, device_id, ttl)
+            data.pop("ts", None)  # transient heartbeat timestamp; tracked in _last_seen
             await asyncio.to_thread(registry.update_status, tenant, device_id, data)
             logger.debug("[device-registry] heartbeat from %s (tenant=%s)", device_id, tenant)
 

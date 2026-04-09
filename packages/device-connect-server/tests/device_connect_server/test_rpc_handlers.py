@@ -544,6 +544,25 @@ class TestHeartbeatHandler:
         assert status_data["battery"] == 80
 
     @pytest.mark.asyncio
+    async def test_heartbeat_strips_ts_before_update_status(self, mock_registry):
+        handler = _make_hb_handler(TENANT)
+        data = json.dumps({"device_id": "cam-001", "ts": 1712345678.123}).encode()
+        await handler(data, None)
+
+        # ts should be stripped; update_status receives empty dict
+        mock_registry.update_status.assert_called_once_with(TENANT, "cam-001", {})
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_preserves_provider_fields_after_ts_strip(self, mock_registry):
+        handler = _make_hb_handler(TENANT)
+        data = json.dumps({"device_id": "cam-001", "ts": 1712345678.123, "battery": 95}).encode()
+        await handler(data, None)
+
+        status_data = mock_registry.update_status.call_args[0][2]
+        assert "ts" not in status_data
+        assert status_data["battery"] == 95
+
+    @pytest.mark.asyncio
     async def test_heartbeat_updates_last_seen(self, mock_registry):
         handler = _make_hb_handler(TENANT)
         before = time.time()

@@ -27,6 +27,9 @@ services:
       ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
       ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
       ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_AUTO_COMPACTION_RETENTION: "1"
+      ETCD_AUTO_COMPACTION_MODE: periodic
+      ETCD_QUOTA_BACKEND_BYTES: "8589934592"
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 5s

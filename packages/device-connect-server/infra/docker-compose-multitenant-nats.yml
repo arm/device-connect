@@ -47,6 +47,9 @@ services:
       ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
       ETCD_INITIAL_CLUSTER_STATE: new
       ETCD_INITIAL_CLUSTER_TOKEN: dc-cluster
+      ETCD_AUTO_COMPACTION_RETENTION: "1"
+      ETCD_AUTO_COMPACTION_MODE: periodic
+      ETCD_QUOTA_BACKEND_BYTES: "8589934592"
     volumes:
       - etcd-data:/etcd-data
     healthcheck:
