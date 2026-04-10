@@ -7,6 +7,16 @@ build/
 *.egg
 .venv/
 .vscode/
+.DS_Store
 .env
 .pytest_cache/
 .mypy_cache/
+
+# Fuzz testing artifacts
+crash-*
+timeout-*
+htmlcov/
+.hypothesis/
+atheris-report.md
+fuzz-hypothesis-results.xml
+**/fuzz/findings/

@@ -1,0 +1,1 @@
+{"device_id":"cam-001","tenant":"default","nats":{"urls":["tls://nats:4222"],"jwt":"eyJ0eXAiOiJKV1Qi.test","nkey_seed":"SUAM2B7EA","tls":{"ca_file":"/certs/ca.pem"}}}

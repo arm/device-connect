@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"doSomething","id":"req-003","params":{"_dc_meta":{"source_device":"sensor-01","traceparent":"00-abcdef1234567890abcdef1234567890-1234567890abcdef-01","tracestate":"congo=t61rcWkgMzE"},"value":42}}

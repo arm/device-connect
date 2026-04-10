@@ -1,0 +1,1 @@
+{"description":"Test device","functions":[{"name":"getStatus","description":"Get status","parameters":{"type":"object","properties":{},"required":[]},"tags":[]}],"events":[{"name":"event/alert","description":"Alert event","tags":["alert"]}]}

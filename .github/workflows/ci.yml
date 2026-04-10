@@ -32,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev]"
       - name: Run unit tests
-        run: pytest packages/device-connect-edge/tests/ -v --timeout=30 --tb=short
+        run: pytest packages/device-connect-edge/tests/ -v --timeout=30 --tb=short --ignore=packages/device-connect-edge/tests/fuzz
 
   unit-tests-server:
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
           pip install --only-binary eclipse-zenoh -e packages/device-connect-edge
           pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[all]"
       - name: Run unit tests
-        run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short
+        run: pytest packages/device-connect-server/tests/ -v --timeout=30 --tb=short --ignore=packages/device-connect-server/tests/fuzz
 
   unit-tests-agent-tools:
     runs-on: ubuntu-latest
@@ -85,6 +85,73 @@ jobs:
           ruff check packages/device-connect-server/
           ruff check packages/device-connect-agent-tools/
           ruff check tests/
+
+  # ── Fuzz tests (all packages, single report) ────────────────────
+  fuzz-tests-hypothesis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install all packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev,fuzz]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[dev,fuzz]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[dev,fuzz]"
+      - name: Run hypothesis fuzz tests (all packages)
+        env:
+          HYPOTHESIS_PROFILE: ci
+        run: |
+          pytest \
+            packages/device-connect-edge/tests/fuzz/test_fuzz_*.py \
+            packages/device-connect-server/tests/fuzz/test_fuzz_*.py \
+            packages/device-connect-agent-tools/tests/fuzz/test_fuzz_*.py \
+            -v --timeout=120 --tb=short --junitxml=fuzz-hypothesis-results.xml
+      - name: Publish hypothesis findings summary
+        if: always()
+        run: python packages/device-connect-edge/tests/fuzz/report_hypothesis.py fuzz-hypothesis-results.xml >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload hypothesis report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-hypothesis-results
+          path: fuzz-hypothesis-results.xml
+          retention-days: 30
+
+  fuzz-tests-atheris:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      - name: Install all packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-edge[dev,fuzz]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-server[dev,fuzz]"
+          pip install --only-binary eclipse-zenoh -e "packages/device-connect-agent-tools[dev,fuzz]"
+          pip install atheris
+      - name: Run atheris fuzz targets (all packages)
+        run: python packages/device-connect-edge/tests/fuzz/run_atheris.py --iterations=50000
+      - name: Publish atheris findings summary
+        if: always()
+        run: cat atheris-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload atheris crashes and report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-atheris-results
+          path: |
+            crash-*
+            atheris-report.md
+          retention-days: 30
 
   # ── Tier 1: Integration tests (no LLM) ────────────────────────
   integration-tests:

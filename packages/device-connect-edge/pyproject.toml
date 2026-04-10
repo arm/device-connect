@@ -46,6 +46,10 @@ dev = [
     "pytest-timeout>=2.0",
     "device-connect-edge[telemetry]",
 ]
+fuzz = [
+    "hypothesis>=6.0",
+    "coverage>=7.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/arm/device-connect"

@@ -1,0 +1,53 @@
+# Fuzz Testing for Device Connect Server
+
+Fuzz tests for the server package using [Hypothesis](https://hypothesis.readthedocs.io/) (property-based, pytest-integrated) and [Atheris](https://github.com/google/atheris) (coverage-guided, libFuzzer-based).
+
+For full setup instructions (installing atheris on macOS/Linux, deep fuzzing, CI integration), see the [edge fuzz README](../../device-connect-edge/tests/fuzz/README.md).
+
+## Fuzz Targets
+
+| Target | Hypothesis | Atheris | What it tests |
+|--------|-----------|---------|---------------|
+| Credentials Loader | `test_fuzz_credentials.py` | `fuzz_credentials.py` | `CredentialsLoader._parse_json_format()` and `_parse_nats_creds_format()` — JSON and regex-based credential parsing |
+| PIN Parsing | `test_fuzz_commissioning.py` | `fuzz_commissioning.py` | `parse_pin()` and `format_pin()` — PIN string manipulation and roundtrip |
+
+## Running Locally
+
+### Hypothesis (pytest)
+
+```bash
+cd packages/device-connect-server
+pip install -e ".[dev,fuzz]"
+
+# Run all fuzz tests — findings shown in terminal output
+pytest tests/fuzz/test_fuzz_*.py -v
+
+# More examples for deeper coverage
+HYPOTHESIS_PROFILE=ci pytest tests/fuzz/test_fuzz_*.py -v
+```
+
+### Atheris
+
+```bash
+pip install atheris  # Linux: works directly. macOS: see edge README for LLVM setup.
+
+# Run individual targets directly
+cd packages/device-connect-server
+python tests/fuzz/fuzz_credentials.py tests/fuzz/corpus/credentials_json/ -max_total_time=300
+python tests/fuzz/fuzz_commissioning.py tests/fuzz/corpus/commissioning/ -max_total_time=300
+
+# Deep fuzzing (1 hour per target, run indefinitely with no flags)
+python tests/fuzz/fuzz_credentials.py tests/fuzz/corpus/credentials_json/ -max_total_time=3600
+
+# Run all targets across ALL packages (from repo root) — writes atheris-report.md
+python packages/device-connect-edge/tests/fuzz/run_atheris.py --iterations=50000
+```
+
+### Where to find results
+
+| Tool | Where |
+|------|-------|
+| Hypothesis | Terminal output from pytest |
+| Atheris (unified runner) | `atheris-report.md` at repo root |
+| Atheris (direct) | `crash-<hash>` files in current directory |
+| CI | GitHub Actions job summary (scroll down on run page) |

@@ -139,6 +139,9 @@ class MessagingConfig:
             with open(path, "r") as f:
                 data = json.load(f)
 
+            if not isinstance(data, dict):
+                return {}
+
             # Extract NATS credentials if nested
             if "nats" in data:
                 nats_config = data["nats"]
