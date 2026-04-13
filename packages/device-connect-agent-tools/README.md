@@ -1,6 +1,6 @@
 # device-connect-agent-tools
 
-Framework-agnostic tools for Device Connect — discover and invoke devices from any AI agent. Plain Python functions at the core, with adapters for [Strands](#strands-agent), [LangChain](#langchain--langgraph), and [MCP](#mcp-bridge).
+Framework-agnostic tools for Device Connect — discover and invoke devices from any AI agent. Plain Python functions at the core, with adapters for [Strands](#strands-agent), [LangChain](#langchain--langgraph), [Claude Agent SDK](#claude-agent-sdk), and [MCP](#mcp-bridge).
 
 ## Contents
 
@@ -15,6 +15,7 @@ Framework-agnostic tools for Device Connect — discover and invoke devices from
     - [Plain Python (no framework)](#plain-python-no-framework)
     - [Strands Agent](#strands-agent)
     - [LangChain / LangGraph](#langchain--langgraph)
+    - [Claude Agent SDK](#claude-agent-sdk)
     - [MCP Bridge](#mcp-bridge)
   - [Connection](#connection)
     - [Auto-Discovery](#auto-discovery)
@@ -61,6 +62,7 @@ Optional extras:
 |-------|------|
 | `[strands]` | [Strands Agents](https://strandsagents.com) adapter |
 | `[langchain]` | [LangChain](https://python.langchain.com) adapter |
+| `[claude]` | [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python) adapter |
 | `[mcp]` | [FastMCP](https://github.com/jlowin/fastmcp) for MCP bridge |
 | `[dev]` | pytest + dev tools |
 
@@ -236,6 +238,31 @@ agent = create_react_agent(model, tools=[describe_fleet, list_devices, get_devic
 
 result = agent.invoke({"messages": [{"role": "user", "content": "What devices are online?"}]})
 print(result["messages"][-1].content)
+```
+
+### Claude Agent SDK
+
+```python
+import anyio
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock
+from device_connect_agent_tools import connect
+from device_connect_agent_tools.adapters.claude import create_device_connect_server
+
+async def main():
+    connect()
+    options = ClaudeAgentOptions(
+        model="claude-sonnet-4-6",
+        mcp_servers={"device_connect": create_device_connect_server()},
+    )
+    async with ClaudeSDKClient(options=options) as client:
+        await client.query("What devices are online?")
+        async for message in client.receive_response():
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        print(block.text)
+
+anyio.run(main)
 ```
 
 ### MCP Bridge
