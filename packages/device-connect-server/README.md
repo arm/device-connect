@@ -28,16 +28,13 @@ Server-side runtime for the Device Connect framework. Extends [device-connect-ed
 
 ## Install
 
-> Not yet on PyPI. Install from Git:
-
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "../device-connect-edge"
-pip install -e ".[all]"
+pip install device-connect-server
 ```
 
-This pulls in `device-connect-edge` automatically. Optional extras:
+Optional extras:
 
 | Extra | Adds |
 |-------|------|

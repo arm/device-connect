@@ -48,12 +48,10 @@ Framework-agnostic tools for Device Connect — discover and invoke devices from
 
 ## Install
 
-> Not yet on PyPI. Install from Git:
-
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "device-connect-agent-tools @ git+https://github.com/arm/device-connect.git#subdirectory=packages/device-connect-agent-tools"
+pip install device-connect-agent-tools
 ```
 
 Optional extras:
