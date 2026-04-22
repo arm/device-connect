@@ -1,0 +1,87 @@
+name: Release
+
+# Publishes all three packages to PyPI when a tag matching `v*` is pushed.
+# Uses PyPI Trusted Publishing (OIDC) — no stored tokens.
+#
+# Release procedure:
+#   1. Bump `version` in each packages/*/pyproject.toml (keep them in lockstep).
+#   2. Commit on main, then: git tag v0.2.3 && git push origin v0.2.3
+#   3. Approve the `pypi` environment deployment in the Actions UI.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to release (tag or SHA)'
+        required: true
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  build:
+    name: Build ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        package:
+          - device-connect-edge
+          - device-connect-server
+          - device-connect-agent-tools
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install build tools
+        run: python -m pip install --upgrade build twine
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version=$(grep -m1 '^version' "packages/${{ matrix.package }}/pyproject.toml" | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "Tag $tag_version != ${{ matrix.package }} version $pkg_version" >&2
+            exit 1
+          fi
+      - name: Build sdist + wheel
+        working-directory: packages/${{ matrix.package }}
+        run: python -m build
+      - name: Validate distributions
+        run: twine check packages/${{ matrix.package }}/dist/*
+      - uses: actions/upload-artifact@v5
+        with:
+          name: dist-${{ matrix.package }}
+          path: packages/${{ matrix.package }}/dist/
+          retention-days: 7
+
+  publish:
+    name: Publish ${{ matrix.package }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/${{ matrix.package }}/
+    permissions:
+      id-token: write  # OIDC token for Trusted Publishing
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - device-connect-edge
+          - device-connect-server
+          - device-connect-agent-tools
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true
