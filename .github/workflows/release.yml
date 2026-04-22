@@ -40,13 +40,20 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install build tools
         run: python -m pip install --upgrade build twine
-      - name: Verify tag matches package version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Resolve release version
+        id: ver
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
-          pkg_version=$(grep -m1 '^version' "packages/${{ matrix.package }}/pyproject.toml" | sed -E 's/.*"([^"]+)".*/\1/')
-          if [ "$tag_version" != "$pkg_version" ]; then
-            echo "Tag $tag_version != ${{ matrix.package }} version $pkg_version" >&2
+          ref="${{ inputs.ref || github.ref_name }}"
+          case "$ref" in
+            v*) echo "version=${ref#v}" >> "$GITHUB_OUTPUT" ;;
+            *)  echo "Refusing to release non-tag ref: $ref" >&2; exit 1 ;;
+          esac
+      - name: Verify ref version matches package version
+        run: |
+          ref_version="${{ steps.ver.outputs.version }}"
+          pkg_version=$(python -c "import tomllib,sys; print(tomllib.load(open(sys.argv[1],'rb'))['project']['version'])" "packages/${{ matrix.package }}/pyproject.toml")
+          if [ "$ref_version" != "$pkg_version" ]; then
+            echo "Ref $ref_version != ${{ matrix.package }} version $pkg_version" >&2
             exit 1
           fi
       - name: Build sdist + wheel
@@ -70,7 +77,7 @@ jobs:
     permissions:
       id-token: write  # OIDC token for Trusted Publishing
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         package:
           - device-connect-edge
