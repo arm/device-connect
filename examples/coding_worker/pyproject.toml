@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "device-connect-coding-worker"
+version = "0.1.0"
+description = "Generic coding-agent worker driver for Device Connect"
+requires-python = ">=3.9"
+dependencies = [
+    "device-connect-edge>=0.2.0",
+]
+
+[project.scripts]
+coding-worker = "coding_worker:main"
+
+[tool.setuptools]
+py-modules = ["coding_worker"]
