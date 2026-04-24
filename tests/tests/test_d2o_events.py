@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for D2O event emission.
 
 Tests that device_connect_edge drivers emit events that can be captured

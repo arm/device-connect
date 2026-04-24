@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for D2O (Device-to-Orchestrator) RPC routing.
 
 Tests that MockOrchestrator can route events to device functions,

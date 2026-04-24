@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Device spawning fixtures for cross-repo integration tests.
 
 Uses device_connect_edge (device-connect-edge) — validates the edge SDK package.

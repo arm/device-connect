@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for Strands Agent with device-connect-agent-tools.
 
 Tests that a Strands Agent can use Device Connect tools to discover and invoke devices.
