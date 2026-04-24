@@ -177,27 +177,48 @@ The user is unblocked. Codex stays subscribed to events in the background.
 
 ## 5. The event arrives on the server
 
-The user is mid-sentence on something else when the agent interrupts:
+### How event delivery really works through MCP today
+
+Device Connect itself has a subscribe API (`conn.subscribe_events(...)`),
+and the worker's `work_done` is a real publish on
+`device-connect.alice.pi-desk.event.work_done`. That part is solid.
+
+But the path from that event to a codex CLI session depends on the MCP
+bridge. The bridge registered with codex today exposes four tools
+(`describe_fleet`, `list_devices`, `get_device_functions`, `invoke_device`)
+and **no event-subscription tool**. That has two consequences worth
+being explicit about:
+
+1. **Codex does not get spontaneously interrupted.** There is no
+   "background push" into an idle chat session without an upstream
+   bridge change (see §6 below).
+2. **The bridge buffers events server-side regardless.** When codex
+   does call a device-side RPC or a future `pending_events` tool, it
+   can retrieve what happened in the meantime.
+
+So the accurate experience today is **pull, not push** — pleasantly
+pullable because the worker emits structured events that get buffered.
+
+### What the user actually sees
+
+A few minutes after dispatching, the user comes back to the agent:
 
 ```
-❯ meanwhile let me refactor the navbar compo─
+❯ any updates from pi-desk?
 
-[event] pi-desk::work_done {
-  "task_id": "T-42",
-  "branch": "feature/T-42",
-  "sha":    "a3f91c2",
-  "summary": "Fixed race in session teardown; added retry guard.
-              Test now stable across 200 runs."
-}
+codex › Let me check.
+[tool] invoke_device(pi-desk, "status", {"task_id": "T-42"})
+  → {"state": "done",
+     "repo": "shared-app",
+     "branch": "feature/T-42",
+     "sha": "a3f91c2",
+     "summary": "Fixed race in session teardown; added retry guard."}
 
-codex › Task T-42 finished on pi-desk. Branch feature/T-42 was pushed
-        — want me to fetch it and walk you through the diff, or keep
-        going with the navbar?
+codex › T-42 finished — feature/T-42 pushed (a3f91c2). Want me
+        to fetch it and walk through the diff?
 
-❯ fetch it and show me the diff
-```
+❯ yes
 
-```
 codex › [running] git fetch origin feature/T-42
 codex › [running] git log --oneline main..feature/T-42
    a3f91c2 fix(auth): guard against race in session teardown
@@ -208,7 +229,7 @@ codex › Here's the relevant hunk in src/auth/session.py:
    @@ -41,6 +41,11 @@ class Session:
         def teardown(self):
             self._db.close()
-   +        # T-42 fix: guard against early teardown racing with
+   +        # Guard against early teardown racing with
    +        # in-flight refresh tokens.
    +        with self._refresh_lock:
    +            if self._pending_refresh:
@@ -219,24 +240,136 @@ codex › Here's the relevant hunk in src/auth/session.py:
 ❯ looks good, merge it
 ```
 
+### Three delivery shapes (the bigger picture)
+
+| Pattern | What it does | Reality today |
+| --- | --- | --- |
+| **Pull** | Dispatcher calls `status(task_id)` when asked | Works on every MCP client. The default in this walkthrough. |
+| **Long-poll** | New bridge tool `wait_for_event(...)` blocks until an event arrives, stream via `notifications/progress` | Works everywhere once the bridge adds the tool. Parks one MCP slot for up to the timeout — dispatcher is busy during that window. |
+| **Resource push** | Bridge exposes `events://{device_id}/latest`, sends `notifications/resources/updated` | Non-blocking, truly push, but client support as of early 2026 is uneven. Best on Claude Desktop. |
+
+None of this is a limitation of Device Connect — it's a gap in what
+the MCP bridge wraps. Adding `wait_for_event` is a ~60-line change to
+`packages/device-connect-agent-tools/device_connect_agent_tools/mcp/bridge.py`;
+resource-push is a bigger change but well-defined. Both sit above the
+Device Connect fabric, not inside it.
+
+### Non-MCP dispatcher gets push for free
+
+If the dispatcher is a Python process using
+`device_connect_agent_tools` directly (Strands / LangChain / Claude
+SDK / a plain script), `conn.subscribe_events(device_id="pi-desk")`
+yields event batches live. The walkthrough's "agent interrupts you
+mid-sentence" UX is genuine there — it's the MCP bridge specifically
+that's pull-only today.
+
 ---
 
-## 6. The failure path
+## 6. The failure path — how the server learns what went wrong
 
-If codex on the Pi crashes, hits a sandbox limit, or produces no diff,
-the worker emits `work_failed` instead and the dispatcher hears about
-it the same way:
+This is the concern that matters in practice: you dispatched a task,
+something broke on the Pi, and the dispatcher codex needs enough
+information to decide between retry, escalate, or ask you. The worker
+gives you that in three layers.
+
+### Layer 1 — the `work_failed` event carries structured fields
 
 ```
-[event] pi-desk::work_failed {
-  "task_id": "T-43",
-  "error":   "agent exited 1: rate limited by upstream API"
-}
-
-codex › Task T-43 failed on pi-desk: "rate limited by upstream API".
-        Want me to retry in a few minutes, or send it to a different
-        worker?
+invoke_device(pi-desk, "status", {"task_id": "T-43"})
+  → {
+      "state":    "failed",
+      "category": "rate_limit",
+      "step":     "agent",
+      "repo":     "shared-app",
+      "error":    "agent exited 1: rate limited by upstream API"
+    }
 ```
+
+The same payload is in the `work_failed` emit. Fixed vocabulary:
+
+- `precondition`  — repo / base ref / config wrong before work started
+- `agent_error`   — coding CLI exited non-zero
+- `no_changes`    — agent produced zero diff
+- `conflict`      — git operation failed (push rejected, merge conflict)
+- `auth`          — credentials / permission
+- `rate_limit`    — upstream API throttled
+- `cancelled`     — dispatcher asked to cancel
+- `unknown`       — uncaught — check logs
+
+### Layer 2 — `log_tail` in the event
+
+The event also carries the last 20 lines of that task's combined
+output. Enough for the dispatcher to decide without a second round-trip
+in most cases:
+
+```
+"log_tail": [
+  "+ claude -p 'Investigate flaky test...'",
+  "claude: error: 429 Too Many Requests",
+  "claude: try again in 38s",
+  "+ exit 1"
+]
+```
+
+### Layer 3 — `get_logs` RPC for the full picture
+
+When the tail isn't enough, the dispatcher asks for more:
+
+```
+invoke_device(pi-desk, "get_logs", {"task_id": "T-43", "tail": 500})
+  → {"lines": [...], "truncated": true, "total": 1247}
+```
+
+Same RPC works on a running task — you can peek at what the Pi is
+doing right now:
+
+```
+❯ the task's been running 8 minutes with no event — what's happening?
+
+codex › [tool] invoke_device(pi-desk, "get_logs",
+                             {"task_id": "T-42", "tail": 100})
+  → {"lines": [
+       "codex: re-running test suite iteration 42/200",
+       "...all pass...",
+       "codex: confidence check — running 50 more iterations"
+     ], ...}
+
+codex › Still iterating on stability. No failures yet. Want me to
+        wait, or should I tell it to wrap up?
+```
+
+### How the dispatcher agent should react by category
+
+| Category | Sensible default action |
+| --- | --- |
+| `no_changes` | Surface the log tail and ask the user whether to re-prompt |
+| `rate_limit` | Wait N seconds and re-dispatch to the same worker |
+| `conflict` | Server-side rebase on fresh `main`, re-dispatch, or escalate if persistent |
+| `auth` | Stop — surface to user. The Pi needs credentials refreshed (git remote, API key, beads server) |
+| `precondition` | Check worker config; `list_repos()` to verify repo names, retry with corrected params |
+| `agent_error` | Pull the log tail, show the user, offer retry or bail |
+| `cancelled` | No action |
+| `unknown` | Pull `get_logs`, paste relevant excerpt to the user, ask |
+
+You don't need to program any of that into codex — you put it in the
+agent's system prompt or `AGENTS.md` and it follows the recipe. The
+structured fields are what make that possible; without them the agent
+is reduced to regex-matching an error string.
+
+### What the worker deliberately does *not* do
+
+- **It does not retry on its own.** Retry is a policy decision for the
+  dispatcher, which knows whether the task is idempotent, whether the
+  user is watching, and whether beads still has the task claimable.
+- **It does not leave half-built branches on the remote.** If `push`
+  fails, nothing was pushed. If push succeeded but `work_done` never
+  fired (worker crash mid-task), the branch is on the remote and the
+  `status()` RPC will report `"state": "unknown"` — dispatcher can
+  recover by `git fetch` and inspecting.
+- **It does not ask the user directly.** Two-way mid-task dialog
+  ("please give me your API key") would require a new RPC pair
+  (`need_input` / `resume`). For now the worker fails fast with
+  `category="auth"` and the dispatcher surfaces it.
 
 ---
 
@@ -246,10 +379,10 @@ codex › Task T-43 failed on pi-desk: "rate limited by upstream API".
 - The user never ran `scp` or wrote a wrapper script.
 - The user never typed `pi-desk.local` or an IP address — codex found
   the worker by capability (`device_type="coding-worker"`).
-- The user never polled a log file or refreshed `git fetch` to know if
-  the Pi was done — the `work_done` event woke them up.
-- The dispatcher CLI did not block. Long-running work happened on the
-  Pi while the user did other things.
+- The user never greped a log file on the Pi — the last 20 lines of
+  relevant output came with `work_failed`, and `get_logs` pulls more.
+- The dispatcher CLI never blocked on a long SSH session. Work ran on
+  the Pi; the user checked back when they were ready.
 
 ---
 

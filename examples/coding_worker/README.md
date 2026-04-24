@@ -242,11 +242,40 @@ Exposed by this worker:
 | --- | --- | --- |
 | `list_repos()` | `@rpc` | → `{repos: [{name, path}], default}` |
 | `dispatch(prompt, base_ref, task_id, repo)` | `@rpc` | → `{accepted, task_id, repo}` |
-| `status(task_id)` | `@rpc` | → `{state, repo?, branch?, sha?, summary?, error?}` |
+| `status(task_id)` | `@rpc` | → `{state, repo?, branch?, sha?, summary?, error?, category?, step?}` |
 | `cancel(task_id)` | `@rpc` | → `{cancelled, reason?}` |
+| `get_logs(task_id, tail=200)` | `@rpc` | → `{lines, truncated, total}` |
 | `progress` | `@emit` | `{task_id, step, detail}` |
 | `work_done` | `@emit` | `{task_id, branch, sha, summary}` |
-| `work_failed` | `@emit` | `{task_id, error}` |
+| `work_failed` | `@emit` | `{task_id, error, category, step, log_tail}` |
+
+## Failure reporting
+
+When a task fails, the worker emits `work_failed` with a structured
+classification so the dispatcher agent can decide what to do without a
+second round-trip:
+
+- `category` — fixed vocabulary: `precondition`, `agent_error`,
+  `no_changes`, `conflict`, `auth`, `rate_limit`, `cancelled`, `unknown`.
+- `step` — where it died: `checkout`, `agent`, `commit`, `push`.
+- `log_tail` — last 20 lines of that task's combined stdout/stderr.
+
+Per-task logs are kept on disk (default `~/.local/state/coding-worker/logs/<task_id>.log`).
+Use `get_logs(task_id, tail=N)` to pull more context on demand — either
+to peek at a running task, or to investigate after `work_failed`.
+
+Suggested dispatcher policies:
+
+| Category | Typical action |
+| --- | --- |
+| `no_changes` | Re-dispatch with a sharper prompt, or mark task done-nothing |
+| `rate_limit` | Retry after backoff on same worker |
+| `conflict` | Rebase on server side, re-dispatch, or escalate |
+| `auth` | Surface to user — the Pi needs credentials refreshed |
+| `precondition` | Check worker config (repo path, base ref) |
+| `agent_error` | Inspect `log_tail` / `get_logs`; surface to user |
+| `cancelled` | No action |
+| `unknown` | Surface to user with `get_logs` output |
 
 ## Security notes
 

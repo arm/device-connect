@@ -38,6 +38,48 @@ from device_connect_edge import DeviceRuntime
 from device_connect_edge.drivers import DeviceDriver, rpc, emit
 
 
+class _Fail(Exception):
+    """Internal exception carrying a structured failure classification."""
+
+    def __init__(self, category: str, message: str, detail: str = "") -> None:
+        super().__init__(message if not detail else f"{message}: {detail}")
+        self.category = category
+        self.message = str(self)
+
+
+def _classify_git_failure(git_subcmd: str, output: str) -> str:
+    """Bucket a failed git command into a small fixed vocabulary."""
+    lo = output.lower()
+    if any(s in lo for s in ("authentication failed", "permission denied", "could not read username")):
+        return "auth"
+    if any(s in lo for s in (
+        "non-fast-forward", "rejected", "conflict", "merge conflict",
+        "would be overwritten", "cannot lock ref",
+    )):
+        return "conflict"
+    if git_subcmd in ("fetch", "checkout"):
+        return "precondition"
+    return "unknown"
+
+
+def _classify_exception(exc: Exception, step: str) -> str:
+    msg = str(exc).lower()
+    if "rate limit" in msg or "429" in msg or "too many requests" in msg:
+        return "rate_limit"
+    if step in ("checkout",):
+        return "precondition"
+    return "unknown"
+
+
+def _read_log_tail(path: Path, lines: int) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        return path.read_text(errors="replace").splitlines()[-lines:]
+    except OSError:
+        return []
+
+
 class CodingWorkerDriver(DeviceDriver):
     device_type = "coding-worker"
 
@@ -46,6 +88,7 @@ class CodingWorkerDriver(DeviceDriver):
         exec_cmd: str,
         repos: dict[str, Path],
         default_repo: str | None = None,
+        log_dir: Path | None = None,
     ) -> None:
         super().__init__()
         if not repos:
@@ -57,10 +100,14 @@ class CodingWorkerDriver(DeviceDriver):
             if default_repo not in repos:
                 raise ValueError(f"--default-repo '{default_repo}' not in repo allowlist")
             self._default_repo = default_repo
-        elif len(repos) == 1:
-            self._default_repo = next(iter(repos))
         else:
             self._default_repo = next(iter(repos))
+        self._log_dir = log_dir or (
+            Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+            / "coding-worker"
+            / "logs"
+        )
+        self._log_dir.mkdir(parents=True, exist_ok=True)
         self._tasks: dict[str, asyncio.Task] = {}
         self._results: dict[str, dict] = {}
 
@@ -137,6 +184,30 @@ class CodingWorkerDriver(DeviceDriver):
         task.cancel()
         return {"cancelled": True}
 
+    @rpc()
+    async def get_logs(self, task_id: str, tail: int = 200) -> dict:
+        """Return the last N lines of a task's combined stdout/stderr log.
+
+        Useful for peeking at a running task or pulling more context after a
+        work_failed event where the embedded log_tail isn't enough.
+
+        Args:
+            task_id: Task id returned by dispatch().
+            tail: Max number of lines to return from the end (default: 200).
+        """
+        path = self._log_path(task_id)
+        if not path.exists():
+            return {"lines": [], "truncated": False, "total": 0, "error": "no log for task"}
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError as exc:
+            return {"lines": [], "truncated": False, "total": 0, "error": str(exc)}
+        return {
+            "lines": lines[-tail:],
+            "truncated": len(lines) > tail,
+            "total": len(lines),
+        }
+
     @emit()
     async def progress(self, task_id: str, step: str, detail: str = "") -> dict:
         """Streaming progress update."""
@@ -146,38 +217,59 @@ class CodingWorkerDriver(DeviceDriver):
         """Task finished; feature branch was pushed."""
 
     @emit()
-    async def work_failed(self, task_id: str, error: str) -> dict:
-        """Task failed; no branch was pushed."""
+    async def work_failed(
+        self,
+        task_id: str,
+        error: str,
+        category: str = "unknown",
+        step: str = "",
+        log_tail: list[str] | None = None,
+    ) -> dict:
+        """Task failed; no branch was pushed.
+
+        Categories: precondition | agent_error | no_changes | conflict |
+        auth | rate_limit | cancelled | unknown.
+        """
+
+    def _log_path(self, task_id: str) -> Path:
+        return self._log_dir / f"{task_id}.log"
 
     async def _run(
         self, task_id: str, prompt: str, base_ref: str, repo_path: Path, repo_name: str,
     ) -> None:
         branch = f"feature/{task_id}"
+        current_step = "init"
+        log_path = self._log_path(task_id)
+        log_fh = log_path.open("w")
         try:
-            await self.progress(task_id=task_id, step="checkout", detail=f"{repo_name}@{base_ref}")
-            await self._git(repo_path, "fetch", "origin", base_ref)
-            await self._git(repo_path, "checkout", "-B", branch, f"origin/{base_ref}")
+            current_step = "checkout"
+            await self.progress(task_id=task_id, step=current_step, detail=f"{repo_name}@{base_ref}")
+            await self._git(repo_path, log_fh, "fetch", "origin", base_ref)
+            await self._git(repo_path, log_fh, "checkout", "-B", branch, f"origin/{base_ref}")
 
-            await self.progress(task_id=task_id, step="agent")
+            current_step = "agent"
+            await self.progress(task_id=task_id, step=current_step)
             cmd = self._exec_cmd.format(prompt=shlex.quote(prompt))
-            rc, stdout, stderr = await self._shell(cmd, cwd=repo_path)
+            rc, stdout = await self._shell(cmd, cwd=repo_path, log_fh=log_fh)
             if rc != 0:
-                raise RuntimeError(f"agent exited {rc}: {stderr[-400:].strip()}")
+                raise _Fail("agent_error", f"agent exited {rc}", stdout[-400:].strip())
 
-            rc, _, _ = await self._shell(
-                "git diff --quiet && git diff --cached --quiet", cwd=repo_path,
+            rc, _ = await self._shell(
+                "git diff --quiet && git diff --cached --quiet", cwd=repo_path, log_fh=log_fh,
             )
             if rc == 0:
-                raise RuntimeError("agent produced no changes")
+                raise _Fail("no_changes", "agent produced no changes", "")
 
-            await self.progress(task_id=task_id, step="commit")
-            await self._git(repo_path, "add", "-A")
-            await self._git(repo_path, "commit", "-m", f"{task_id}: {prompt[:60]}")
+            current_step = "commit"
+            await self.progress(task_id=task_id, step=current_step)
+            await self._git(repo_path, log_fh, "add", "-A")
+            await self._git(repo_path, log_fh, "commit", "-m", f"{task_id}: {prompt[:60]}")
 
-            await self.progress(task_id=task_id, step="push", detail=branch)
-            await self._git(repo_path, "push", "-u", "origin", branch)
+            current_step = "push"
+            await self.progress(task_id=task_id, step=current_step, detail=branch)
+            await self._git(repo_path, log_fh, "push", "-u", "origin", branch)
 
-            sha = (await self._capture(repo_path, "git", "rev-parse", "HEAD")).strip()
+            sha = (await self._capture(repo_path, log_fh, "git", "rev-parse", "HEAD")).strip()
             summary = (stdout.strip().splitlines() or ["done"])[-1][:400]
             self._results[task_id] = {
                 "repo": repo_name, "branch": branch, "sha": sha, "summary": summary,
@@ -185,37 +277,82 @@ class CodingWorkerDriver(DeviceDriver):
             await self.work_done(task_id=task_id, branch=branch, sha=sha, summary=summary)
 
         except asyncio.CancelledError:
-            self._results[task_id] = {"error": "cancelled", "repo": repo_name}
-            await self.work_failed(task_id=task_id, error="cancelled")
+            self._results[task_id] = {
+                "error": "cancelled", "category": "cancelled",
+                "step": current_step, "repo": repo_name,
+            }
+            await self.work_failed(
+                task_id=task_id, error="cancelled",
+                category="cancelled", step=current_step, log_tail=[],
+            )
             raise
+        except _Fail as fail:
+            tail = _read_log_tail(log_path, 20)
+            self._results[task_id] = {
+                "error": fail.message, "category": fail.category,
+                "step": current_step, "repo": repo_name,
+            }
+            await self.work_failed(
+                task_id=task_id, error=fail.message,
+                category=fail.category, step=current_step, log_tail=tail,
+            )
         except Exception as exc:
-            self._results[task_id] = {"error": str(exc), "repo": repo_name}
-            await self.work_failed(task_id=task_id, error=str(exc))
+            category = _classify_exception(exc, current_step)
+            tail = _read_log_tail(log_path, 20)
+            self._results[task_id] = {
+                "error": str(exc), "category": category,
+                "step": current_step, "repo": repo_name,
+            }
+            await self.work_failed(
+                task_id=task_id, error=str(exc),
+                category=category, step=current_step, log_tail=tail,
+            )
+        finally:
+            log_fh.close()
 
-    async def _git(self, cwd: Path, *args: str) -> None:
-        rc, _, stderr = await self._shell(
-            "git " + " ".join(shlex.quote(a) for a in args), cwd=cwd,
+    async def _git(self, cwd: Path, log_fh, *args: str) -> None:
+        rc, stdout = await self._shell(
+            "git " + " ".join(shlex.quote(a) for a in args), cwd=cwd, log_fh=log_fh,
         )
         if rc != 0:
-            raise RuntimeError(f"git {args[0]} failed: {stderr.strip()}")
+            category = _classify_git_failure(args[0], stdout)
+            raise _Fail(category, f"git {args[0]} failed", stdout[-400:].strip())
 
-    async def _capture(self, cwd: Path, *args: str) -> str:
-        rc, stdout, stderr = await self._shell(
-            " ".join(shlex.quote(a) for a in args), cwd=cwd,
+    async def _capture(self, cwd: Path, log_fh, *args: str) -> str:
+        rc, stdout = await self._shell(
+            " ".join(shlex.quote(a) for a in args), cwd=cwd, log_fh=log_fh,
         )
         if rc != 0:
-            raise RuntimeError(f"{args[0]} failed: {stderr.strip()}")
+            raise _Fail("unknown", f"{args[0]} failed", stdout[-400:].strip())
         return stdout
 
-    async def _shell(self, cmd: str, cwd: Path) -> tuple[int, str, str]:
+    async def _shell(self, cmd: str, cwd: Path, log_fh=None) -> tuple[int, str]:
+        """Run *cmd* in *cwd*, merging stdout+stderr. Streams to log_fh as lines arrive.
+
+        Returns (returncode, combined_output).
+        """
+        if log_fh is not None:
+            log_fh.write(f"\n$ {cmd}\n")
+            log_fh.flush()
         proc = await asyncio.create_subprocess_shell(
             cmd,
             cwd=str(cwd),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
         )
-        stdout, stderr = await proc.communicate()
-        return proc.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
+        chunks: list[str] = []
+        assert proc.stdout is not None
+        while True:
+            raw = await proc.stdout.readline()
+            if not raw:
+                break
+            text = raw.decode(errors="replace")
+            chunks.append(text)
+            if log_fh is not None:
+                log_fh.write(text)
+                log_fh.flush()
+        rc = await proc.wait()
+        return rc, "".join(chunks)
 
 
 def _parse_repo_flag(raw: str) -> tuple[str, Path]:
@@ -270,6 +407,13 @@ def main() -> None:
         help="Repo name to use when the caller omits `repo`. Defaults to the first --repo entry.",
     )
     parser.add_argument(
+        "--log-dir",
+        help=(
+            "Directory for per-task stdout/stderr logs. Defaults to "
+            "$XDG_STATE_HOME/coding-worker/logs or ~/.local/state/coding-worker/logs."
+        ),
+    )
+    parser.add_argument(
         "--tenant",
         default=os.environ.get("TENANT", "default"),
         help="Tenant namespace (default: $TENANT or 'default').",
@@ -283,10 +427,13 @@ def main() -> None:
     if not repos:
         parser.error("must pass --repo NAME=PATH (repeatable) or --repo-path PATH")
 
+    log_dir = Path(args.log_dir).expanduser().resolve() if args.log_dir else None
+
     driver = CodingWorkerDriver(
         exec_cmd=args.exec_cmd,
         repos=repos,
         default_repo=args.default_repo,
+        log_dir=log_dir,
     )
     runtime = DeviceRuntime(driver=driver, device_id=args.device_id, tenant=args.tenant)
     asyncio.run(runtime.run())
