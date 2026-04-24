@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Discovery provider protocol for unified device discovery.
 
 Defines the ``DiscoveryProvider`` protocol that both D2D (local presence)

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Disk-backed SpanExporter for connectivity resilience.
 
 Wraps a delegate SpanExporter (typically OTLP) and adds automatic

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_edge.messaging.mqtt_adapter — MQTTAdapter.
 
 The ``aiomqtt`` library is fully mocked so no real MQTT broker is needed.

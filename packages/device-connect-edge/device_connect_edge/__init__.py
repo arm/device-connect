@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Device Connect Edge — lightweight runtime for edge devices.
 
 Build IoT devices with Python. Connect them over Zenoh or NATS. Communicate

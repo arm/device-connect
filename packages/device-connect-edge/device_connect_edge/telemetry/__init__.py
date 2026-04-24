@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """OpenTelemetry integration for Device Connect.
 
 Provides distributed tracing, metrics, and context propagation

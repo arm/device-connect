@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """DHT22 Temperature & Humidity Sensor driver.
 
 This driver runs as a Python process on the physical device (e.g. Raspberry Pi).

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Parse JUnit XML from hypothesis fuzz tests and output a GitHub-flavored markdown summary.
 
 Usage:

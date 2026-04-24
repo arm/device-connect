@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Fuzz target: JSON credentials file loader.
 
 Exercises MessagingConfig._load_credentials_file() which parses JSON

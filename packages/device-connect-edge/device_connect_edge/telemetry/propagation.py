@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """W3C TraceContext propagation through _dc_meta dicts.
 
 Injects/extracts traceparent and tracestate into the _dc_meta

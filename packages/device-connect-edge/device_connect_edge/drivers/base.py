@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Device driver abstract base class with D2D communication.
 
 This module defines the DeviceDriver ABC, which provides the foundation
