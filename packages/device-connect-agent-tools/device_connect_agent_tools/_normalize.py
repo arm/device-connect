@@ -105,10 +105,7 @@ def aggregate_fleet(devices: list[dict]) -> dict[str, Any]:
         dt = d.get("device_type") or "unknown"
         loc = d.get("location") or "unknown"
         funcs = d.get("functions", [])
-        total_functions += sum(
-            1 for f in funcs
-            if (f.get("name") if isinstance(f, dict) else f)
-        )
+        total_functions += len(funcs)
 
         by_type[dt]["count"] += 1
         by_type[dt]["locations"].add(loc)
