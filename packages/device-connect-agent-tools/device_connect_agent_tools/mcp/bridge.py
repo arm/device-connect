@@ -30,6 +30,9 @@ from device_connect_edge.messaging import create_client
 from device_connect_edge.messaging.base import MessagingClient
 from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
+from device_connect_agent_tools.mcp.event_subscriptions import (
+    EventSubscriptionManager, device_id_from_uri,
+)
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
 from device_connect_agent_tools.connection import flatten_device
@@ -77,6 +80,7 @@ class MCPBridgeServer:
         self._registry = None  # RegistryClient or D2DRegistry (DiscoveryProvider)
         self._router: Optional[ToolRouter] = None
         self._d2d_collector = None  # PresenceCollector, if in D2D mode
+        self._event_subs: Optional[EventSubscriptionManager] = None
         self._running = False
 
     async def start(self) -> None:
@@ -100,11 +104,18 @@ class MCPBridgeServer:
                 timeout=self.config.request_timeout,
             )
 
-            # Create FastMCP server with 4 meta-tools
+            # Create FastMCP server with 4 meta-tools + event resource
             self._mcp = FastMCP("Device Connect Bridge")
             self._register_meta_tools()
 
-            logger.info("MCP Bridge ready — 4 meta-tools registered")
+            self._event_subs = EventSubscriptionManager(
+                self._messaging_client, self.config.tenant,
+            )
+            self._register_event_resource()
+            self._register_subscription_handlers()
+            self._enable_subscribe_capability()
+
+            logger.info("MCP Bridge ready — 4 meta-tools + events resource registered")
             await self._mcp.run_stdio_async()
 
         finally:
@@ -297,8 +308,61 @@ class MCPBridgeServer:
             except ToolInvocationError as e:
                 return json.dumps({"success": False, "error": str(e)})
 
+    def _register_event_resource(self) -> None:
+        """Resource template returning the latest Device Connect event for a device."""
+        assert self._mcp is not None
+        assert self._event_subs is not None
+        event_subs = self._event_subs
+
+        @self._mcp.resource(
+            "events://devices/{device_id}/latest",
+            mime_type="application/json",
+            description=(
+                "Latest Device Connect event for the given device. Subscribe via "
+                "resources/subscribe to receive notifications/resources/updated when "
+                "the device emits a new event (progress, work_done, work_failed, ...)."
+            ),
+        )
+        async def latest_event(device_id: str) -> str:
+            return await event_subs.read(device_id)
+
+    def _register_subscription_handlers(self) -> None:
+        """Wire the low-level subscribe/unsubscribe MCP handlers."""
+        assert self._mcp is not None
+        assert self._event_subs is not None
+        low = self._mcp._mcp_server
+        event_subs = self._event_subs
+
+        @low.subscribe_resource()
+        async def _on_subscribe(uri):
+            await event_subs.subscribe(str(uri))
+
+        @low.unsubscribe_resource()
+        async def _on_unsubscribe(uri):
+            await event_subs.unsubscribe(str(uri))
+
+    def _enable_subscribe_capability(self) -> None:
+        """Advertise resources.subscribe=True; the MCP SDK hardcodes False otherwise."""
+        assert self._mcp is not None
+        low = self._mcp._mcp_server
+        original = low.get_capabilities
+
+        def patched(notification_options, experimental_capabilities):
+            caps = original(notification_options, experimental_capabilities)
+            if caps.resources is not None:
+                caps.resources.subscribe = True
+            return caps
+
+        low.get_capabilities = patched  # type: ignore[assignment]
+
     async def _cleanup(self) -> None:
         self._running = False
+        if self._event_subs:
+            try:
+                await self._event_subs.close()
+            except Exception as e:
+                logger.warning("Error closing event subscription manager: %s", e)
+            self._event_subs = None
         if self._d2d_collector:
             try:
                 await self._d2d_collector.stop()

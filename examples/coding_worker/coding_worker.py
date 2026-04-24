@@ -89,12 +89,14 @@ class CodingWorkerDriver(DeviceDriver):
         repos: dict[str, Path],
         default_repo: str | None = None,
         log_dir: Path | None = None,
+        no_push: bool = False,
     ) -> None:
         super().__init__()
         if not repos:
             raise ValueError("At least one repo must be configured")
         self._exec_cmd = exec_cmd
         self._repos = repos
+        self._no_push = no_push
         # Default repo resolution: explicit pick → only entry → first entry
         if default_repo is not None:
             if default_repo not in repos:
@@ -155,8 +157,11 @@ class CodingWorkerDriver(DeviceDriver):
         return {"accepted": True, "task_id": task_id, "repo": repo_name}
 
     @rpc()
-    async def status(self, task_id: str) -> dict:
+    async def task_status(self, task_id: str) -> dict:
         """Query task state (running / done / failed / unknown).
+
+        Named task_status (not just `status`) because DeviceDriver reserves
+        `.status` for the DeviceStatus property.
 
         Args:
             task_id: Task id returned by dispatch().
@@ -244,8 +249,12 @@ class CodingWorkerDriver(DeviceDriver):
         try:
             current_step = "checkout"
             await self.progress(task_id=task_id, step=current_step, detail=f"{repo_name}@{base_ref}")
-            await self._git(repo_path, log_fh, "fetch", "origin", base_ref)
-            await self._git(repo_path, log_fh, "checkout", "-B", branch, f"origin/{base_ref}")
+            if self._no_push:
+                # No origin remote configured — branch straight from local ref.
+                await self._git(repo_path, log_fh, "checkout", "-B", branch, base_ref)
+            else:
+                await self._git(repo_path, log_fh, "fetch", "origin", base_ref)
+                await self._git(repo_path, log_fh, "checkout", "-B", branch, f"origin/{base_ref}")
 
             current_step = "agent"
             await self.progress(task_id=task_id, step=current_step)
@@ -254,10 +263,10 @@ class CodingWorkerDriver(DeviceDriver):
             if rc != 0:
                 raise _Fail("agent_error", f"agent exited {rc}", stdout[-400:].strip())
 
-            rc, _ = await self._shell(
-                "git diff --quiet && git diff --cached --quiet", cwd=repo_path, log_fh=log_fh,
+            rc, porcelain = await self._shell(
+                "git status --porcelain", cwd=repo_path, log_fh=log_fh,
             )
-            if rc == 0:
+            if rc != 0 or not porcelain.strip():
                 raise _Fail("no_changes", "agent produced no changes", "")
 
             current_step = "commit"
@@ -265,9 +274,15 @@ class CodingWorkerDriver(DeviceDriver):
             await self._git(repo_path, log_fh, "add", "-A")
             await self._git(repo_path, log_fh, "commit", "-m", f"{task_id}: {prompt[:60]}")
 
-            current_step = "push"
-            await self.progress(task_id=task_id, step=current_step, detail=branch)
-            await self._git(repo_path, log_fh, "push", "-u", "origin", branch)
+            if self._no_push:
+                await self.progress(
+                    task_id=task_id, step="push",
+                    detail="skipped (--no-push; worker commits locally, dispatcher fetches)",
+                )
+            else:
+                current_step = "push"
+                await self.progress(task_id=task_id, step=current_step, detail=branch)
+                await self._git(repo_path, log_fh, "push", "-u", "origin", branch)
 
             sha = (await self._capture(repo_path, log_fh, "git", "rev-parse", "HEAD")).strip()
             summary = (stdout.strip().splitlines() or ["done"])[-1][:400]
@@ -418,6 +433,15 @@ def main() -> None:
         default=os.environ.get("TENANT", "default"),
         help="Tenant namespace (default: $TENANT or 'default').",
     )
+    parser.add_argument(
+        "--no-push",
+        action="store_true",
+        help=(
+            "Commit locally but skip `git push`. Use when the working copy has "
+            "no useful upstream (e.g. the dispatcher mirrored files here and will "
+            "`git fetch` the worker's local refs directly instead)."
+        ),
+    )
     args = parser.parse_args()
 
     repos: dict[str, Path] = dict(args.repo)
@@ -434,6 +458,7 @@ def main() -> None:
         repos=repos,
         default_repo=args.default_repo,
         log_dir=log_dir,
+        no_push=args.no_push,
     )
     runtime = DeviceRuntime(driver=driver, device_id=args.device_id, tenant=args.tenant)
     asyncio.run(runtime.run())

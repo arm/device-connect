@@ -108,7 +108,7 @@ codex › I'll delegate this to a coding worker. Let me find one.
          {"name": "dispatch",   "params": {
             "prompt": "string", "base_ref": "string",
             "task_id": "string", "repo": "string"}},
-         {"name": "status",     "params": {"task_id": "string"}},
+         {"name": "task_status", "params": {"task_id": "string"}},
          {"name": "cancel",     "params": {"task_id": "string"}}
        ],
        "events": ["progress", "work_done", "work_failed"]
@@ -207,7 +207,7 @@ A few minutes after dispatching, the user comes back to the agent:
 ❯ any updates from pi-desk?
 
 codex › Let me check.
-[tool] invoke_device(pi-desk, "status", {"task_id": "T-42"})
+[tool] invoke_device(pi-desk, "task_status", {"task_id": "T-42"})
   → {"state": "done",
      "repo": "shared-app",
      "branch": "feature/T-42",
@@ -244,7 +244,7 @@ codex › Here's the relevant hunk in src/auth/session.py:
 
 | Pattern | What it does | Reality today |
 | --- | --- | --- |
-| **Pull** | Dispatcher calls `status(task_id)` when asked | Works on every MCP client. The default in this walkthrough. |
+| **Pull** | Dispatcher calls `task_status(task_id)` when asked | Works on every MCP client. The default in this walkthrough. |
 | **Long-poll** | New bridge tool `wait_for_event(...)` blocks until an event arrives, stream via `notifications/progress` | Works everywhere once the bridge adds the tool. Parks one MCP slot for up to the timeout — dispatcher is busy during that window. |
 | **Resource push** | Bridge exposes `events://{device_id}/latest`, sends `notifications/resources/updated` | Non-blocking, truly push, but client support as of early 2026 is uneven. Best on Claude Desktop. |
 
@@ -275,7 +275,7 @@ gives you that in three layers.
 ### Layer 1 — the `work_failed` event carries structured fields
 
 ```
-invoke_device(pi-desk, "status", {"task_id": "T-43"})
+invoke_device(pi-desk, "task_status", {"task_id": "T-43"})
   → {
       "state":    "failed",
       "category": "rate_limit",

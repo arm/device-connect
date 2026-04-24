@@ -1,220 +1,372 @@
 # Coding Worker — remote coding-agent dispatch over Device Connect
 
 A generic worker that exposes a local coding CLI (codex, claude, aider, …)
-as a Device Connect device. A dispatcher agent running elsewhere can
-hand off a prompt, let the worker run the CLI, push a feature branch,
-and be notified when the work is done.
+as a Device Connect device. A dispatcher agent running elsewhere can hand
+off a prompt, let the worker run the CLI, push a feature branch, and be
+notified when the work is done.
 
-No custom driver code. Two commands on the dispatcher, two on the worker.
+No custom driver code on either end. One command to bring up a remote
+worker from your laptop.
+
+## Quick start
+
+From a fresh clone on your dispatcher machine:
+
+```bash
+./examples/coding_worker/provision.sh user@host
+```
+
+This bootstraps the remote host over SSH: installs Python 3.11 via `uv`,
+installs `device-connect-edge` into a dedicated venv, uploads the worker
+script, installs a systemd user service so the worker auto-restarts and
+survives reboots, and — if you didn't give it a real coding CLI yet —
+wires up a shell stub + throwaway test repo so you can exercise the
+whole round-trip immediately.
+
+During provisioning, the script also snapshots common Codex/OpenAI proxy
+and CA environment variables from the remote user's login shell into
+`~/.coding-worker/agent-env.sh`, and the service sources that file on
+startup. If you change those env vars later, rerun `provision.sh` or edit
+`~/.coding-worker/agent-env.sh` on the remote.
+
+At the end it prints the exact codex MCP config block to paste into
+`~/.codex/config.toml`. After that you can dispatch tasks from codex.
+
+### Flags you'll likely want
+
+```bash
+./examples/coding_worker/provision.sh user@host \
+  --device-id jetson-01 \
+  --tenant alice \
+  --repo ~/code/my-project \
+  --exec-cmd 'codex exec --full-auto {prompt}'
+```
+
+| Flag | Purpose | Default |
+| --- | --- | --- |
+| `--device-id` | How the worker registers on the mesh | `<hostname>-worker` |
+| `--tenant` | Namespace — different tenants don't see each other | `default` |
+| `--port` | TCP port for Zenoh listener | `7447` |
+| `--exec-cmd` | Coding-agent template; `{prompt}` substituted in | shell stub for testing |
+| `--repo PATH` | Existing working copy already on the remote | — |
+| `--seed-from PATH` | Local repo on dispatcher (under `$HOME`); mirrors path on remote, pushes all branches, auto-adds a `jetson` git remote on your local repo. Worker commits locally; you `git fetch jetson`. | — |
+| `--seed-from-url URL` | Git URL `git clone`d on the remote. Worker pushes feature branches back to URL. | — |
+| `--at PATH` | Override remote destination for `--seed-from` / `--seed-from-url` (rel to remote `$HOME`, or absolute). | — |
+| `--uninstall` | Stop the service and remove the install | — |
+
+`--repo`, `--seed-from`, and `--seed-from-url` are mutually exclusive. If
+none of them is given, the script creates a throwaway test repo at
+`~/work/test-repo` so the round trip works immediately.
+
+## Run an end-to-end example
+
+The walkthrough below dispatches a task from your laptop to a remote worker
+running real `codex`, then fetches the result. Replace `user@host` with
+your own (e.g. `sourav@10.104.39.11`).
+
+### 1. Provision the worker
+
+From a checkout of this repo on your laptop:
+
+```bash
+./examples/coding_worker/provision.sh user@host \
+  --device-id jetson-01 \
+  --tenant test \
+  --seed-from ~/workplace/my-project \
+  --exec-cmd '/home/user/.local/bin/codex exec --full-auto {prompt}'
+```
+
+What this does:
+
+- Installs Python 3.11 + `device-connect-edge` on the remote in
+  `~/.coding-worker/venv/`.
+- Mirrors `~/workplace/my-project` to `~/workplace/my-project` on the
+  remote (same path under `$HOME`), pushing every local branch.
+- Adds a git remote called `jetson` on your local repo pointing at the
+  Jetson's working copy, so you can `git fetch jetson` later.
+- Snapshots your remote login shell's proxy/CA env vars (e.g.
+  `OPENAI_BASE_URL`, `HTTPS_PROXY`, `OPENAI_CA_CERT_PATH`,
+  `REQUESTS_CA_BUNDLE`) into `~/.coding-worker/agent-env.sh` so the
+  systemd-run worker can reach the same upstreams as your interactive
+  shell. Re-run `provision.sh` if those values change.
+- Installs and starts a systemd user service called `coding-worker`.
+- Prints the exact MCP config block to paste into your dispatcher's
+  codex config.
+
+The absolute path on `--exec-cmd` matters: systemd-user services don't
+inherit your interactive `PATH`. Find it with `ssh user@host 'which codex'`.
+
+### 2. Add the MCP config to your dispatcher
+
+Paste the block printed at the end of step 1 into `~/.codex/config.toml`
+(or your client's equivalent), then restart the client. It looks like:
+
+```toml
+[mcp_servers.device-connect]
+command = "/path/to/device-connect/.venv/bin/python"
+args = ["-m", "device_connect_agent_tools.mcp"]
+
+[mcp_servers.device-connect.env]
+DEVICE_CONNECT_ALLOW_INSECURE = "true"
+MESSAGING_BACKEND = "zenoh"
+ZENOH_CONNECT = "tcp/<jetson-ip>:7447"
+DEVICE_CONNECT_DISCOVERY_MODE = "d2d"
+TENANT = "test"
+```
+
+### 3. Dispatch from your dispatcher (codex / claude-code / …)
+
+Run the dispatcher CLI **from the local repo that the worker is
+mirroring** so its branch context matches the worker's:
+
+```bash
+cd ~/workplace/my-project
+codex
+```
+
+Then a natural prompt:
+
+```
+Use device-connect to run the unit tests on my jetson worker.
+Write a TEST-REPORT.md with the command, pass/fail counts, and any
+failing test excerpts. Commit it. Tell me when it's done, or what
+went wrong if it fails.
+```
+
+The dispatcher should choose the right MCP tools itself: `describe_fleet`
+to find the worker, `list_repos` to see which repo is exposed,
+`dispatch` with a sensible `base_ref` (typically your current branch
+since `--seed-from` mirrored it), then poll `task_status` /
+`get_logs` until completion.
+
+### 4. Fetch the worker's result
+
+When the dispatcher reports `work_done`:
+
+```bash
+cd ~/workplace/my-project
+git fetch jetson
+git log --oneline jetson/feature/<task-id> -3
+git show jetson/feature/<task-id>:TEST-REPORT.md
+```
+
+`feature/<task-id>` is the branch name reported in the `work_done`
+event payload. With `--seed-from`, the worker commits that branch
+locally on the remote; `git fetch jetson` pulls it down to your
+laptop without ever round-tripping through GitHub.
+
+### 5. Tear down
+
+```bash
+./examples/coding_worker/provision.sh user@host --uninstall
+```
+
+This stops the service and removes `~/.coding-worker/`. The mirrored
+working copy at `~/workplace/my-project` and the local `jetson` git
+remote are intentionally left in place so you can still inspect
+history; remove them by hand if you want a true clean slate.
 
 ## Runtime flow
 
 ```
-dispatcher agent (codex / claude-code on server)
+dispatcher agent (codex / claude-code on your laptop)
       │
-      │  MCP tools: list_devices, invoke_device, subscribe_events
+      │  MCP tools: describe_fleet, list_devices, invoke_device,
+      │             get_device_functions  +  events resource
       ▼
 device-connect-agent-tools MCP bridge
       │
       │  JSON-RPC over Zenoh / NATS / MQTT
       ▼
-coding-worker process (this package, running on the Pi)
+coding-worker process (this package, running on the remote)
       │
       │  subprocess: {--exec-cmd}  (codex / claude / aider / …)
       ▼
- git commit + push feature/<task-id>   →   shared Git remote
+ git commit feature/<task-id>
       │
-      │  @emit work_done {task_id, branch, sha, summary}
+      │  Push behavior depends on how the worker was provisioned:
+      │    • --seed-from        → no push; dispatcher does `git fetch jetson`
+      │    • --seed-from-url    → push to URL (e.g. GitHub) as origin
+      │    • --repo PATH        → push to whatever origin is configured
       ▼
-dispatcher agent receives the event, fetches the branch
+ @emit work_done {task_id, branch, sha, summary}
+      │
+      ▼
+dispatcher agent learns about completion. Today's MCP clients
+typically poll `task_status` / `get_logs`; the bridge also exposes
+`events://devices/<id>/latest` as a subscribable MCP resource for
+clients that support resource subscriptions natively.
 ```
 
-## What the user sees
+See [WALKTHROUGH.md](WALKTHROUGH.md) for what a single dispatch looks
+like end to end, including how the dispatcher learns about failures.
 
-```
-user@server:~/shared-app $ codex
-codex › MCP servers loaded: device-connect (4 tools)
-❯ There's a flaky test in tests/auth/test_login.py — hand it off
-  to the worker on my desk while I work on the dashboard branch.
+## Provisioning multiple devices
 
-codex › [tool] describe_fleet()  → 1 coding-worker: pi-desk
-codex › [tool] invoke_device(pi-desk, dispatch, {prompt: "...", base_ref: "main"})
-codex → accepted as T-42. I'll watch for work_done.
-❯ meanwhile let me refactor the navbar…
-
-   [event] pi-desk::work_done {
-     task_id: "T-42", branch: "feature/T-42",
-     sha: "a3f91c2",
-     summary: "Fixed race in session teardown…"
-   }
-
-codex → pi-desk finished T-42. Want me to fetch feature/T-42?
-❯ yes
-```
-
-## One-time setup
-
-### Dispatcher side (server)
+Run the provision script once per device. Each invocation is independent
+and idempotent.
 
 ```bash
-pipx install 'device-connect-agent-tools[mcp]'
+./provision.sh user@jetson-1 --device-id jetson-01 --tenant alice
+./provision.sh user@jetson-2 --device-id jetson-02 --tenant alice
+./provision.sh user@mac-mini --device-id mac-mini-01 --tenant alice
 ```
 
-Point codex (or any MCP-speaking agent) at the bridge. Example
-`~/.codex/config.toml`:
+The devices all share a tenant (`alice`) so the dispatcher sees them as
+one fleet. Device ids must be unique within a tenant; everything else can
+repeat.
+
+### How the dispatcher reaches more than one device
+
+There are two deployment shapes. Pick based on fleet size.
+
+#### Shape A — a handful of devices, peer-to-peer
+
+Each worker listens on TCP 7447. The dispatcher's MCP config lists
+every worker as a Zenoh connect endpoint:
 
 ```toml
-[mcp_servers.device-connect]
-command = "python"
-args = ["-m", "device_connect_agent_tools.mcp"]
-env = { TENANT = "alice", DEVICE_CONNECT_ALLOW_INSECURE = "true" }
+[mcp_servers.device-connect.env]
+ZENOH_CONNECT = "tcp/10.0.0.11:7447|tcp/10.0.0.12:7447|tcp/10.0.0.13:7447"
+DEVICE_CONNECT_DISCOVERY_MODE = "d2d"
+TENANT = "alice"
 ```
 
-### Worker side (Pi / workstation)
+Works up to a handful of devices on a flat network. Every worker is a
+direct peer of every dispatcher. No central service, no reboot fragility.
 
-Three install options, pick one:
+#### Shape B — fleet of devices, central router
 
-**a) pip / pipx (simplest if the Pi has Python + network).**
+Run one `zenohd` (or any Zenoh router) somewhere always-on. Every worker
+connects to it instead of listening; every dispatcher connects to the
+same address. Adding or removing a device doesn't touch the dispatcher's
+config.
+
+Worker side — pass `--connect` in the future (or set `ZENOH_CONNECT` in
+the systemd unit) to point at the router instead of listening. Example
+ops pattern:
+
+```
+                         ┌─────────────┐
+                         │  zenohd     │  router
+                         │  :7447      │
+                         └──────┬──────┘
+                    ┌───────────┼───────────┐
+                    │           │           │
+             ┌──────┴───┐ ┌─────┴────┐ ┌────┴─────┐
+             │ worker A │ │ worker B │ │ worker C │
+             └──────────┘ └──────────┘ └──────────┘
+                    ▲           ▲           ▲
+                    └───────────┼───────────┘
+                                │
+                         ┌──────┴──────┐
+                         │ dispatcher  │  codex CLI + MCP bridge
+                         │  (laptop)   │
+                         └─────────────┘
+```
+
+Multi-dispatcher also becomes natural: several laptops all connect to
+the same router and see the same fleet (optionally filtered by tenant).
+
+### Keeping tenants straight when you have collaborators
+
+If several people share a physical network, put each person in their
+own tenant:
 
 ```bash
-pipx install ./examples/coding_worker
-# or from a git checkout:
-pipx install 'git+https://github.com/arm/device-connect#subdirectory=examples/coding_worker'
+# alice's jetson
+./provision.sh user@jetson-a --tenant alice --device-id jetson-a
+
+# bob's jetson
+./provision.sh user@jetson-b --tenant bob --device-id jetson-b
 ```
 
-**b) Single-file zipapp (provision from the dispatcher host, no pip on the Pi).**
+Alice's dispatcher only sees alice's devices; same for bob. This is a
+logical namespace — see "Multi-tenant isolation" below for how to make
+it a hard boundary with credentials.
 
-Build once on your dev machine, scp to the Pi. The Pi only needs Python 3.9+.
+## Troubleshooting
 
-```bash
-pip install shiv
-shiv -c coding-worker -o coding-worker.pyz \
-  ./examples/coding_worker device-connect-edge
-
-scp coding-worker.pyz pi-desk:~/
-ssh pi-desk 'python3 ~/coding-worker.pyz --help'
-```
-
-**c) PyInstaller single binary (no Python on the Pi at all).** Build on a
-host with the Pi's architecture (or cross-build):
-
-```bash
-pip install pyinstaller
-pyinstaller --onefile --name coding-worker coding_worker.py
-scp dist/coding-worker pi-desk:~/.local/bin/
-```
-
-## Running the worker
-
-### Single repo (simplest)
-
-```bash
-DEVICE_CONNECT_ALLOW_INSECURE=true \
-TENANT=alice \
-coding-worker \
-  --device-id pi-desk \
-  --exec-cmd 'codex exec --full-auto {prompt}' \
-  --repo-path ~/repos/shared-app
-```
-
-### Multiple repos (allowlist)
-
-Pass `--repo NAME=PATH` once per repo the worker is allowed to operate
-on. The caller picks one by name via the `repo` param on `dispatch()`.
-Paths are resolved at startup; callers can't escape the list.
-
-```bash
-coding-worker \
-  --device-id pi-desk \
-  --exec-cmd 'codex exec --full-auto {prompt}' \
-  --repo shared-app=~/repos/shared-app \
-  --repo infra=~/repos/infra \
-  --repo docs=~/repos/team-docs \
-  --default-repo shared-app
-```
-
-### Substitute any coding CLI
-
-```bash
-# claude-code
---exec-cmd 'claude -p {prompt}'
-
-# aider
---exec-cmd 'aider --message {prompt} --yes'
-```
-
-The worker shell-quotes the incoming `{prompt}` before substitution — do
-**not** wrap `{prompt}` in your own quotes in the template.
+- **Service logs on the remote**
+  ```bash
+  ssh user@host 'tail -f ~/.coding-worker/worker.log'
+  ```
+- **Service state**
+  ```bash
+  ssh user@host 'systemctl --user status coding-worker'
+  ```
+- **Worker listening?**
+  ```bash
+  ssh user@host "ss -tln | grep ':7447 '"
+  ```
+- **Remove everything the provision script installed**
+  ```bash
+  ./provision.sh user@host --uninstall
+  ```
 
 ## Picking the repo from the dispatcher side
 
-The worker exposes `list_repos()` as an RPC, so any agent can discover
-which repos are available without a config file on the server side:
+The worker exposes `list_repos()` so any agent can discover which repos
+are available without config on the dispatcher:
 
 ```
-codex › [tool] invoke_device(pi-desk, list_repos)
+codex › [tool] invoke_device(jetson-01, list_repos)
   → {"repos": [
-       {"name": "shared-app", "path": "/home/pi/repos/shared-app"},
-       {"name": "infra",      "path": "/home/pi/repos/infra"},
-       {"name": "docs",       "path": "/home/pi/repos/team-docs"}],
+       {"name": "shared-app", "path": "/home/user/repos/shared-app"},
+       {"name": "infra",      "path": "/home/user/repos/infra"},
+       {"name": "docs",       "path": "/home/user/repos/team-docs"}],
      "default": "shared-app"}
 
-codex › [tool] invoke_device(pi-desk, dispatch,
+codex › [tool] invoke_device(jetson-01, dispatch,
                              {repo: "infra", prompt: "add Terraform module..."})
 ```
 
 If the caller omits `repo`, the worker uses `--default-repo` (or the
-first `--repo` entry). If the caller passes an unknown name, the
-dispatch is rejected with a clear error — no accidental writes to
-unexpected paths.
+first `--repo` entry). Unknown names are rejected with a clear error —
+no accidental writes to unexpected paths.
 
-**Concurrency note.** The current worker runs each task directly in the
-repo's working copy, so two concurrent tasks targeting the **same
-repo** will step on each other's `git checkout`. One task per repo at
-a time is safe; parallel tasks across different repos are fine. If you
-need parallel tasks on the same repo, extend the driver to use
-`git worktree add` per task — roughly a 10-line change to `_run`.
+To allow multiple repos on one worker, the worker CLI accepts
+`--repo NAME=PATH` repeatedly; the provision script doesn't surface
+that yet, so use the manual systemd unit (see below), or edit
+`~/.coding-worker/run.sh` on the remote after provisioning.
+
+**Concurrency.** The worker runs each task directly in the repo's
+working copy, so two concurrent tasks targeting the **same repo** will
+collide on `git checkout`. One task per repo at a time is safe; parallel
+tasks across different repos are fine. If you need parallel tasks on the
+same repo, extend `_run()` to use `git worktree add` per task (~10 lines).
 
 ## Multi-tenant isolation on a shared network
 
 All Device Connect subjects are prefixed with `TENANT`. Different values
 → different namespaces → no cross-discovery.
 
-### Tier 1 — cooperating friends, same LAN
+### Tier 1 — cooperating users, same LAN
 
-Each person picks a unique tenant and sets it on both sides.
-
-```bash
-# alice (both dispatcher and pi)
-export TENANT=alice
-
-# bob (both dispatcher and pi)
-export TENANT=bob
-```
+Each person picks a unique tenant and sets it on both sides. The
+`--tenant` flag on `provision.sh` handles the worker side; `TENANT=<name>`
+in your MCP config handles the dispatcher side.
 
 Alice's `list_devices()` only sees devices that announced themselves
 under `device-connect.alice.*.presence`. Same for Bob.
 
 **Caveat:** this is a logical namespace, not a cryptographic boundary.
-With `DEVICE_CONNECT_ALLOW_INSECURE=true` and shared multicast, a curious
-peer who knows Alice's tenant name can still subscribe to her subjects
-and even publish commands. Fine for cooperating users; not fine if
+With `DEVICE_CONNECT_ALLOW_INSECURE=true`, a curious peer who knows the
+tenant name can still subscribe to those subjects and even publish
+commands. Fine for cooperating users on a trusted network; not fine if
 anyone on the network is untrusted.
 
 ### Tier 2 — untrusted peers on the same network
 
-Turn off D2D multicast and run a broker with per-tenant credentials. On
-NATS this means one account per friend, with subject ACL restricted to
+Turn off insecure mode and run a broker with per-tenant credentials. On
+NATS this means one account per user, with subject ACL restricted to
 `device-connect.{their-tenant}.>`. On MQTT/Zenoh the equivalent is
 per-client ACL rules.
 
 On each side drop the per-tenant credentials file into
 `security_infra/credentials/orchestrator.creds.json` (dispatcher) and
-use `--nats-credentials-file` or env (`NATS_CREDENTIALS_FILE`) on the
-worker. See `packages/device-connect-server/security_infra/README.md`
-for generation.
-
-Unset `DEVICE_CONNECT_ALLOW_INSECURE` and point both sides at the broker:
+use `NATS_CREDENTIALS_FILE` env on the worker. See
+`packages/device-connect-server/security_infra/README.md` for generation.
 
 ```bash
 export NATS_URL=tls://broker.example:4222
@@ -223,16 +375,15 @@ export NATS_TLS_CA_FILE=/path/to/ca-cert.pem
 export TENANT=alice
 ```
 
-Now the broker enforces that Alice's dispatcher can only talk to
-Alice's workers — the tenant prefix is no longer an honor-system check.
+The broker now enforces that alice's dispatcher can only talk to alice's
+workers — the tenant prefix is no longer honor-system.
 
 ### Tier 3 — self-service onboarding
 
 For more than a handful of people, run the `device-connect-server`
 multi-tenant portal (see
 `packages/device-connect-server/device_connect_server/portal/README.md`).
-Each friend signs up, the portal provisions their credentials and ACLs.
-No per-tenant config files to hand-edit.
+Each user signs up; the portal provisions their credentials and ACLs.
 
 ## RPC surface
 
@@ -242,25 +393,28 @@ Exposed by this worker:
 | --- | --- | --- |
 | `list_repos()` | `@rpc` | → `{repos: [{name, path}], default}` |
 | `dispatch(prompt, base_ref, task_id, repo)` | `@rpc` | → `{accepted, task_id, repo}` |
-| `status(task_id)` | `@rpc` | → `{state, repo?, branch?, sha?, summary?, error?, category?, step?}` |
+| `task_status(task_id)` | `@rpc` | → `{state, repo?, branch?, sha?, summary?, error?, category?, step?}` |
 | `cancel(task_id)` | `@rpc` | → `{cancelled, reason?}` |
 | `get_logs(task_id, tail=200)` | `@rpc` | → `{lines, truncated, total}` |
 | `progress` | `@emit` | `{task_id, step, detail}` |
 | `work_done` | `@emit` | `{task_id, branch, sha, summary}` |
 | `work_failed` | `@emit` | `{task_id, error, category, step, log_tail}` |
 
+Named `task_status` (not `status`) because `DeviceDriver` reserves the
+`status` attribute for the device-level health property.
+
 ## Failure reporting
 
 When a task fails, the worker emits `work_failed` with a structured
-classification so the dispatcher agent can decide what to do without a
-second round-trip:
+classification so the dispatcher can decide what to do without a second
+round-trip:
 
 - `category` — fixed vocabulary: `precondition`, `agent_error`,
   `no_changes`, `conflict`, `auth`, `rate_limit`, `cancelled`, `unknown`.
 - `step` — where it died: `checkout`, `agent`, `commit`, `push`.
 - `log_tail` — last 20 lines of that task's combined stdout/stderr.
 
-Per-task logs are kept on disk (default `~/.local/state/coding-worker/logs/<task_id>.log`).
+Per-task logs are on disk at `~/.local/state/coding-worker/logs/<task_id>.log`.
 Use `get_logs(task_id, tail=N)` to pull more context on demand — either
 to peek at a running task, or to investigate after `work_failed`.
 
@@ -271,15 +425,15 @@ Suggested dispatcher policies:
 | `no_changes` | Re-dispatch with a sharper prompt, or mark task done-nothing |
 | `rate_limit` | Retry after backoff on same worker |
 | `conflict` | Rebase on server side, re-dispatch, or escalate |
-| `auth` | Surface to user — the Pi needs credentials refreshed |
+| `auth` | Surface to user — remote needs credentials refreshed |
 | `precondition` | Check worker config (repo path, base ref) |
 | `agent_error` | Inspect `log_tail` / `get_logs`; surface to user |
 | `cancelled` | No action |
-| `unknown` | Surface to user with `get_logs` output |
+| `unknown` | Pull `get_logs`, surface to user |
 
 ## Security notes
 
-- The `--exec-cmd` template is trusted: it is set by the Pi operator,
+- The `--exec-cmd` template is trusted: it's set by the worker operator,
   not by the dispatcher. Don't accept it from an RPC.
 - The caller's `prompt` is passed through `shlex.quote()` before
   substitution, so shell metacharacters in the prompt are inert.
@@ -288,3 +442,57 @@ Suggested dispatcher policies:
 - The worker runs whatever the coding CLI decides to run. Sandbox the
   host (dedicated user, restricted git remote, read-only system dirs)
   if that matters to you.
+
+## Manual setup (without provision.sh)
+
+The script is the recommended path. If you want to do it yourself:
+
+- **pipx** (simplest if the remote has Python 3.11 + network):
+  ```bash
+  pipx install ./examples/coding_worker
+  ```
+- **shiv zipapp** (single-file, no pip on the remote):
+  ```bash
+  pip install shiv
+  shiv -c coding-worker -o coding-worker.pyz \
+    ./examples/coding_worker device-connect-edge
+  scp coding-worker.pyz user@host:~/
+  ssh user@host 'python3 ~/coding-worker.pyz --help'
+  ```
+- **PyInstaller single binary** (no Python at all on the remote): build on
+  the target architecture, scp the binary.
+
+Then run it manually (the `--repo NAME=PATH` form gives you the full
+multi-repo allowlist that the provision script doesn't expose yet):
+
+```bash
+DEVICE_CONNECT_ALLOW_INSECURE=true \
+TENANT=alice \
+MESSAGING_BACKEND=zenoh \
+ZENOH_LISTEN=tcp/0.0.0.0:7447 \
+coding-worker \
+  --device-id jetson-01 \
+  --exec-cmd 'codex exec --full-auto {prompt}' \
+  --repo shared-app=~/repos/shared-app \
+  --repo infra=~/repos/infra \
+  --default-repo shared-app
+```
+
+Dispatcher-side manual install:
+
+```bash
+pipx install 'device-connect-agent-tools[mcp]'
+```
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.device-connect]
+command = "python"
+args = ["-m", "device_connect_agent_tools.mcp"]
+[mcp_servers.device-connect.env]
+TENANT = "alice"
+DEVICE_CONNECT_ALLOW_INSECURE = "true"
+MESSAGING_BACKEND = "zenoh"
+ZENOH_CONNECT = "tcp/10.0.0.11:7447"
+DEVICE_CONNECT_DISCOVERY_MODE = "d2d"
+```
