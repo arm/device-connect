@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Strands adapter — wraps Device Connect tools with @strands.tool.
 
 Hierarchical discovery keeps LLM context small:

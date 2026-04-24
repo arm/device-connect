@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tool router for MCP Bridge.
 
 Routes MCP tool calls to Device Connect devices via NATS JSON-RPC.

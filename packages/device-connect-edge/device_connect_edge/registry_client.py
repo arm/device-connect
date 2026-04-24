@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Lightweight registry client for device discovery via JSON-RPC.
 
 Sends ``discovery/listDevices`` and ``discovery/getDevice`` requests

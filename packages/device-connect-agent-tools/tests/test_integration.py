@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for device-connect-agent-tools.
 
 No dependency on device-connect-server — tests the standalone package.

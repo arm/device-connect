@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """EtcdStateStore — concrete StateStore implementation backed by etcd3.
 
 This module provides a production-ready state store using etcd3 via the

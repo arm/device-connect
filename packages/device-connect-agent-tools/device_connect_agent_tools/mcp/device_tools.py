@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """MCP server for remote device operations.
 
 This module provides an MCP server that exposes tools for interacting with

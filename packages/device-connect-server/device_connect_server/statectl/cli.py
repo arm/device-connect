@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """CLI for inspecting and managing etcd state in Device Connect.
 
 A Python-native replacement for etcdctl, tailored for the Device Connect

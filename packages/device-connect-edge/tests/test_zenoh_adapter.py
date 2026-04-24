@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_edge.messaging.zenoh_adapter — ZenohAdapter.
 
 All Zenoh SDK internals are mocked so no real Zenoh session is needed.

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Docker Compose infrastructure management for cross-repo integration tests.
 
 Manages NATS + Zenoh + etcd + device-registry-service lifecycle.

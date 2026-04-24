@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for device_connect_server.logging module."""
 import pytest
 from device_connect_server.logging import (

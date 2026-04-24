@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Fuzz target: NATS .creds file parser.
 
 Exercises MessagingConfig._parse_nats_creds_file() which uses manual

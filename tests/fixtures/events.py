@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Event capture and assertion utilities for cross-repo integration tests.
 
 Uses the SDK MessagingClient abstraction — supports NATS, Zenoh, and MQTT backends.

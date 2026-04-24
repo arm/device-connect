@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Singleton tracer and span helpers for Device Connect.
 
 Aligned with strands.telemetry.tracer — singleton get_tracer() pattern

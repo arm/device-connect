@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for device-connect-agent-tools discover_devices().
 
 Tests that the agent SDK can discover devices registered via device_connect_edge.

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for D2D device discovery (no Docker infrastructure).
 
 Tests that devices can discover each other and communicate via Zenoh

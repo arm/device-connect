@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Fuzz target: JSON-RPC command message parsing.
 
 Exercises the same parsing path as DeviceRuntime._cmd_subscription().on_msg(),

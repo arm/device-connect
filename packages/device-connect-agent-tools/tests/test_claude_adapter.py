@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_agent_tools.adapters.claude module.
 
 Validates that the Claude Agent SDK adapter wraps Device Connect tool functions

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Messaging connection management for Device Connect tools.
 
 Uses device_connect_edge.messaging for the underlying connection, credential

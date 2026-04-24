@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared fixtures for device-connect-agent-tools tests.
 
 Uses device_connect_edge.messaging.MessagingConfig for credential/TLS resolution.

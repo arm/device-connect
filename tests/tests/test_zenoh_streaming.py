@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Zenoh high-frequency streaming integration test.
 
 Validates that the ZenohAdapter can sustain 50Hz+ pub/sub throughput

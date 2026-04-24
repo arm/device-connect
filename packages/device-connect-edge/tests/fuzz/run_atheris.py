@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Runner for all atheris fuzz targets with markdown report generation.
 
 Runs each fuzz target across all packages, captures results, and writes

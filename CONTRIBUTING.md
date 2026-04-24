@@ -184,3 +184,21 @@ See [tests/README.md](tests/README.md) for the full test matrix.
 ## License
 
 By contributing, you agree that your contributions will be licensed under the [Apache License 2.0](LICENSE).
+
+## File headers
+
+All source files contributed to this repository must include the following
+header at the top:
+
+```
+Copyright (c) <year>-2026, Arm Limited and Contributors. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+```
+
+For languages that use `/* */` or `//` comments (C, C++, Go, JavaScript,
+TypeScript, etc.), apply the equivalent block-comment form. For shebang
+scripts, place the header immediately after the shebang line.
+
+Preserve this header when editing existing files. If you are contributing
+code originally authored by a third party, preserve their original
+copyright notice verbatim and do not overwrite it.

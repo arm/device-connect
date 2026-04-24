@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_edge.device module.
 
 Tests DeviceRuntime lifecycle, build_rpc_response/build_rpc_error helpers,

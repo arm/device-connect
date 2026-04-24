@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Zenoh-based production infrastructure (TLS).
 #
 # Requires TLS certificates in security_infra/:

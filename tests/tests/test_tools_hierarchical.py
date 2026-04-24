@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for hierarchical discovery tools.
 
 Tests describe_fleet(), list_devices(), get_device_functions() and the

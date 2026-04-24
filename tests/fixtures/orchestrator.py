@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Orchestrator fixtures for cross-repo integration tests.
 
 - MockOrchestrator: Rule-based routing (no LLM, fast)

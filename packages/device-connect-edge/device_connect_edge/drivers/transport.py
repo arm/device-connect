@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Lightweight transport wrapper for hardware-native topic access.
 
 Exposes raw publish/subscribe on arbitrary topics using the device's

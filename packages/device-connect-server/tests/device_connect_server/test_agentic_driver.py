@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for D2D (device-to-device) communication in DeviceDriver."""
 import pytest
 from unittest.mock import AsyncMock, MagicMock

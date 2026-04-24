@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 #
 # Verify multi-tenant isolation: test that per-tenant NATS JWT permissions work.
 #

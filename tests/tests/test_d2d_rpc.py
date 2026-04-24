@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Integration tests for D2D (Device-to-Device) direct RPC invocation.
 
 Tests that one device can call another device's RPC directly,

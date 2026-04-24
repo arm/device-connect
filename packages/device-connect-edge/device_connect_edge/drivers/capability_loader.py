@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """In-process capability loading for Device Connect devices.
 
 This module provides infrastructure for loading capabilities from disk
