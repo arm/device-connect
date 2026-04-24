@@ -279,6 +279,18 @@ class TestAggregateFleet:
         result = aggregate_fleet(devices)
         assert result["total_functions"] == 3
 
+    def test_function_counting_matches_normalize_filter(self):
+        # Nameless entries must be excluded from total_functions so the aggregate
+        # count stays consistent with get_device_functions (which normalizes via
+        # _normalize_functions and drops entries with no name).
+        devices = [
+            {"device_type": "a", "location": "x", "functions": [
+                {"name": "f1"}, {"name": ""}, {"description": "no name"}, None,
+            ]},
+        ]
+        result = aggregate_fleet(devices)
+        assert result["total_functions"] == 1
+
     def test_keys_are_sorted(self):
         devices = [
             {"device_type": "zebra", "location": "zoo", "functions": []},
