@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_agent_tools.connection module.
 
 Tests connection management, config resolution, and RPC helpers

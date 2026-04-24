@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared device normalization helpers.
 
 Operates on flat device dicts (already run through ``connection.flatten_device``
