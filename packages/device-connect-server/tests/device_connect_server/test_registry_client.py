@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_server.registry.client.RegistryClient.
 
 Tests use a mocked MessagingClient — no real NATS required.

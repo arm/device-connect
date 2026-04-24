@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Unit tests for device_connect_server.registry.service.registry — DeviceRegistry.
 
 The ``etcd3gw`` client is fully mocked so no real etcd server is needed.

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """User dashboard with live device polling, RPC invocation, and event streaming."""
 
 import asyncio

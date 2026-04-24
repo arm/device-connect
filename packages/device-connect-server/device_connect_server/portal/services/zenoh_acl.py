@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Zenoh ACL config management — generates and updates Zenoh router config.
 
 The Zenoh 1.0 ACL plugin enforces access control based on TLS certificate CN

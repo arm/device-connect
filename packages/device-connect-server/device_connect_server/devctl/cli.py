@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """CLI for Device Connect device control.
 
 This module provides the command-line interface for device operations:

@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Light-weight interface to etcd for storing device information.
 
 This module exposes simple helper functions that wrap the ``etcd3gw`` client

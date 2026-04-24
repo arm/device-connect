@@ -1,3 +1,7 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Messaging backend abstraction — strategy pattern for NATS, Zenoh, and MQTT.
 
 The admin selects a backend during bootstrap. All portal services
