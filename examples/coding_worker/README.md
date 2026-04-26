@@ -133,11 +133,14 @@ failing test excerpts. Commit it. Tell me when it's done, or what
 went wrong if it fails.
 ```
 
-The dispatcher should choose the right MCP tools itself: `describe_fleet`
-to find the worker, `list_repos` to see which repo is exposed,
-`dispatch` with a sensible `base_ref` (typically your current branch
-since `--seed-from` mirrored it), then poll `task_status` /
-`get_logs` until completion.
+The dispatcher should choose the right MCP tools itself:
+`describe_fleet` to find the worker, `list_repos` to see which repo is
+exposed, `dispatch` with a sensible `base_ref` (typically your current
+branch since `--seed-from` mirrored it), then `wait_for_event` to block
+on completion (race-safe; one tool call regardless of task duration).
+On `work_failed`, the dispatcher pulls more context via
+`get_logs(task_id)`. See [WALKTHROUGH.md](WALKTHROUGH.md) for sequence
+diagrams of how these fit together.
 
 ### 4. Fetch the worker's result
 
@@ -192,10 +195,12 @@ coding-worker process (this package, running on the remote)
  @emit work_done {task_id, branch, sha, summary}
       │
       ▼
-dispatcher agent learns about completion. Today's MCP clients
-typically poll `task_status` / `get_logs`; the bridge also exposes
-`events://devices/<id>/latest` as a subscribable MCP resource for
-clients that support resource subscriptions natively.
+dispatcher agent learns about completion. The bridge exposes a
+`wait_for_event` tool that blocks for the matching event with a single
+tool call (race-safe via an in-memory ring buffer). On failure the
+agent pulls more context with `get_logs`. The bridge also publishes
+`notifications/resources/updated` on `events://devices/<id>/latest`
+for MCP clients that subscribe to resources natively.
 ```
 
 See [WALKTHROUGH.md](WALKTHROUGH.md) for what a single dispatch looks
@@ -389,19 +394,50 @@ Each user signs up; the portal provisions their credentials and ACLs.
 
 Exposed by this worker:
 
-| Function / event | Kind | Payload |
-| --- | --- | --- |
-| `list_repos()` | `@rpc` | → `{repos: [{name, path}], default}` |
-| `dispatch(prompt, base_ref, task_id, repo)` | `@rpc` | → `{accepted, task_id, repo}` |
-| `task_status(task_id)` | `@rpc` | → `{state, repo?, branch?, sha?, summary?, error?, category?, step?}` |
-| `cancel(task_id)` | `@rpc` | → `{cancelled, reason?}` |
-| `get_logs(task_id, tail=200)` | `@rpc` | → `{lines, truncated, total}` |
-| `progress` | `@emit` | `{task_id, step, detail}` |
-| `work_done` | `@emit` | `{task_id, branch, sha, summary}` |
-| `work_failed` | `@emit` | `{task_id, error, category, step, log_tail}` |
+| Function / event | Kind | Payload | Used for |
+| --- | --- | --- | --- |
+| `list_repos()` | `@rpc` | → `{repos: [{name, path}], default}` | Discover what the worker can edit before dispatching |
+| `dispatch(prompt, base_ref, task_id, repo)` | `@rpc` | → `{accepted, task_id, repo}` | Hand a coding task off to the worker; returns immediately |
+| `task_status(task_id)` | `@rpc` | → `{state, repo?, branch?, sha?, summary?, error?, category?, step?}` | Fallback / explicit poll: "is task X still running, and what's its final state?" |
+| `cancel(task_id)` | `@rpc` | → `{cancelled, reason?}` | Stop a running task cleanly |
+| `get_logs(task_id, tail=200)` | `@rpc` | → `{lines, truncated, total}` | Peek at a running task or pull diagnostic context after `work_failed` |
+| `progress` | `@emit` | `{task_id, step, detail}` | Streaming step markers (`checkout` / `agent` / `commit` / `push`) |
+| `work_done` | `@emit` | `{task_id, branch, sha, summary}` | Terminal: task succeeded; feature branch is committed |
+| `work_failed` | `@emit` | `{task_id, error, category, step, log_tail}` | Terminal: task failed; payload is structured for routing |
 
 Named `task_status` (not `status`) because `DeviceDriver` reserves the
 `status` attribute for the device-level health property.
+
+### How the dispatcher uses each piece
+
+For a typical "dispatch task → wait for result → report back" flow,
+the dispatcher mostly uses three things:
+
+1. **`invoke_device(jetson-01, dispatch, ...)`** — start the task. Returns
+   in milliseconds with `{accepted: true, task_id: ...}`.
+2. **`wait_for_event(jetson-01, event_name="work_done", match_params={task_id})`**
+   on the MCP bridge — block until the task emits a terminal event. One
+   tool call. Race-safe: returns immediately if the worker fired the
+   event before the wait started (common for fast tasks). Run a parallel
+   call for `event_name="work_failed"` to catch either outcome.
+3. **`invoke_device(jetson-01, get_logs, {task_id, tail: N})`** — only when
+   you need more context than `work_failed.log_tail` provides (which is
+   capped at 20 lines).
+
+`task_status` and `cancel` exist for the off-cases:
+
+- **`task_status`** is the explicit fallback when `wait_for_event` times
+  out without a match: "did the task actually finish, or is it stuck?"
+  Also useful if the dispatcher restarts and forgets which tasks were in
+  flight — you can re-query by `task_id`.
+- **`cancel`** is for the user-says-stop case. Worker raises
+  `asyncio.CancelledError`, emits `work_failed` with `category=cancelled`.
+
+`progress` events arrive between dispatch and the terminal event. The
+dispatcher rarely needs to react to them, but they're how you'd build a
+live progress UI if you wanted one — every event lands in the bridge's
+ring buffer and is queryable via `wait_for_event` (with no
+`event_name` filter) or via the events resource.
 
 ## Failure reporting
 

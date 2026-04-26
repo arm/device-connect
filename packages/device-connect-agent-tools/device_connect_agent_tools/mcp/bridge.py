@@ -287,7 +287,12 @@ class MCPBridgeServer:
             description=(
                 "Call a function on a Device Connect device. "
                 "Use get_device_functions() first to see available functions "
-                "and their parameter schemas."
+                "and their parameter schemas. "
+                "If the function dispatches background work that will emit "
+                "events when it finishes, prefer waiting via wait_for_event "
+                "rather than re-invoking a status function in a poll loop — "
+                "wait_for_event blocks for the actual event with a single "
+                "tool call instead of burning many."
             ),
         )
         async def invoke_device(
@@ -322,12 +327,22 @@ class MCPBridgeServer:
         @self._mcp.tool(
             name="wait_for_event",
             description=(
-                "Block until the next matching event arrives from a device, or "
-                "until timeout_seconds elapses. Returns the event payload "
-                "({device_id, event_name, params}) or {timeout: true} on no-match. "
-                "Use after invoke_device(dispatch, ...) instead of polling task_status. "
-                "match_params is JSON; use it to wait for a specific task_id, e.g. "
-                "{\"task_id\": \"T-42\"}."
+                "Wait for an event from a Device Connect worker. Use this any "
+                "time the user asks to 'wait', 'tell me when', 'block until', "
+                "'let me know once', or otherwise expects you to know that a "
+                "background task finished — it's a single tool call instead "
+                "of a sleep+poll loop on the device's status function. "
+                "Race-safe: if the event already fired before this call (the "
+                "common case for fast tasks), it returns immediately from an "
+                "in-memory ring buffer. Otherwise blocks up to "
+                "timeout_seconds for a future event. Returns the event payload "
+                "({device_id, event_name, params}) or {\"timeout\": true} on no match. "
+                "TIP: for terminal events on a coding-worker, set "
+                "event_name='work_done' and run a parallel call with "
+                "event_name='work_failed' to catch either outcome — or omit "
+                "event_name and inspect event_name on the result. "
+                "Filter by task_id with match_params={\"task_id\": \"T-42\"} so "
+                "you don't pick up an unrelated task's event."
             ),
         )
         async def wait_for_event(

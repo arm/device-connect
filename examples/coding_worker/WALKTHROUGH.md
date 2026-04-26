@@ -199,69 +199,168 @@ being explicit about:
 So the accurate experience today is **pull, not push** — pleasantly
 pullable because the worker emits structured events that get buffered.
 
-### What the user actually sees
+### What the user actually sees (with `wait_for_event`)
 
-A few minutes after dispatching, the user comes back to the agent:
+If the user's prompt asks the dispatcher to wait for completion ("tell me
+when it's done", "wait until it finishes", etc.), the dispatcher picks
+the bridge's `wait_for_event` tool and the conversation looks like:
 
 ```
-❯ any updates from pi-desk?
+❯ Use device-connect to dispatch task T-42 to pi-desk and tell me when it finishes.
 
-codex › Let me check.
-[tool] invoke_device(pi-desk, "task_status", {"task_id": "T-42"})
-  → {"state": "done",
-     "repo": "shared-app",
-     "branch": "feature/T-42",
-     "sha": "a3f91c2",
-     "summary": "Fixed race in session teardown; added retry guard."}
+agent › [tool] describe_fleet()                       → 1 worker: pi-desk
+agent › [tool] invoke_device(pi-desk, dispatch, ...)  → accepted, T-42
+agent › [tool] wait_for_event(pi-desk, work_done, task_id=T-42, timeout=120)
+   (single tool call — blocks server-side for up to 120s)
+   → {event_name: work_done, params: {branch: feature/T-42, sha: a3f91c2,
+                                      summary: "Fixed race in session teardown..."}}
 
-codex › T-42 finished — feature/T-42 pushed (a3f91c2). Want me
-        to fetch it and walk through the diff?
+agent › T-42 finished — feature/T-42 pushed (a3f91c2). Want me to fetch
+        it and walk through the diff?
 
 ❯ yes
-
-codex › [running] git fetch origin feature/T-42
-codex › [running] git log --oneline main..feature/T-42
-   a3f91c2 fix(auth): guard against race in session teardown
-   8e1dd4f test(auth): stability harness for test_login
-
-codex › Here's the relevant hunk in src/auth/session.py:
-   ─────────────────────────────────────────────
-   @@ -41,6 +41,11 @@ class Session:
-        def teardown(self):
-            self._db.close()
-   +        # Guard against early teardown racing with
-   +        # in-flight refresh tokens.
-   +        with self._refresh_lock:
-   +            if self._pending_refresh:
-   +                self._pending_refresh.cancel()
-            self._cookie.clear()
-   ─────────────────────────────────────────────
-
-❯ looks good, merge it
 ```
 
-### Three delivery shapes (the bigger picture)
+No polling loop. The wait is one tool call regardless of whether the task
+takes 5 seconds or 5 minutes.
 
-| Pattern | What it does | Reality today |
+### Sequence diagram — happy path
+
+```
+ User           Dispatcher            MCP Bridge                  Worker
+                 (codex /         (event subscription mgr +        (coding_worker.py)
+                  claude-code)     ring buffer + waiters)
+   │                 │                       │                              │
+   │ "dispatch +     │                       │                              │
+   │  wait for it"   │                       │                              │
+   ├────────────────►│                       │                              │
+   │                 │ invoke_device(        │                              │
+   │                 │   dispatch, T-42)     │                              │
+   │                 ├──────────────────────►│                              │
+   │                 │                       │ ▶ ensure_fabric_sub          │
+   │                 │                       │   (PIN sub before dispatch)  │
+   │                 │                       │ ─ subscribe ─►               │
+   │                 │                       │   ...pi-desk.event.>         │
+   │                 │                       │                              │
+   │                 │                       │ ─ JSON-RPC dispatch ───────► │
+   │                 │                       │ ◄── ack {accepted, T-42} ─── │
+   │                 │ ◄─── tool result ─────│                              │
+   │                 │                       │                              │ git checkout
+   │                 │                       │ ◄─── progress event ──────── │ codex exec
+   │                 │                       │   (push to ring buffer)      │ ...
+   │                 │                       │                              │
+   │                 │                       │ ◄─── work_done event ─────── │ ✓ done
+   │                 │                       │   (push to ring + cache)     │
+   │                 │                       │                              │
+   │                 │ wait_for_event(       │                              │
+   │                 │   pi-desk,            │                              │
+   │                 │   work_done,          │                              │
+   │                 │   task_id=T-42,       │                              │
+   │                 │   timeout=120)        │                              │
+   │                 ├──────────────────────►│                              │
+   │                 │                       │ ▶ scan ring (newest→oldest)  │
+   │                 │                       │   match work_done {T-42}     │
+   │                 │                       │   ★ HIT — return now         │
+   │                 │ ◄── tool result ──────│                              │
+   │                 │   {work_done, T-42,   │                              │
+   │                 │    branch: ...,       │                              │
+   │                 │    sha: ...}          │                              │
+   │ "done; branch=" │                       │                              │
+   │ ◄───────────────┤                       │                              │
+   ▼                 ▼                       ▼                              ▼
+```
+
+Key beats:
+
+1. **`ensure_fabric_sub` runs before the RPC reply.** Pre-warms the
+   subscription so events fire into the ring buffer, not the void.
+2. **Events accumulate in the ring buffer** (last 32/device) as the
+   worker emits them.
+3. **`wait_for_event` scans the ring first.** Even if the model takes
+   a moment between dispatch ack and wait_for_event call, the matching
+   event is sitting there. Returns immediately.
+4. **If no ring hit, the call parks server-side** until the next
+   matching event or timeout. Caller gets the same return shape either
+   way.
+
+### Sequence diagram — slow task (no race, normal wait)
+
+```
+ Dispatcher          MCP Bridge                  Worker
+     │                       │                      │
+     │ invoke_device(...)    │                      │
+     ├──────────────────────►│ ensure_fabric_sub    │
+     │                       │ ─── subscribe ──►    │
+     │                       │ ─── dispatch ──────► │
+     │                       │ ◄── ack ─────────────│
+     │ ◄── ack ──────────────│                      │
+     │                       │                      │  (long-running task,
+     │                       │                      │   say a 5-min build)
+     │ wait_for_event(       │                      │
+     │   work_done, T-42)    │                      │
+     ├──────────────────────►│                      │
+     │                       │ ring buffer empty    │
+     │                       │ ▶ register waiter Q  │
+     │                       │ ▶ park (await Q.get) │
+     │                       │ ◄── progress ────────│
+     │                       │ ▶ Q.put → not match  │
+     │                       │ ◄── progress ────────│
+     │                       │ ▶ Q.put → not match  │
+     │                       │ ◄── work_done ───────│
+     │                       │ ▶ Q.put → MATCH      │
+     │ ◄── tool result ──────│                      │
+     ▼                       ▼                      ▼
+```
+
+### When the dispatcher uses `task_status` and `get_logs`
+
+`wait_for_event` is the workhorse. The other two are for off-cases:
+
+```
+Normal:        dispatch → wait_for_event(work_done) → done
+                  (failed)→ wait_for_event(work_failed) → log_tail in payload
+
+Wait timed out:                                    Failure too thin:
+  (a) ─────────────────                              (b) ────────────────────
+  wait_for_event → timeout                           work_failed payload's
+       │                                             log_tail (20 lines) is
+       ▼                                             not enough for diagnosis
+  invoke_device(task_status,                              │
+                {task_id})                                ▼
+       │                                             invoke_device(get_logs,
+       ▼                                                 {task_id, tail: 500})
+  state: running → re-wait with longer timeout            │
+  state: done    → use payload (no event was missed)      ▼
+  state: unknown → maybe the worker restarted;       full diagnostic context
+                   inspect git fetch jetson
+```
+
+**`task_status`** is the explicit poll/recover path. Use it when
+`wait_for_event` returned `{"timeout": true}`, when the dispatcher just
+restarted and forgot which tasks were in flight, or when the user asks
+"is task X still running?" without the full sit-and-wait.
+
+**`get_logs`** is for diagnosis. The terminal `work_failed` event already
+includes the last 20 lines of output as `log_tail`; `get_logs` is for
+when those 20 lines aren't enough — pull more with `tail=500` or
+`tail=2000`. Also useful for peeking at a long-running task ("what's it
+doing right now?") without subscribing to events.
+
+### Three delivery shapes — current state
+
+| Pattern | How | Reality today |
 | --- | --- | --- |
-| **Pull** | Dispatcher calls `task_status(task_id)` when asked | Works on every MCP client. The default in this walkthrough. |
-| **Long-poll** | New bridge tool `wait_for_event(...)` blocks until an event arrives, stream via `notifications/progress` | Works everywhere once the bridge adds the tool. Parks one MCP slot for up to the timeout — dispatcher is busy during that window. |
-| **Resource push** | Bridge exposes `events://{device_id}/latest`, sends `notifications/resources/updated` | Non-blocking, truly push, but client support as of early 2026 is uneven. Best on Claude Desktop. |
-
-None of this is a limitation of Device Connect — it's a gap in what
-the MCP bridge wraps. Adding `wait_for_event` is a ~60-line change to
-`packages/device-connect-agent-tools/device_connect_agent_tools/mcp/bridge.py`;
-resource-push is a bigger change but well-defined. Both sit above the
-Device Connect fabric, not inside it.
+| **Pull** | Dispatcher calls `invoke_device(task_status)` repeatedly | Works on every MCP client. Wasteful — many tool calls + sleeps. The fallback when the model isn't told to wait. |
+| **`wait_for_event` tool** | Single bridge tool, race-safe via ring buffer + pinned fabric sub | Works everywhere a tool can. **Default for both codex CLI and Claude Code today.** One tool call regardless of task duration. |
+| **Resource push** | Bridge sends `notifications/resources/updated` to subscribers of `events://devices/<id>/latest` | Bridge supports it. CLI clients (codex, Claude Code) don't actively subscribe yet — Claude Desktop does. Future-proofing only. |
 
 ### Non-MCP dispatcher gets push for free
 
-If the dispatcher is a Python process using
-`device_connect_agent_tools` directly (Strands / LangChain / Claude
-SDK / a plain script), `conn.subscribe_events(device_id="pi-desk")`
-yields event batches live. The walkthrough's "agent interrupts you
-mid-sentence" UX is genuine there — it's the MCP bridge specifically
-that's pull-only today.
+If the dispatcher is a Python process using `device_connect_agent_tools`
+directly (Strands / LangChain / Claude SDK / a plain script),
+`conn.subscribe_events(device_id="pi-desk")` yields event batches live —
+no MCP bridge in the loop. The "agent interrupts you mid-sentence" UX
+is genuine there.
 
 ---
 
