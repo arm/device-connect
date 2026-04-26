@@ -72,6 +72,23 @@ def _parse_event(subject: str, data: bytes) -> tuple[str, dict[str, Any]]:
     return event_name, {"value": payload}
 
 
+# How many recent events to keep per device. Sized for the dispatch→wait race
+# window — the worker can fire a handful of progress events plus a terminal
+# event between dispatch returning and a wait_for_event call subscribing.
+_RECENT_EVENTS_LIMIT = 32
+
+
+def _matches(event: dict[str, Any], event_name: str, match_params: Optional[dict[str, Any]]) -> bool:
+    """Return True iff *event* satisfies the optional name + params filters."""
+    if event_name and event.get("event_name") != event_name:
+        return False
+    if match_params:
+        p = event.get("params") or {}
+        if not all(p.get(k) == v for k, v in match_params.items()):
+            return False
+    return True
+
+
 class EventSubscriptionManager:
     """Tracks MCP subscriptions and forwards Device Connect events to subscribers."""
 
@@ -82,9 +99,17 @@ class EventSubscriptionManager:
         # device_id -> set of (session, uri_string) pairs
         self._subscribers: dict[str, set[tuple[ServerSession, str]]] = {}
         self._latest: dict[str, dict[str, Any]] = {}
+        # device_id -> ring of recent events (oldest first), so wait_for_event
+        # can resolve dispatch→wait races against events that already fired.
+        self._recent: dict[str, list[dict[str, Any]]] = {}
         self._lock = asyncio.Lock()
         # device_id -> list of asyncio.Queue feeding waiters (one queue per waiter)
         self._waiters: dict[str, list[asyncio.Queue]] = {}
+        # device_ids whose fabric subscription is pinned (won't be torn down by
+        # waiter timeouts or unsubscribes). Used to pre-warm subs on
+        # invoke_device so wait_for_event catches events that fire faster than
+        # the round-trip from the dispatcher.
+        self._pinned: set[str] = set()
 
     async def subscribe(self, uri: str) -> None:
         """Handle an MCP ``resources/subscribe`` request."""
@@ -114,6 +139,7 @@ class EventSubscriptionManager:
         except LookupError:
             return
 
+        fabric_sub = None
         async with self._lock:
             subs = self._subscribers.get(device_id)
             if subs is None:
@@ -122,7 +148,10 @@ class EventSubscriptionManager:
             if subs:
                 return
             self._subscribers.pop(device_id, None)
-            fabric_sub = self._device_subs.pop(device_id, None)
+            # Don't tear down the fabric sub if it's pinned (pre-warmed by
+            # invoke_device) or if a wait_for_event is still listening.
+            if device_id not in self._pinned and not self._waiters.get(device_id):
+                fabric_sub = self._device_subs.pop(device_id, None)
         if fabric_sub is not None:
             try:
                 await fabric_sub.unsubscribe()
@@ -137,6 +166,20 @@ class EventSubscriptionManager:
             return json.dumps({"device_id": device_id, "event_name": None, "params": {}})
         return json.dumps(payload)
 
+    async def ensure_fabric_sub(self, device_id: str) -> None:
+        """Pre-warm a fabric subscription for *device_id* and pin it.
+
+        Called by the bridge before any invoke_device so events fired
+        between the RPC reply and a subsequent wait_for_event are
+        captured in the ring buffer rather than lost. Pinned subs
+        survive waiter/unsubscribe teardown and are released only when
+        the bridge shuts down (close()).
+        """
+        async with self._lock:
+            self._pinned.add(device_id)
+            if device_id not in self._device_subs:
+                self._device_subs[device_id] = await self._start_fabric_sub(device_id)
+
     async def wait_for_event(
         self,
         device_id: str,
@@ -144,12 +187,17 @@ class EventSubscriptionManager:
         event_name: str = "",
         match_params: Optional[dict[str, Any]] = None,
     ) -> Optional[dict[str, Any]]:
-        """Block until the next matching event for *device_id* arrives, or timeout.
+        """Wait for a matching event for *device_id*, or return None on timeout.
+
+        Resolves the classic dispatch→wait race by checking the recent-event
+        ring buffer first. If a matching event already fired (e.g. the task
+        completed before the caller subscribed), it's returned immediately.
+        Otherwise, blocks for the next matching event until *timeout*.
 
         Args:
             device_id: Which device to listen on.
-            timeout: Seconds to wait. The caller controls how long the MCP slot
-                stays parked.
+            timeout: Seconds to wait for a future event. Past matches in the
+                ring buffer return immediately regardless.
             event_name: Optional event-name filter (e.g. "work_done"). Empty
                 string matches any event.
             match_params: Optional ``{key: value}`` constraints; the event's
@@ -160,6 +208,15 @@ class EventSubscriptionManager:
             The matched event dict (``{device_id, event_name, params}``) or
             None on timeout.
         """
+        # Race fix: scan recent events first (newest → oldest). Handles the
+        # case where the worker fires the terminal event before the caller
+        # gets to subscribe.
+        async with self._lock:
+            recent = list(self._recent.get(device_id, []))
+        for event in reversed(recent):
+            if _matches(event, event_name, match_params):
+                return event
+
         # Ensure a fabric subscription exists for this device while we wait.
         async with self._lock:
             if device_id not in self._device_subs:
@@ -176,28 +233,28 @@ class EventSubscriptionManager:
                     payload = await asyncio.wait_for(queue.get(), timeout=remaining)
                 except asyncio.TimeoutError:
                     return None
-                if event_name and payload.get("event_name") != event_name:
+                if not _matches(payload, event_name, match_params):
                     continue
-                if match_params:
-                    p = payload.get("params") or {}
-                    if not all(p.get(k) == v for k, v in match_params.items()):
-                        continue
                 return payload
         finally:
+            sub_to_release = None
             async with self._lock:
                 waiters = self._waiters.get(device_id, [])
                 if queue in waiters:
                     waiters.remove(queue)
                 if not waiters:
                     self._waiters.pop(device_id, None)
-                    # Tear down the fabric sub only if no MCP subscriber needs it.
-                    if device_id not in self._subscribers:
-                        sub = self._device_subs.pop(device_id, None)
-                        if sub is not None:
-                            try:
-                                await sub.unsubscribe()
-                            except Exception:
-                                logger.debug("error releasing fabric sub", exc_info=True)
+                    # Tear down the fabric sub only if no MCP subscriber and not pinned.
+                    if (
+                        device_id not in self._subscribers
+                        and device_id not in self._pinned
+                    ):
+                        sub_to_release = self._device_subs.pop(device_id, None)
+            if sub_to_release is not None:
+                try:
+                    await sub_to_release.unsubscribe()
+                except Exception:
+                    logger.debug("error releasing fabric sub", exc_info=True)
 
     async def close(self) -> None:
         """Tear down all fabric subscriptions and clear in-memory state."""
@@ -205,6 +262,8 @@ class EventSubscriptionManager:
             subs = list(self._device_subs.values())
             self._device_subs.clear()
             self._subscribers.clear()
+            self._pinned.clear()
+            self._waiters.clear()
         for sub in subs:
             try:
                 await sub.unsubscribe()
@@ -229,6 +288,10 @@ class EventSubscriptionManager:
         self._latest[device_id] = payload
 
         async with self._lock:
+            ring = self._recent.setdefault(device_id, [])
+            ring.append(payload)
+            if len(ring) > _RECENT_EVENTS_LIMIT:
+                del ring[: len(ring) - _RECENT_EVENTS_LIMIT]
             subs = list(self._subscribers.get(device_id, set()))
             waiters = list(self._waiters.get(device_id, []))
         for session, uri in subs:

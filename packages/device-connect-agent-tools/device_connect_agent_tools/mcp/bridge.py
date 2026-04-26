@@ -301,6 +301,17 @@ class MCPBridgeServer:
             except json.JSONDecodeError as e:
                 return json.dumps({"success": False, "error": f"Invalid JSON arguments: {e}"})
 
+            # Pre-warm the event subscription for this device so any events
+            # the invocation triggers (progress / work_done / work_failed)
+            # land in the ring buffer for a subsequent wait_for_event call.
+            # Without this, fast tasks fire-and-finish before any waiter
+            # subscribes — exactly the dispatch→wait race.
+            if self._event_subs is not None:
+                try:
+                    await self._event_subs.ensure_fabric_sub(device_id)
+                except Exception:
+                    logger.debug("ensure_fabric_sub failed for %s", device_id, exc_info=True)
+
             tool_name = f"{device_id}::{function}"
             try:
                 result = await self._router.invoke(tool_name, args)

@@ -347,6 +347,98 @@ async def test_wait_for_event_returns_none_on_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_wait_for_event_resolves_dispatch_to_wait_race() -> None:
+    """Event already fired before wait_for_event is called → ring buffer hit."""
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    # Pre-warm the fabric subscription so events flow into the ring.
+    s = _FakeSession()
+    with _request_ctx_with_session(s):
+        await mgr.subscribe(es.uri_for_device("pi-desk"))
+
+    # Worker fires work_done BEFORE the wait call.
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done",
+         "params": {"task_id": "T-fast", "branch": "feature/T-fast"}},
+    )
+    await asyncio.sleep(0)  # let _handle_event run
+
+    # Now wait — should return immediately from the ring buffer, not block.
+    result = await mgr.wait_for_event(
+        "pi-desk", timeout=0.05,
+        event_name="work_done", match_params={"task_id": "T-fast"},
+    )
+    assert result is not None
+    assert result["params"]["task_id"] == "T-fast"
+
+
+@pytest.mark.asyncio
+async def test_ensure_fabric_sub_pre_warms_and_pins() -> None:
+    """ensure_fabric_sub creates the sub and survives waiter timeouts."""
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    await mgr.ensure_fabric_sub("pi-desk")
+    assert "device-connect.alice.pi-desk.event.>" in msg.subs
+
+    # An event fired before any waiter subscribes still lands in the ring.
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done", "params": {"task_id": "T-pre"}},
+    )
+    await asyncio.sleep(0)
+
+    # Wait now finds it from the ring.
+    result = await mgr.wait_for_event(
+        "pi-desk", timeout=0.05,
+        event_name="work_done", match_params={"task_id": "T-pre"},
+    )
+    assert result is not None
+    assert result["params"]["task_id"] == "T-pre"
+
+    # Waiter timeout should NOT release the pinned fabric sub.
+    await mgr.wait_for_event("pi-desk", timeout=0.01,
+                             event_name="future_event_that_never_fires")
+    fabric = msg.subs["device-connect.alice.pi-desk.event.>"][1]
+    assert not fabric.unsubscribed
+
+    # close() releases everything.
+    await mgr.close()
+    assert fabric.unsubscribed
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_ring_buffer_skips_non_matching() -> None:
+    """Newer non-matching event in the ring shouldn't mask an older match."""
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+    s = _FakeSession()
+    with _request_ctx_with_session(s):
+        await mgr.subscribe(es.uri_for_device("pi-desk"))
+
+    # Two events: a target work_done first, then an unrelated progress.
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done", "params": {"task_id": "T-a"}},
+    )
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.progress",
+        {"jsonrpc": "2.0", "method": "progress", "params": {"step": "agent"}},
+    )
+    await asyncio.sleep(0)
+
+    result = await mgr.wait_for_event(
+        "pi-desk", timeout=0.05,
+        event_name="work_done", match_params={"task_id": "T-a"},
+    )
+    assert result is not None
+    assert result["event_name"] == "work_done"
+    assert result["params"]["task_id"] == "T-a"
+
+
+@pytest.mark.asyncio
 async def test_wait_for_event_releases_fabric_sub_when_no_other_listeners() -> None:
     """A timed-out waiter shouldn't leave a dangling fabric subscription."""
     msg = _FakeMessagingClient()
