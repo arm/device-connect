@@ -308,6 +308,41 @@ class MCPBridgeServer:
             except ToolInvocationError as e:
                 return json.dumps({"success": False, "error": str(e)})
 
+        @self._mcp.tool(
+            name="wait_for_event",
+            description=(
+                "Block until the next matching event arrives from a device, or "
+                "until timeout_seconds elapses. Returns the event payload "
+                "({device_id, event_name, params}) or {timeout: true} on no-match. "
+                "Use after invoke_device(dispatch, ...) instead of polling task_status. "
+                "match_params is JSON; use it to wait for a specific task_id, e.g. "
+                "{\"task_id\": \"T-42\"}."
+            ),
+        )
+        async def wait_for_event(
+            device_id: str,
+            timeout_seconds: float = 60.0,
+            event_name: str = "",
+            match_params: str = "{}",
+        ) -> str:
+            try:
+                params = json.loads(match_params) if match_params else {}
+                if not isinstance(params, dict):
+                    raise ValueError("match_params must be a JSON object")
+            except (json.JSONDecodeError, ValueError) as exc:
+                return json.dumps({"error": f"invalid match_params: {exc}"})
+            if self._event_subs is None:
+                return json.dumps({"error": "event subscription manager not initialized"})
+            event = await self._event_subs.wait_for_event(
+                device_id=device_id,
+                timeout=max(0.0, float(timeout_seconds)),
+                event_name=event_name or "",
+                match_params=params or None,
+            )
+            if event is None:
+                return json.dumps({"timeout": True, "device_id": device_id})
+            return json.dumps(event, indent=2)
+
     def _register_event_resource(self) -> None:
         """Resource template returning the latest Device Connect event for a device."""
         assert self._mcp is not None

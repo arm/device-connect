@@ -83,6 +83,8 @@ class EventSubscriptionManager:
         self._subscribers: dict[str, set[tuple[ServerSession, str]]] = {}
         self._latest: dict[str, dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        # device_id -> list of asyncio.Queue feeding waiters (one queue per waiter)
+        self._waiters: dict[str, list[asyncio.Queue]] = {}
 
     async def subscribe(self, uri: str) -> None:
         """Handle an MCP ``resources/subscribe`` request."""
@@ -135,6 +137,68 @@ class EventSubscriptionManager:
             return json.dumps({"device_id": device_id, "event_name": None, "params": {}})
         return json.dumps(payload)
 
+    async def wait_for_event(
+        self,
+        device_id: str,
+        timeout: float,
+        event_name: str = "",
+        match_params: Optional[dict[str, Any]] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Block until the next matching event for *device_id* arrives, or timeout.
+
+        Args:
+            device_id: Which device to listen on.
+            timeout: Seconds to wait. The caller controls how long the MCP slot
+                stays parked.
+            event_name: Optional event-name filter (e.g. "work_done"). Empty
+                string matches any event.
+            match_params: Optional ``{key: value}`` constraints; the event's
+                params must contain every key with the same value to match.
+                Useful for filtering by ``task_id``.
+
+        Returns:
+            The matched event dict (``{device_id, event_name, params}``) or
+            None on timeout.
+        """
+        # Ensure a fabric subscription exists for this device while we wait.
+        async with self._lock:
+            if device_id not in self._device_subs:
+                self._device_subs[device_id] = await self._start_fabric_sub(device_id)
+            queue: asyncio.Queue = asyncio.Queue()
+            self._waiters.setdefault(device_id, []).append(queue)
+        try:
+            deadline = asyncio.get_event_loop().time() + timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    return None
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    return None
+                if event_name and payload.get("event_name") != event_name:
+                    continue
+                if match_params:
+                    p = payload.get("params") or {}
+                    if not all(p.get(k) == v for k, v in match_params.items()):
+                        continue
+                return payload
+        finally:
+            async with self._lock:
+                waiters = self._waiters.get(device_id, [])
+                if queue in waiters:
+                    waiters.remove(queue)
+                if not waiters:
+                    self._waiters.pop(device_id, None)
+                    # Tear down the fabric sub only if no MCP subscriber needs it.
+                    if device_id not in self._subscribers:
+                        sub = self._device_subs.pop(device_id, None)
+                        if sub is not None:
+                            try:
+                                await sub.unsubscribe()
+                            except Exception:
+                                logger.debug("error releasing fabric sub", exc_info=True)
+
     async def close(self) -> None:
         """Tear down all fabric subscriptions and clear in-memory state."""
         async with self._lock:
@@ -166,6 +230,7 @@ class EventSubscriptionManager:
 
         async with self._lock:
             subs = list(self._subscribers.get(device_id, set()))
+            waiters = list(self._waiters.get(device_id, []))
         for session, uri in subs:
             try:
                 await session.send_resource_updated(AnyUrl(uri))
@@ -174,3 +239,8 @@ class EventSubscriptionManager:
                     "failed to push resources/updated for %s to session=%s",
                     uri, id(session), exc_info=True,
                 )
+        for queue in waiters:
+            try:
+                queue.put_nowait(payload)
+            except Exception:
+                logger.debug("waiter queue put failed", exc_info=True)

@@ -256,3 +256,123 @@ async def test_subscribe_to_unrelated_uri_is_a_noop() -> None:
 
     assert msg.subs == {}
     assert session.updated == []
+
+
+# ── wait_for_event ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_returns_matching_event() -> None:
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    waiter = asyncio.create_task(mgr.wait_for_event("pi-desk", timeout=5.0))
+    # Yield to let waiter register
+    await asyncio.sleep(0)
+
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done",
+         "params": {"task_id": "T-42", "branch": "feature/T-42"}},
+    )
+    result = await asyncio.wait_for(waiter, timeout=2.0)
+
+    assert result is not None
+    assert result["event_name"] == "work_done"
+    assert result["params"]["task_id"] == "T-42"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_filters_by_event_name() -> None:
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    waiter = asyncio.create_task(
+        mgr.wait_for_event("pi-desk", timeout=5.0, event_name="work_done"),
+    )
+    await asyncio.sleep(0)
+
+    # Progress event should be skipped, work_done should resolve.
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.progress",
+        {"jsonrpc": "2.0", "method": "progress", "params": {"step": "agent"}},
+    )
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done", "params": {"task_id": "T-42"}},
+    )
+
+    result = await asyncio.wait_for(waiter, timeout=2.0)
+    assert result["event_name"] == "work_done"
+    assert result["params"]["task_id"] == "T-42"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_filters_by_match_params() -> None:
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    waiter = asyncio.create_task(
+        mgr.wait_for_event(
+            "pi-desk",
+            timeout=5.0,
+            event_name="work_done",
+            match_params={"task_id": "T-target"},
+        ),
+    )
+    await asyncio.sleep(0)
+
+    # Non-matching task_id is ignored
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done", "params": {"task_id": "T-other"}},
+    )
+    # Matching task_id resolves the waiter
+    await msg.fire(
+        "device-connect.alice.pi-desk.event.work_done",
+        {"jsonrpc": "2.0", "method": "work_done", "params": {"task_id": "T-target"}},
+    )
+
+    result = await asyncio.wait_for(waiter, timeout=2.0)
+    assert result["params"]["task_id"] == "T-target"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_returns_none_on_timeout() -> None:
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    result = await mgr.wait_for_event("pi-desk", timeout=0.05)
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_releases_fabric_sub_when_no_other_listeners() -> None:
+    """A timed-out waiter shouldn't leave a dangling fabric subscription."""
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    await mgr.wait_for_event("pi-desk", timeout=0.05)
+    # Fabric sub was created during the wait. After it times out and no
+    # other listener exists, the manager calls .unsubscribe() on it.
+    sub_entry = msg.subs.get("device-connect.alice.pi-desk.event.>")
+    assert sub_entry is not None, "fabric sub should have been created"
+    _cb, fabric = sub_entry
+    assert fabric.unsubscribed
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_keeps_fabric_sub_when_session_still_subscribed() -> None:
+    """A waiter that exits shouldn't tear down fabric subs an MCP session is using."""
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+    session = _FakeSession()
+    uri = es.uri_for_device("pi-desk")
+
+    with _request_ctx_with_session(session):
+        await mgr.subscribe(uri)
+    fabric = msg.subs["device-connect.alice.pi-desk.event.>"][1]
+
+    await mgr.wait_for_event("pi-desk", timeout=0.05)  # times out
+
+    assert not fabric.unsubscribed  # session still holding it

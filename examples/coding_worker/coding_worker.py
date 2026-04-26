@@ -342,9 +342,15 @@ class CodingWorkerDriver(DeviceDriver):
         return stdout
 
     async def _shell(self, cmd: str, cwd: Path, log_fh=None) -> tuple[int, str]:
-        """Run *cmd* in *cwd*, merging stdout+stderr. Streams to log_fh as lines arrive.
+        """Run *cmd* in *cwd*, merging stdout+stderr. Streams to log_fh as data arrives.
 
         Returns (returncode, combined_output).
+
+        Reads raw chunks (not lines) — codex/claude/etc. routinely emit lines
+        longer than asyncio's default 64K StreamReader limit, which would
+        blow up readline() with "Separator is found, but chunk is longer
+        than limit". The 4KB chunk size is fine for log streaming since we
+        just write through to the log file unmodified.
         """
         if log_fh is not None:
             log_fh.write(f"\n$ {cmd}\n")
@@ -358,7 +364,7 @@ class CodingWorkerDriver(DeviceDriver):
         chunks: list[str] = []
         assert proc.stdout is not None
         while True:
-            raw = await proc.stdout.readline()
+            raw = await proc.stdout.read(4096)
             if not raw:
                 break
             text = raw.decode(errors="replace")
