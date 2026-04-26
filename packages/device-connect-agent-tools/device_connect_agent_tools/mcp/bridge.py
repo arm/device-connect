@@ -30,9 +30,7 @@ from device_connect_edge.messaging import create_client
 from device_connect_edge.messaging.base import MessagingClient
 from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
-from device_connect_agent_tools.mcp.event_subscriptions import (
-    EventSubscriptionManager, device_id_from_uri,
-)
+from device_connect_agent_tools.mcp.event_subscriptions import EventSubscriptionManager
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
 from device_connect_agent_tools.connection import flatten_device

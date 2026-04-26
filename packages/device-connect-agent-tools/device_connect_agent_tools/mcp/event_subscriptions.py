@@ -17,11 +17,26 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
-from mcp.server.lowlevel.server import request_ctx
-from mcp.server.session import ServerSession
 from pydantic import AnyUrl
+
+# Mirrors bridge.py's fastmcp guard. The fuzz CI job installs [dev,fuzz] but
+# not [mcp], so mcp must be importable lazily — top-level imports of
+# `mcp.server.*` here would break collection of any test that touches
+# device_connect_agent_tools.mcp.* (because mcp/__init__.py eagerly imports
+# bridge, which imports this module). EventSubscriptionManager is only
+# instantiated by the bridge after its own fastmcp guard passes, so a runtime
+# AttributeError on request_ctx is a real bug — we re-raise it loudly.
+try:
+    from mcp.server.lowlevel.server import request_ctx
+    _MCP_AVAILABLE = True
+except ImportError:  # pragma: no cover - fuzz/lint envs without [mcp]
+    _MCP_AVAILABLE = False
+    request_ctx = None  # type: ignore[assignment]
+
+if TYPE_CHECKING:
+    from mcp.server.session import ServerSession
 
 logger = logging.getLogger(__name__)
 
