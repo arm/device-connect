@@ -151,18 +151,32 @@ async def test_sensor_capabilities(device_spawner, messaging_url):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_multiple_sensors(device_spawner, messaging_url):
-    """Multiple sensors should coexist."""
+    """Multiple sensors should coexist.
+
+    Replaces the previous single fixed-sleep settle with a poll-until-both-
+    visible loop. SETTLE_TIME=0.5s is too tight for Zenoh D2D peer
+    convergence under CI load — both peers' presence announcements need to
+    propagate before discover_devices() sees them, and which one arrives
+    first is non-deterministic.
+    """
     _, _ = await device_spawner.spawn_sensor("itest-sensor-a")
     _, _ = await device_spawner.spawn_sensor("itest-sensor-b")
     await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import connect, disconnect, discover_devices
 
+    expected = {"itest-sensor-a", "itest-sensor-b"}
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
-        devices = await asyncio.to_thread(discover_devices)
-        ids = [d["device_id"] for d in devices]
-        assert "itest-sensor-a" in ids
-        assert "itest-sensor-b" in ids
+        deadline = asyncio.get_event_loop().time() + 10.0
+        ids: set[str] = set()
+        while asyncio.get_event_loop().time() < deadline:
+            devices = await asyncio.to_thread(discover_devices, refresh=True)
+            ids = {d["device_id"] for d in devices}
+            if expected <= ids:
+                break
+            await asyncio.sleep(0.5)
+        assert "itest-sensor-a" in ids, f"sensor-a not in {ids}"
+        assert "itest-sensor-b" in ids, f"sensor-b not in {ids}"
     finally:
         await asyncio.to_thread(disconnect)

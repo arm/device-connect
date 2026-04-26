@@ -34,6 +34,7 @@ from device_connect_edge.messaging import create_client
 from device_connect_edge.messaging.base import MessagingClient
 from device_connect_edge.registry_client import RegistryClient
 from device_connect_agent_tools.mcp.config import BridgeConfig
+from device_connect_agent_tools.mcp.event_subscriptions import EventSubscriptionManager
 from device_connect_agent_tools.mcp.router import ToolRouter, ToolInvocationError
 from device_connect_agent_tools.tools import SMALL_FLEET_THRESHOLD
 from device_connect_agent_tools.connection import flatten_device
@@ -81,6 +82,7 @@ class MCPBridgeServer:
         self._registry = None  # RegistryClient or D2DRegistry (DiscoveryProvider)
         self._router: Optional[ToolRouter] = None
         self._d2d_collector = None  # PresenceCollector, if in D2D mode
+        self._event_subs: Optional[EventSubscriptionManager] = None
         self._running = False
 
     async def start(self) -> None:
@@ -104,11 +106,18 @@ class MCPBridgeServer:
                 timeout=self.config.request_timeout,
             )
 
-            # Create FastMCP server with 4 meta-tools
+            # Create FastMCP server with 4 meta-tools + event resource
             self._mcp = FastMCP("Device Connect Bridge")
             self._register_meta_tools()
 
-            logger.info("MCP Bridge ready — 4 meta-tools registered")
+            self._event_subs = EventSubscriptionManager(
+                self._messaging_client, self.config.tenant,
+            )
+            self._register_event_resource()
+            self._register_subscription_handlers()
+            self._enable_subscribe_capability()
+
+            logger.info("MCP Bridge ready — 4 meta-tools + events resource registered")
             await self._mcp.run_stdio_async()
 
         finally:
@@ -280,7 +289,12 @@ class MCPBridgeServer:
             description=(
                 "Call a function on a Device Connect device. "
                 "Use get_device_functions() first to see available functions "
-                "and their parameter schemas."
+                "and their parameter schemas. "
+                "If the function dispatches background work that will emit "
+                "events when it finishes, prefer waiting via wait_for_event "
+                "rather than re-invoking a status function in a poll loop — "
+                "wait_for_event blocks for the actual event with a single "
+                "tool call instead of burning many."
             ),
         )
         async def invoke_device(
@@ -294,6 +308,17 @@ class MCPBridgeServer:
             except json.JSONDecodeError as e:
                 return json.dumps({"success": False, "error": f"Invalid JSON arguments: {e}"})
 
+            # Pre-warm the event subscription for this device so any events
+            # the invocation triggers (progress / work_done / work_failed)
+            # land in the ring buffer for a subsequent wait_for_event call.
+            # Without this, fast tasks fire-and-finish before any waiter
+            # subscribes — exactly the dispatch→wait race.
+            if self._event_subs is not None:
+                try:
+                    await self._event_subs.ensure_fabric_sub(device_id)
+                except Exception:
+                    logger.debug("ensure_fabric_sub failed for %s", device_id, exc_info=True)
+
             tool_name = f"{device_id}::{function}"
             try:
                 result = await self._router.invoke(tool_name, args)
@@ -301,8 +326,106 @@ class MCPBridgeServer:
             except ToolInvocationError as e:
                 return json.dumps({"success": False, "error": str(e)})
 
+        @self._mcp.tool(
+            name="wait_for_event",
+            description=(
+                "Wait for an event from a Device Connect worker. Use this any "
+                "time the user asks to 'wait', 'tell me when', 'block until', "
+                "'let me know once', or otherwise expects you to know that a "
+                "background task finished — it's a single tool call instead "
+                "of a sleep+poll loop on the device's status function. "
+                "Race-safe: if the event already fired before this call (the "
+                "common case for fast tasks), it returns immediately from an "
+                "in-memory ring buffer. Otherwise blocks up to "
+                "timeout_seconds for a future event. Returns the event payload "
+                "({device_id, event_name, params}) or {\"timeout\": true} on no match. "
+                "TIP: for terminal events on a coding-worker, set "
+                "event_name='work_done' and run a parallel call with "
+                "event_name='work_failed' to catch either outcome — or omit "
+                "event_name and inspect event_name on the result. "
+                "Filter by task_id with match_params={\"task_id\": \"T-42\"} so "
+                "you don't pick up an unrelated task's event."
+            ),
+        )
+        async def wait_for_event(
+            device_id: str,
+            timeout_seconds: float = 60.0,
+            event_name: str = "",
+            match_params: str = "{}",
+        ) -> str:
+            try:
+                params = json.loads(match_params) if match_params else {}
+                if not isinstance(params, dict):
+                    raise ValueError("match_params must be a JSON object")
+            except (json.JSONDecodeError, ValueError) as exc:
+                return json.dumps({"error": f"invalid match_params: {exc}"})
+            if self._event_subs is None:
+                return json.dumps({"error": "event subscription manager not initialized"})
+            event = await self._event_subs.wait_for_event(
+                device_id=device_id,
+                timeout=max(0.0, float(timeout_seconds)),
+                event_name=event_name or "",
+                match_params=params or None,
+            )
+            if event is None:
+                return json.dumps({"timeout": True, "device_id": device_id})
+            return json.dumps(event, indent=2)
+
+    def _register_event_resource(self) -> None:
+        """Resource template returning the latest Device Connect event for a device."""
+        assert self._mcp is not None
+        assert self._event_subs is not None
+        event_subs = self._event_subs
+
+        @self._mcp.resource(
+            "events://devices/{device_id}/latest",
+            mime_type="application/json",
+            description=(
+                "Latest Device Connect event for the given device. Subscribe via "
+                "resources/subscribe to receive notifications/resources/updated when "
+                "the device emits a new event (progress, work_done, work_failed, ...)."
+            ),
+        )
+        async def latest_event(device_id: str) -> str:
+            return await event_subs.read(device_id)
+
+    def _register_subscription_handlers(self) -> None:
+        """Wire the low-level subscribe/unsubscribe MCP handlers."""
+        assert self._mcp is not None
+        assert self._event_subs is not None
+        low = self._mcp._mcp_server
+        event_subs = self._event_subs
+
+        @low.subscribe_resource()
+        async def _on_subscribe(uri):
+            await event_subs.subscribe(str(uri))
+
+        @low.unsubscribe_resource()
+        async def _on_unsubscribe(uri):
+            await event_subs.unsubscribe(str(uri))
+
+    def _enable_subscribe_capability(self) -> None:
+        """Advertise resources.subscribe=True; the MCP SDK hardcodes False otherwise."""
+        assert self._mcp is not None
+        low = self._mcp._mcp_server
+        original = low.get_capabilities
+
+        def patched(notification_options, experimental_capabilities):
+            caps = original(notification_options, experimental_capabilities)
+            if caps.resources is not None:
+                caps.resources.subscribe = True
+            return caps
+
+        low.get_capabilities = patched  # type: ignore[assignment]
+
     async def _cleanup(self) -> None:
         self._running = False
+        if self._event_subs:
+            try:
+                await self._event_subs.close()
+            except Exception as e:
+                logger.warning("Error closing event subscription manager: %s", e)
+            self._event_subs = None
         if self._d2d_collector:
             try:
                 await self._d2d_collector.stop()
