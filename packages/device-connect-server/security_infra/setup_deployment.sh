@@ -96,6 +96,9 @@ export XDG_DATA_HOME="${NSC_HOME}/data"
 export XDG_CONFIG_HOME="${NSC_HOME}/config"
 
 OUTPUT_CONF="${SCRIPT_DIR}/nats-jwt-generated.conf"
+# Newer nsc (v2.12+) refuses to overwrite an existing --config-file, and Step 1
+# (setup_jwt_auth.sh) has already created this file, so remove it first.
+rm -f "${OUTPUT_CONF}"
 nsc generate config --mem-resolver --config-file "${OUTPUT_CONF}"
 
 # Re-append listen directives (nsc generate overwrites the file)

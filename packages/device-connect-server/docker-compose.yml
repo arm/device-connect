@@ -9,7 +9,16 @@ services:
       - "4222:4222"
       - "8222:8222"
     volumes:
-      - ./security_infra/nats-jwt-generated.conf:/etc/nats/nats-jwt.conf:ro
+      # Long-form bind with create_host_path: false so docker fails loudly if
+      # nats-jwt-generated.conf is missing instead of silently creating an
+      # empty directory in its place (which causes NATS to crash-loop with
+      # "is a directory"). Run security_infra/setup_deployment.sh first.
+      - type: bind
+        source: ./security_infra/nats-jwt-generated.conf
+        target: /etc/nats/nats-jwt.conf
+        read_only: true
+        bind:
+          create_host_path: false
     command: ["-c", "/etc/nats/nats-jwt.conf"]
 
   etcd:

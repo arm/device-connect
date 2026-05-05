@@ -19,13 +19,19 @@ The portal runs alongside the existing NATS + etcd + registry stack. It stores u
 ## Prerequisites
 
 - **Docker & Docker Compose** (v2)
-- **nsc** — NATS credential toolchain (only needed for local/non-Docker runs)
+- **nsc** — NATS credential toolchain. Required on the host for both Docker and non-Docker runs, because `security_infra/setup_deployment.sh` (the one-time JWT bootstrap) and `manage_tenants.sh` shell out to it on the host.
   ```bash
   # macOS
   brew install nsc
-  # Linux / Go
+
+  # Linux / Go (installs to $(go env GOPATH)/bin — symlink onto PATH if needed)
   go install github.com/nats-io/nsc/v2@latest
+  sudo ln -sf "$(go env GOPATH)/bin/nsc" /usr/local/bin/nsc
+
+  # Or grab a prebuilt binary
+  # https://github.com/nats-io/nsc/releases
   ```
+  Verify with `nsc --version` before continuing.
 
 ## Quick Start (Docker Compose)
 
@@ -34,18 +40,29 @@ This is the recommended way to run the portal. It starts NATS, etcd, the registr
 ```bash
 cd packages/device-connect-server
 
-# 1. Start the full stack
+# 1. One-time JWT bootstrap. Requires `nsc` on PATH (see Prerequisites above).
+#    This generates security_infra/nats-jwt-generated.conf and the privileged
+#    credentials NATS needs to start. Use your machine's LAN IP (or public
+#    hostname) so devices can reach NATS.
+which nsc || { echo "install nsc first - see Prerequisites"; exit 1; }
+cd security_infra
+./setup_deployment.sh --nats-host <PUBLIC_HOST_OR_IP>
+cd ..
+
+# 2. Start the full stack
 docker compose -f infra/docker-compose-multitenant-nats.yml up -d --build portal
 
-# 2. Open the portal
+# 3. Open the portal
 open http://localhost:8080
 ```
 
-That's it. On first launch:
+> **Why step 1?** The NATS container bind-mounts `security_infra/nats-jwt-generated.conf` as its config. The compose file uses `create_host_path: false`, so if you skip step 1 the stack will fail fast with a clear error instead of silently creating an empty directory and crash-looping NATS.
+
+On first launch:
 
 1. Log in as **admin** with the password from the container logs (or the `ADMIN_PASS` env var if you set one)
-2. Go to **Admin > Setup** and enter the NATS host (use `nats` if running inside Docker, or your machine's IP if devices connect from outside)
-3. The bootstrap creates the NATS operator, account, and privileged credentials
+2. Go to **Admin > Setup** to confirm the bootstrap state — the operator/account from step 1 should already be present
+3. As tenants sign up, click **Reload NATS** in the admin UI to regenerate the config and SIGHUP the NATS container
 
 Users can now self-register at `/signup`.
 
