@@ -167,6 +167,7 @@ All settings are via environment variables:
 | GET | `/api/devices/live` | Live device table (htmx polling) |
 | GET | `/api/devices/{name}/creds` | Download credential file |
 | GET | `/api/devices/bundle` | Download all credentials as .zip |
+| GET/POST | `/auth/cli/{request_id}` | Browser-mediated CLI login: approve / deny a `dc-portalctl auth login` request |
 
 ### Admin (requires admin role)
 
@@ -193,6 +194,8 @@ Auth: `Authorization: Bearer dcp_...`. Tokens carry per-request scopes:
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
+| POST   | `/api/agent/v1/auth/cli/init` | (public) | Start a browser-mediated CLI login; returns `request_id` + verification URL |
+| POST   | `/api/agent/v1/auth/cli/poll` | (public) | Poll until the user approves; returns the minted token (single-use) |
 | GET    | `/api/agent/v1/me` | (any) | Token identity + scopes |
 | GET    | `/api/agent/v1/fleet` | `devices:read` | Fleet summary |
 | GET    | `/api/agent/v1/devices` | `devices:read` | Paginated device list |
@@ -225,34 +228,53 @@ curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
   "$DEVICE_CONNECT_PORTAL_URL/api/agent/v1/devices/cam-001/events/motion/stream?format=ndjson&count=5&duration=30"
 ```
 
-## Token management (`dc-portalctl` + admin CLI)
-
-Mint the first token from the portal host (writes directly to etcd):
-
-```bash
-python -m device_connect_server.portalctl.admin_tokens create \
-    --user alice --tenant acme \
-    --scopes devices:read,devices:invoke,events:read \
-    --label ci-bot
-# → JSON record. The "token" field (dcp_...) is shown ONLY ONCE — save it.
-
-# List
-python -m device_connect_server.portalctl.admin_tokens list
-
-# Revoke
-python -m device_connect_server.portalctl.admin_tokens revoke --token-id <id>
-```
-
 ## `dc-portalctl` — agent-facing CLI
 
-Configure once:
+### Configure
 
 ```bash
-export DEVICE_CONNECT_PORTAL_URL=http://localhost:8080
-export DEVICE_CONNECT_PORTAL_TOKEN=dcp_...
+export DEVICE_CONNECT_PORTAL_URL=http://your-portal:8080
 ```
 
-Read-only inspection:
+### Log in (browser-mediated)
+
+```bash
+dc-portalctl auth login
+# Open this URL in your browser to approve CLI access:
+#
+#   http://your-portal:8080/auth/cli/<request_id>
+#
+# Requested scopes: devices:read, devices:provision, devices:credentials, devices:invoke, events:read
+# Waiting for approval (Ctrl-C to cancel)... .....
+# Logged in as alice (acme) — scopes: devices:invoke, devices:read, events:read.
+# Token saved to /home/alice/.config/dc-portalctl/token.
+```
+
+The CLI prints a verification URL, you open it in any browser, sign in to the
+portal (the post-login redirect lands you back on the approval page), review
+the requested scopes, and click **Approve**. The portal mints a token bound to
+your account and the CLI's poll picks it up. The token is cached at
+`~/.config/dc-portalctl/token` (mode `0600`); subsequent commands use it
+automatically. The verification record is single-use — once polled, it's
+deleted.
+
+Defaults:
+
+- Scopes: `devices:read, devices:provision, devices:credentials, devices:invoke, events:read` (override with `--scopes`)
+- TTL: 10 minutes to approve before the request expires
+- Non-admin users cannot grant `admin:*` scopes; those are silently dropped on approval
+
+Other auth commands:
+
+```bash
+dc-portalctl auth me               # show identity + scopes for the current token
+dc-portalctl auth logout           # remove the cached token
+```
+
+You can also pass a token explicitly via `--token` or `DEVICE_CONNECT_PORTAL_TOKEN`.
+Resolution order: `--token` > `$DEVICE_CONNECT_PORTAL_TOKEN` > `~/.config/dc-portalctl/token`.
+
+### Read-only inspection
 
 ```bash
 dc-portalctl auth me
@@ -265,7 +287,7 @@ dc-portalctl devices functions acme-cam-001
 dc-portalctl devices events acme-cam-001
 ```
 
-Provisioning + credentials:
+### Provisioning + credentials
 
 ```bash
 # Create + receive credentials inline; pipe to a file
@@ -277,7 +299,7 @@ dc-portalctl devices provision cam-001 \
 dc-portalctl devices credentials acme-cam-001 --output-file ./acme-cam-001.creds.json
 ```
 
-Invocation:
+### Invocation
 
 ```bash
 dc-portalctl devices invoke acme-cam-001 capture_frame \
@@ -288,8 +310,9 @@ dc-portalctl devices invoke-fallback acme-cam-001,acme-cam-002 capture_frame \
     --params '{}' --reason "Fallback to backup"
 ```
 
-Bounded event stream — at least one of `--duration`, `--count`, `--follow`
-must be supplied:
+### Bounded event stream
+
+At least one of `--duration`, `--count`, `--follow` must be supplied:
 
 ```bash
 # Up to 5 events, no longer than 30 s, whichever fires first
@@ -300,8 +323,30 @@ dc-portalctl devices stream acme-cam-001 motion_detected \
 dc-portalctl devices stream acme-cam-001 motion_detected --follow
 ```
 
-Exit codes: `0` ok; `2` no events received within duration window or argument
-error; `4` 401; `5` 403; `6` 404; `1` other.
+### Exit codes
+
+`0` ok; `2` no events received within duration window or argument error; `4` 401; `5` 403; `6` 404; `1` other.
+
+## Admin token operations (fallback)
+
+`auth login` is the recommended path. For automated/headless setup or to mint
+a token for another user, run the admin tool directly on the portal host
+(writes to etcd, no Bearer required):
+
+```bash
+python -m device_connect_server.portalctl.admin_tokens create \
+    --user alice --tenant acme \
+    --scopes devices:read,devices:invoke,events:read \
+    --label ci-bot
+# → JSON record. The "token" field (dcp_...) is shown ONLY ONCE — save it.
+
+python -m device_connect_server.portalctl.admin_tokens list
+python -m device_connect_server.portalctl.admin_tokens revoke --token-id <id>
+```
+
+This is also the only way to mint admin (`admin:*`) tokens, since the browser
+flow clamps non-admin grants and admins are typically expected to manage
+tokens from a controlled host.
 
 ## Tech Stack
 
