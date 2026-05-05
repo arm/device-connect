@@ -164,6 +164,128 @@ All settings are via environment variables:
 | POST | `/api/admin/nats/reload` | Regenerate config + SIGHUP |
 | POST | `/api/admin/health/verify` | Run isolation verification |
 
+### Agent API (`/api/agent/v1/*`, requires Bearer token)
+
+JSON-only namespace for coding agents and CI clients. Distinct from browser
+routes — never returns HTML, never redirects. Errors are JSON 401/403/4xx
+with `{"success": false, "error": {"code", "message"}}`.
+
+Auth: `Authorization: Bearer dcp_...`. Tokens carry per-request scopes:
+`devices:read`, `devices:provision`, `devices:credentials`, `devices:invoke`,
+`events:read`, `admin:tenants`, `admin:*`.
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| GET    | `/api/agent/v1/me` | (any) | Token identity + scopes |
+| GET    | `/api/agent/v1/fleet` | `devices:read` | Fleet summary |
+| GET    | `/api/agent/v1/devices` | `devices:read` | Paginated device list |
+| GET    | `/api/agent/v1/devices/{id}` | `devices:read` | Whole device record |
+| GET    | `/api/agent/v1/devices/{id}/identity` | `devices:read` | Whole `identity` sub-object |
+| GET    | `/api/agent/v1/devices/{id}/status` | `devices:read` | Whole `status` sub-object |
+| GET    | `/api/agent/v1/devices/{id}/capabilities` | `devices:read` | `{functions, events}` |
+| GET    | `/api/agent/v1/devices/{id}/functions` | `devices:read` | `capabilities.functions` |
+| GET    | `/api/agent/v1/devices/{id}/events` | `devices:read` | `capabilities.events` |
+| POST   | `/api/agent/v1/devices` | `devices:provision` | Create device + return creds inline |
+| GET    | `/api/agent/v1/devices/{id}/credentials` | `devices:credentials` | Re-download creds |
+| POST   | `/api/agent/v1/devices/{id}/credentials:rotate` | `devices:credentials` | Rotate creds |
+| DELETE | `/api/agent/v1/devices/{id}` | `devices:provision` | Decommission |
+| POST   | `/api/agent/v1/devices/{id}/invoke` | `devices:invoke` | Invoke function |
+| POST   | `/api/agent/v1/invoke-with-fallback` | `devices:invoke` | Try device list in order |
+| GET    | `/api/agent/v1/devices/{id}/events/{event}/stream` | `events:read` | Bounded NDJSON/SSE stream |
+
+Tenant override (`?tenant=other`) requires admin role plus `admin:tenants` or `admin:*`.
+
+#### Bounded event stream
+
+The `stream` endpoint refuses to start unless one of `duration`, `count`, or
+`follow=true` is supplied — agents can't accidentally hang on an unbounded
+stream. Server hard caps: 1 hour duration, 10 000 events. NDJSON output emits
+a final `_meta` line with `closed_by`, `events_received`, `elapsed_s`.
+
+```bash
+# At most 5 events or 30 seconds, whichever first
+curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  "$DEVICE_CONNECT_PORTAL_URL/api/agent/v1/devices/cam-001/events/motion/stream?format=ndjson&count=5&duration=30"
+```
+
+## Token management (`dc-portalctl` + admin CLI)
+
+Mint the first token from the portal host (writes directly to etcd):
+
+```bash
+python -m device_connect_server.portalctl.admin_tokens create \
+    --user alice --tenant acme \
+    --scopes devices:read,devices:invoke,events:read \
+    --label ci-bot
+# → JSON record. The "token" field (dcp_...) is shown ONLY ONCE — save it.
+
+# List
+python -m device_connect_server.portalctl.admin_tokens list
+
+# Revoke
+python -m device_connect_server.portalctl.admin_tokens revoke --token-id <id>
+```
+
+## `dc-portalctl` — agent-facing CLI
+
+Configure once:
+
+```bash
+export DEVICE_CONNECT_PORTAL_URL=http://localhost:8080
+export DEVICE_CONNECT_PORTAL_TOKEN=dcp_...
+```
+
+Read-only inspection:
+
+```bash
+dc-portalctl auth me
+dc-portalctl fleet describe
+dc-portalctl devices list
+dc-portalctl devices identity acme-cam-001
+dc-portalctl devices status acme-cam-001        # whole status sub-object
+dc-portalctl devices capabilities acme-cam-001  # {functions, events}
+dc-portalctl devices functions acme-cam-001
+dc-portalctl devices events acme-cam-001
+```
+
+Provisioning + credentials:
+
+```bash
+# Create + receive credentials inline; pipe to a file
+dc-portalctl devices provision cam-001 \
+    --device-type camera --location warehouse1/loading-dock \
+    --creds-output-file ./acme-cam-001.creds.json
+
+# Re-download
+dc-portalctl devices credentials acme-cam-001 --output-file ./acme-cam-001.creds.json
+```
+
+Invocation:
+
+```bash
+dc-portalctl devices invoke acme-cam-001 capture_frame \
+    --params '{"resolution":"4k"}' \
+    --reason "Daily inspection job"
+
+dc-portalctl devices invoke-fallback acme-cam-001,acme-cam-002 capture_frame \
+    --params '{}' --reason "Fallback to backup"
+```
+
+Bounded event stream — at least one of `--duration`, `--count`, `--follow`
+must be supplied:
+
+```bash
+# Up to 5 events, no longer than 30 s, whichever fires first
+dc-portalctl devices stream acme-cam-001 motion_detected \
+    --duration 30 --count 5 --format ndjson
+
+# Explicit unbounded (still capped server-side)
+dc-portalctl devices stream acme-cam-001 motion_detected --follow
+```
+
+Exit codes: `0` ok; `2` no events received within duration window or argument
+error; `4` 401; `5` 403; `6` 404; `1` other.
+
 ## Tech Stack
 
 - **aiohttp** + **aiohttp-jinja2** — async HTTP server with Jinja2 templates

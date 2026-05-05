@@ -22,15 +22,46 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Routes that don't require authentication
 PUBLIC_ROUTES = {"/", "/login", "/signup", "/api/login", "/api/signup"}
 
+# Agent API namespace — Bearer-token authenticated, JSON-only errors.
+AGENT_API_PREFIX = "/api/agent/v1/"
+
+
+def _json_error(status: int, code: str, message: str) -> web.Response:
+    return web.json_response(
+        {"success": False, "error": {"code": code, "message": message}},
+        status=status,
+    )
+
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
-    """Redirect unauthenticated users to login page."""
+    """Authenticate browser sessions via cookie, agent API via Bearer token."""
     path = request.path
+
     # Allow public routes and static files
     if path in PUBLIC_ROUTES or path.startswith("/static"):
         return await handler(request)
 
+    # Agent API: Bearer token, JSON 401/403 — never HTML, never redirects.
+    if path.startswith(AGENT_API_PREFIX):
+        from .services import tokens as tokens_svc
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return _json_error(401, "missing_token", "Authorization: Bearer <token> required")
+        token = auth_header[len("Bearer "):].strip()
+        record = tokens_svc.verify_token(token)
+        if not record:
+            return _json_error(401, "invalid_token", "Token is invalid, revoked, or expired")
+        request["token"] = record
+        request["user"] = {
+            "username": record["username"],
+            "tenant": record["tenant"],
+            "role": record["role"],
+        }
+        return await handler(request)
+
+    # Browser session path
     session = await _get_session(request)
     if not session.get("username"):
         if request.headers.get("HX-Request"):
@@ -119,11 +150,12 @@ def create_app() -> web.Application:
     app.router.add_static("/static", STATIC_DIR, name="static")
 
     # Register routes
-    from .views import auth, dashboard, devices, admin
+    from .views import auth, dashboard, devices, admin, agent_api
     auth.setup_routes(app)
     dashboard.setup_routes(app)
     devices.setup_routes(app)
     admin.setup_routes(app)
+    agent_api.setup_routes(app)
 
     # Seed admin on startup
     app.on_startup.append(_on_startup)

@@ -75,6 +75,7 @@ all = [
 devctl = "device_connect_server.devctl.cli:main"
 statectl = "device_connect_server.statectl.cli:main"
 dc-portal = "device_connect_server.portal.__main__:main"
+dc-portalctl = "device_connect_server.portalctl.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/arm/device-connect"
