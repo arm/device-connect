@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from typing import Any
 
 def _require_aiohttp():
@@ -36,6 +37,38 @@ def _require_aiohttp():
 DEFAULT_URL = "http://localhost:8080"
 ENV_URL = "DEVICE_CONNECT_PORTAL_URL"
 ENV_TOKEN = "DEVICE_CONNECT_PORTAL_TOKEN"
+
+# On-disk cached token written by `dc-portalctl auth login`.
+_TOKEN_FILE_DIR = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config"),
+    "dc-portalctl",
+)
+_TOKEN_FILE_PATH = os.path.join(_TOKEN_FILE_DIR, "token")
+
+# Default scopes requested by `auth login` if --scopes isn't given.
+_DEFAULT_LOGIN_SCOPES = [
+    "devices:read", "devices:provision", "devices:credentials",
+    "devices:invoke", "events:read",
+]
+
+
+def _read_cached_token() -> str | None:
+    try:
+        with open(_TOKEN_FILE_PATH, "r") as fp:
+            t = fp.read().strip()
+            return t or None
+    except OSError:
+        return None
+
+
+def _write_cached_token(token: str) -> str:
+    os.makedirs(_TOKEN_FILE_DIR, mode=0o700, exist_ok=True)
+    fd = os.open(_TOKEN_FILE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, (token + "\n").encode())
+    finally:
+        os.close(fd)
+    return _TOKEN_FILE_PATH
 
 
 # ── output helpers ────────────────────────────────────────────────
@@ -110,12 +143,13 @@ class PortalClient:
                 return resp.status, body
 
 
-def _resolve_config(args) -> tuple[str, str]:
+def _resolve_config(args, *, token_required: bool = True) -> tuple[str, str]:
     url = args.portal_url or os.environ.get(ENV_URL) or DEFAULT_URL
-    token = args.token or os.environ.get(ENV_TOKEN) or ""
-    if not token:
+    token = args.token or os.environ.get(ENV_TOKEN) or _read_cached_token() or ""
+    if not token and token_required:
         sys.stderr.write(
-            f"error: no portal token provided. Set {ENV_TOKEN}=dcp_... or pass --token.\n"
+            f"error: no portal token provided. Run `dc-portalctl auth login` "
+            f"or set {ENV_TOKEN}=dcp_... or pass --token.\n"
         )
         raise SystemExit(2)
     return url, token
@@ -154,6 +188,81 @@ async def cmd_auth_me(client: PortalClient, args) -> int:
     if 200 <= status < 300:
         _emit(body, args.output)
     return _exit_for_status(status, body)
+
+
+async def cmd_auth_login(client: PortalClient, args) -> int:
+    """Browser-mediated login: print a URL, poll until the user approves."""
+    aiohttp = _require_aiohttp()
+    scopes = [s.strip() for s in (args.scopes or ",".join(_DEFAULT_LOGIN_SCOPES)).split(",")
+              if s.strip()]
+    label = args.label or f"dc-portalctl@{os.uname().nodename}"
+
+    init_status, init_body = await client.request(
+        "POST", "/api/agent/v1/auth/cli/init",
+        json_body={"scopes": scopes, "label": label},
+    )
+    if not (200 <= init_status < 300):
+        _maybe_print_error(init_status, init_body)
+        return _exit_for_status(init_status, init_body)
+
+    request_id = init_body["request_id"]
+    verification_url = init_body.get("verification_url") or (
+        client.base_url + f"/auth/cli/{request_id}"
+    )
+    poll_interval = float(init_body.get("poll_interval") or 3)
+
+    sys.stderr.write("\nOpen this URL in your browser to approve CLI access:\n\n")
+    sys.stderr.write(f"  {verification_url}\n\n")
+    sys.stderr.write(f"Requested scopes: {', '.join(scopes)}\n")
+    sys.stderr.write("Waiting for approval (Ctrl-C to cancel)... ")
+    sys.stderr.flush()
+
+    deadline = time.monotonic() + 600  # 10 min, matches server-side TTL
+    while time.monotonic() < deadline:
+        await asyncio.sleep(poll_interval)
+        sys.stderr.write(".")
+        sys.stderr.flush()
+        status, body = await client.request(
+            "POST", "/api/agent/v1/auth/cli/poll",
+            json_body={"request_id": request_id},
+        )
+        if status == 202:
+            continue
+        if 200 <= status < 300 and body.get("status") == "approved":
+            sys.stderr.write("\n")
+            token = body["token"]
+            if args.no_save:
+                sys.stderr.write(
+                    f"Logged in as {body['username']} ({body['tenant']}) — "
+                    f"scopes: {', '.join(body.get('scopes') or [])}.\n"
+                    f"Token (set {ENV_TOKEN}=...):\n"
+                )
+                print(token)
+            else:
+                path = _write_cached_token(token)
+                sys.stderr.write(
+                    f"Logged in as {body['username']} ({body['tenant']}) — "
+                    f"scopes: {', '.join(body.get('scopes') or [])}.\n"
+                    f"Token saved to {path}.\n"
+                )
+            return 0
+        # 410: denied / expired / not_found
+        sys.stderr.write("\n")
+        s = body.get("status") if isinstance(body, dict) else "error"
+        sys.stderr.write(f"login {s}.\n")
+        return 1
+
+    sys.stderr.write("\nlogin timed out waiting for approval.\n")
+    return 1
+
+
+async def cmd_auth_logout(client: PortalClient, args) -> int:
+    try:
+        os.remove(_TOKEN_FILE_PATH)
+        sys.stderr.write(f"removed {_TOKEN_FILE_PATH}\n")
+    except FileNotFoundError:
+        sys.stderr.write("no cached token to remove.\n")
+    return 0
 
 
 async def cmd_fleet(client: PortalClient, args) -> int:
@@ -412,11 +521,26 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    # auth me
+    # auth ...
     auth = sub.add_parser("auth", help="authentication / identity")
     auth_sub = auth.add_subparsers(dest="auth_cmd", required=True)
     auth_sub.add_parser("me", help="show identity + scopes for the current token") \
         .set_defaults(func=cmd_auth_me)
+
+    a_login = auth_sub.add_parser(
+        "login",
+        help="browser-mediated login: print a URL, save the token on approve",
+    )
+    a_login.add_argument("--scopes",
+                         help=("comma-separated scopes to request "
+                               f"(default: {','.join(_DEFAULT_LOGIN_SCOPES)})"))
+    a_login.add_argument("--label", help="human label saved alongside the token")
+    a_login.add_argument("--no-save", action="store_true",
+                         help="print the token to stdout instead of caching it on disk")
+    a_login.set_defaults(func=cmd_auth_login, _no_token=True)
+
+    auth_sub.add_parser("logout", help="remove the cached token") \
+        .set_defaults(func=cmd_auth_logout, _no_token=True)
 
     # fleet describe
     fleet = sub.add_parser("fleet", help="fleet-level queries")
@@ -505,7 +629,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    url, token = _resolve_config(args)
+    url, token = _resolve_config(args, token_required=not getattr(args, "_no_token", False))
     client = PortalClient(url, token)
     try:
         return asyncio.run(args.func(client, args))

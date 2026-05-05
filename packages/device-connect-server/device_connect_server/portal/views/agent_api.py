@@ -27,6 +27,7 @@ from typing import Any
 from aiohttp import web
 
 from .. import config
+from ..services import cli_auth as cli_auth_svc
 from ..services import credentials as credentials_svc
 from ..services import registry_client, tokens as tokens_svc
 from ..services.backend import get_backend, validate_name
@@ -43,6 +44,10 @@ MAX_STREAM_COUNT = 10_000
 
 def setup_routes(app: web.Application):
     r = app.router
+    # Public CLI-auth endpoints (exempt from Bearer middleware in app.py).
+    r.add_post(PREFIX + "/auth/cli/init", auth_cli_init)
+    r.add_post(PREFIX + "/auth/cli/poll", auth_cli_poll)
+
     r.add_get(PREFIX + "/me", me)
     r.add_get(PREFIX + "/fleet", fleet)
     r.add_get(PREFIX + "/devices", devices_list)
@@ -139,6 +144,58 @@ def _audit(request: web.Request, action: str, **fields):
         request.headers.get("User-Agent", "?"),
         " ".join(f"{k}={v}" for k, v in fields.items()),
     )
+
+
+# ── public CLI-auth init/poll ───────────────────────────────────────
+
+
+def _verification_url(request: web.Request, request_id: str) -> str:
+    scheme = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+    host = request.headers.get("X-Forwarded-Host", request.host)
+    return f"{scheme}://{host}/auth/cli/{request_id}"
+
+
+async def auth_cli_init(request: web.Request) -> web.Response:
+    """Public: start a CLI-auth flow. Returns a request_id and verification URL."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _err(status=400, code="invalid_json", message="Request body must be JSON")
+    scopes = body.get("scopes") or []
+    label = (body.get("label") or "").strip()[:64]
+    if not isinstance(scopes, list) or not scopes:
+        return _err(status=400, code="missing_scopes",
+                    message="scopes must be a non-empty list")
+    try:
+        rec = cli_auth_svc.init(scopes_requested=list(scopes), label=label)
+    except cli_auth_svc.CliAuthError as e:
+        return _err(status=400, code="invalid_request", message=str(e))
+    rec["verification_url"] = _verification_url(request, rec["request_id"])
+    return web.json_response(rec)
+
+
+async def auth_cli_poll(request: web.Request) -> web.Response:
+    """Public: poll a pending CLI-auth flow.
+
+    Returns:
+      200 + token on approved (record consumed)
+      202 on pending
+      410 on denied / expired / not_found
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return _err(status=400, code="invalid_json", message="Request body must be JSON")
+    request_id = (body.get("request_id") or "").strip()
+    if not request_id:
+        return _err(status=400, code="missing_request_id", message="request_id is required")
+
+    status, payload = cli_auth_svc.consume_on_poll(request_id)
+    if status == "approved":
+        return web.json_response({"status": "approved", **(payload or {})})
+    if status == "pending":
+        return web.json_response({"status": "pending"}, status=202)
+    return web.json_response({"status": status}, status=410)
 
 
 # ── /me, /fleet ─────────────────────────────────────────────────────
