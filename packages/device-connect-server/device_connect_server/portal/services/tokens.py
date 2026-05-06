@@ -105,7 +105,7 @@ def create_token(
     """
     scopes = validate_scopes(scopes)
 
-    token_id = secrets.token_hex(8)  # 16 hex chars
+    token_id = secrets.token_hex(16)  # 32 hex chars / 128 bits — collision-resistant
     secret = secrets.token_urlsafe(32)
     secret_hash = _hash_secret(secret)
 

@@ -21,12 +21,10 @@ import json
 import logging
 import secrets
 import time
-import uuid
 from typing import Any
 
 from aiohttp import web
 
-from .. import config
 from ..services import cli_auth as cli_auth_svc
 from ..services import credentials as credentials_svc
 from ..services import registry_client, tokens as tokens_svc
@@ -40,6 +38,19 @@ PREFIX = "/api/agent/v1"
 # Server-side hard caps for event streams. Apply regardless of what the client requests.
 MAX_STREAM_DURATION_S = 3600       # 1 hour
 MAX_STREAM_COUNT = 10_000
+# Server-side hard cap on per-RPC invoke timeout. A misbehaving client requesting
+# a multi-hour timeout could otherwise pin a backend connection.
+MAX_INVOKE_TIMEOUT_S = 60.0
+
+
+def _clamp_timeout(value: Any, default: float = 5.0) -> float:
+    try:
+        t = float(value) if value is not None else default
+    except (TypeError, ValueError):
+        t = default
+    if t <= 0:
+        t = default
+    return min(t, MAX_INVOKE_TIMEOUT_S)
 
 
 def setup_routes(app: web.Application):
@@ -500,8 +511,16 @@ async def device_credentials_get(request: web.Request) -> web.Response:
     full_name = _full_device_name(tenant, device_id)
     filename = f"{full_name}.creds.json"
     cred = credentials_svc.get_credential_data(filename)
-    if not cred:
-        # Try the id as given (admin-style absolute lookup)
+
+    record = request.get("token") or {}
+    user = request["user"]
+    is_admin = user.get("role") == "admin" and (
+        tokens_svc.has_scope(record, "admin:tenants") or tokens_svc.has_scope(record, "admin:*")
+    )
+
+    if not cred and is_admin:
+        # Admin absolute lookup: allow unprefixed filenames so admins can resolve
+        # legacy or cross-tenant credentials. Non-admins must never reach this branch.
         cred = credentials_svc.get_credential_data(f"{device_id}.creds.json")
         if cred:
             full_name = device_id
@@ -510,15 +529,12 @@ async def device_credentials_get(request: web.Request) -> web.Response:
         return _err(status=404, code="not_found",
                     message=f"Credential file not found for {device_id}", trace_id=trace)
 
-    # Tenant binding check (admins with admin scope have already been allowed via override)
-    record = request.get("token") or {}
-    user = request["user"]
-    if cred.get("tenant") and cred.get("tenant") != user["tenant"]:
-        if user.get("role") != "admin" or not (
-            tokens_svc.has_scope(record, "admin:tenants") or tokens_svc.has_scope(record, "admin:*")
-        ):
-            return _err(status=403, code="tenant_mismatch",
-                        message="Credential belongs to another tenant", trace_id=trace)
+    # Fail-closed tenant binding. A credential file without a `tenant` field is
+    # treated as untrusted for non-admins: we refuse rather than leak it.
+    cred_tenant = cred.get("tenant")
+    if not is_admin and cred_tenant != user["tenant"]:
+        return _err(status=403, code="tenant_mismatch",
+                    message="Credential belongs to another tenant", trace_id=trace)
 
     _audit(request, "credentials_get", trace_id=trace, device_id=full_name)
     return _ok({"filename": filename, "content": cred}, trace_id=trace)
@@ -629,7 +645,7 @@ async def device_invoke(request: web.Request) -> web.Response:
     if not isinstance(params, dict):
         return _err(status=400, code="invalid_params", message="params must be an object",
                     trace_id=trace)
-    timeout = float(body.get("timeout") or 5.0)
+    timeout = _clamp_timeout(body.get("timeout"))
     reason = _truncate(body.get("reason") or body.get("llm_reasoning") or "", 500)
 
     backend = get_backend()
@@ -679,12 +695,12 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
         return _err(status=400, code="missing_function", message="function is required",
                     trace_id=trace)
     params = body.get("params") or {}
-    timeout = float(body.get("timeout") or 5.0)
+    timeout = _clamp_timeout(body.get("timeout"))
     reason = _truncate(body.get("reason") or body.get("llm_reasoning") or "", 500)
 
     backend = get_backend()
     failures = []
-    for raw_id in ids:
+    for idx, raw_id in enumerate(ids):
         full_name = _full_device_name(tenant, raw_id)
         started = time.monotonic()
         try:
@@ -696,8 +712,8 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
             return _ok(
                 {"device_id": full_name, "function": function,
                  "elapsed_ms": elapsed_ms, "response": response,
-                 "tried": [{"device_id": _full_device_name(tenant, x), "ok": (x == raw_id)}
-                           for x in ids[: ids.index(raw_id) + 1]],
+                 "tried": [{"device_id": _full_device_name(tenant, x), "ok": (i == idx)}
+                           for i, x in enumerate(ids[: idx + 1])],
                  "failures": failures},
                 trace_id=trace,
             )
@@ -737,6 +753,10 @@ async def device_event_stream(request: web.Request) -> web.Response:
 
     device_id = request.match_info["device_id"]
     event_name = request.match_info["event_name"]
+    try:
+        validate_name(event_name, "event")
+    except ValueError as e:
+        return _err(status=400, code="invalid_event_name", message=str(e))
     full_name = _full_device_name(tenant, device_id)
 
     fmt = (request.query.get("format") or "ndjson").lower()

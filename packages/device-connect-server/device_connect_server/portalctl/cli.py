@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import os
+import socket
 import sys
 import time
 from typing import Any
@@ -63,6 +64,13 @@ def _read_cached_token() -> str | None:
 
 def _write_cached_token(token: str) -> str:
     os.makedirs(_TOKEN_FILE_DIR, mode=0o700, exist_ok=True)
+    # makedirs(exist_ok=True) does not chmod a pre-existing dir; force it on POSIX
+    # so a token written into a world-readable dir is still protected.
+    if os.name == "posix":
+        try:
+            os.chmod(_TOKEN_FILE_DIR, 0o700)
+        except OSError:
+            pass
     fd = os.open(_TOKEN_FILE_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, (token + "\n").encode())
@@ -192,10 +200,10 @@ async def cmd_auth_me(client: PortalClient, args) -> int:
 
 async def cmd_auth_login(client: PortalClient, args) -> int:
     """Browser-mediated login: print a URL, poll until the user approves."""
-    aiohttp = _require_aiohttp()
+    _require_aiohttp()
     scopes = [s.strip() for s in (args.scopes or ",".join(_DEFAULT_LOGIN_SCOPES)).split(",")
               if s.strip()]
-    label = args.label or f"dc-portalctl@{os.uname().nodename}"
+    label = args.label or f"dc-portalctl@{socket.gethostname() or 'unknown'}"
 
     init_status, init_body = await client.request(
         "POST", "/api/agent/v1/auth/cli/init",
@@ -231,10 +239,17 @@ async def cmd_auth_login(client: PortalClient, args) -> int:
         if 200 <= status < 300 and body.get("status") == "approved":
             sys.stderr.write("\n")
             token = body["token"]
+            granted = body.get("scopes") or []
+            dropped = sorted(set(scopes) - set(granted))
+            if dropped:
+                sys.stderr.write(
+                    f"Note: requested scopes {dropped} were not granted "
+                    f"(insufficient role/permission); proceeding with the granted subset.\n"
+                )
             if args.no_save:
                 sys.stderr.write(
                     f"Logged in as {body['username']} ({body['tenant']}) — "
-                    f"scopes: {', '.join(body.get('scopes') or [])}.\n"
+                    f"scopes: {', '.join(granted)}.\n"
                     f"Token (set {ENV_TOKEN}=...):\n"
                 )
                 print(token)
@@ -242,7 +257,7 @@ async def cmd_auth_login(client: PortalClient, args) -> int:
                 path = _write_cached_token(token)
                 sys.stderr.write(
                     f"Logged in as {body['username']} ({body['tenant']}) — "
-                    f"scopes: {', '.join(body.get('scopes') or [])}.\n"
+                    f"scopes: {', '.join(granted)}.\n"
                     f"Token saved to {path}.\n"
                 )
             return 0

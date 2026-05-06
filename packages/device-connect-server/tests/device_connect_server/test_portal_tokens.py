@@ -4,7 +4,6 @@
 
 """Unit tests for device_connect_server.portal.services.tokens."""
 
-import json
 from unittest.mock import patch
 
 import pytest

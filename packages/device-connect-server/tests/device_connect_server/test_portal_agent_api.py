@@ -11,7 +11,6 @@ with the registry document.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -299,3 +298,188 @@ class TestStreamArgValidation:
             "/api/agent/v1/devices/cam-001/events/motion/stream?duration=-1",
             headers=H())
         assert r.status == 400
+
+    async def test_stream_rejects_nats_wildcard_event_name(self, admin_client):
+        # `>` and `*` are NATS subject wildcards. Event names that contain them
+        # would let a caller subscribe to wider subject hierarchies than
+        # intended; validate_name must reject them.
+        r = await admin_client.get(
+            "/api/agent/v1/devices/cam-001/events/%3E/stream?duration=1",
+            headers=H())
+        assert r.status == 400
+        body = await r.json()
+        assert body["error"]["code"] == "invalid_event_name"
+
+
+# ── credentials tenant binding (regression: IDOR fix) ─────────────
+
+
+@pytest.fixture
+def cred_record():
+    """Token in tenant `acme` with the credentials scope."""
+    return {
+        "token_id": "cred0",
+        "username": "alice",
+        "tenant": "acme",
+        "role": "user",
+        "scopes": ["devices:credentials"],
+        "created_at": "2026-05-01T00:00:00+00:00",
+    }
+
+
+@pytest.fixture
+async def cred_client(cred_record):
+    app = _build_app()
+    server = TestServer(app)
+    async with server:
+        async with TestClient(server) as cli:
+            with patch.object(tokens_svc, "verify_token", return_value=cred_record):
+                yield cli
+
+
+class TestCredentialsTenantBinding:
+    """The unprefixed-filename fallback used to leak other tenants' creds when
+    the credential file lacked a `tenant` field. Non-admin requests must
+    fail-closed regardless of whether the file declares a tenant."""
+
+    async def test_non_admin_cannot_read_other_tenant_credential(self, cred_client):
+        # File for another tenant, *with* tenant field set correctly.
+        other = {"tenant": "other", "nats_jwt": "...", "nats_seed": "..."}
+
+        def _get(filename):
+            if filename == "other-cam.creds.json":
+                return other
+            return None
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.get_credential_data",
+            side_effect=_get,
+        ):
+            r = await cred_client.get(
+                "/api/agent/v1/devices/other-cam/credentials", headers=H())
+            # Either 404 (unprefixed fallback rejected for non-admin)
+            # or 403 (fallback found but tenant mismatch). Never 200.
+            assert r.status in (403, 404)
+
+    async def test_non_admin_blocked_when_cred_file_missing_tenant_field(self, cred_client):
+        # The historical IDOR: cred file has no `tenant` field, fallback used to
+        # return 200 because the truthy guard skipped the binding check.
+        legacy = {"nats_jwt": "...", "nats_seed": "..."}  # no tenant key
+
+        def _get(filename):
+            if filename == "other-cam.creds.json":
+                return legacy
+            return None
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.get_credential_data",
+            side_effect=_get,
+        ):
+            r = await cred_client.get(
+                "/api/agent/v1/devices/other-cam/credentials", headers=H())
+            assert r.status in (403, 404), (
+                "Non-admin must never receive a credential whose tenant binding "
+                "cannot be verified. Got %d" % r.status
+            )
+
+    async def test_non_admin_can_read_own_tenant_credential(self, cred_client):
+        own = {"tenant": "acme", "nats_jwt": "...", "nats_seed": "..."}
+
+        def _get(filename):
+            if filename == "acme-cam-001.creds.json":
+                return own
+            return None
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.get_credential_data",
+            side_effect=_get,
+        ):
+            r = await cred_client.get(
+                "/api/agent/v1/devices/cam-001/credentials", headers=H())
+            assert r.status == 200
+            body = await r.json()
+            assert body["result"]["filename"] == "acme-cam-001.creds.json"
+            assert body["result"]["content"]["tenant"] == "acme"
+
+
+# ── invoke timeout cap (regression) ───────────────────────────────
+
+
+@pytest.fixture
+def invoke_record():
+    return {
+        "token_id": "inv0",
+        "username": "alice",
+        "tenant": "acme",
+        "role": "user",
+        "scopes": ["devices:invoke"],
+        "created_at": "2026-05-01T00:00:00+00:00",
+    }
+
+
+@pytest.fixture
+async def invoke_client(invoke_record):
+    app = _build_app()
+    server = TestServer(app)
+    async with server:
+        async with TestClient(server) as cli:
+            with patch.object(tokens_svc, "verify_token", return_value=invoke_record):
+                yield cli
+
+
+class TestInvokeTimeoutCap:
+    async def test_clamps_unbounded_client_timeout(self, invoke_client):
+        # Client tries 1e9 seconds; server must clamp to MAX_INVOKE_TIMEOUT_S.
+        seen = {}
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                seen["timeout"] = timeout
+                return {"ok": True}
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/cam-001/invoke",
+                headers=H(),
+                json={"function": "ping", "timeout": 1e9},
+            )
+            assert r.status == 200
+        assert seen["timeout"] == agent_api.MAX_INVOKE_TIMEOUT_S
+
+
+# ── invoke-with-fallback duplicate device id (regression) ─────────
+
+
+class TestInvokeFallbackDuplicates:
+    async def test_tried_array_correct_with_duplicate_ids(self, invoke_client):
+        # Old code used list.index() which returned the first occurrence,
+        # producing a wrong `tried` array when the same id appeared twice.
+        attempts = []
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                attempts.append(full_name)
+                if len(attempts) < 3:
+                    raise RuntimeError("boom")
+                return {"ok": True, "attempt": len(attempts)}
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/invoke-with-fallback",
+                headers=H(),
+                # Same id appears at index 0 and 2; success on the 3rd attempt.
+                json={"device_ids": ["cam-a", "cam-b", "cam-a"], "function": "ping"},
+            )
+            assert r.status == 200
+            body = await r.json()
+            tried = body["result"]["tried"]
+            assert [t["ok"] for t in tried] == [False, False, True]
+            assert len(tried) == 3

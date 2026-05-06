@@ -82,10 +82,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="ISO-8601 expiry timestamp (optional)")
     c.set_defaults(func=_cmd_create)
 
-    l = sub.add_parser("list", help="list tokens (excludes secret material)")
-    l.add_argument("--user", default=None)
-    l.add_argument("--tenant", default=None)
-    l.set_defaults(func=_cmd_list)
+    lst = sub.add_parser("list", help="list tokens (excludes secret material)")
+    lst.add_argument("--user", default=None)
+    lst.add_argument("--tenant", default=None)
+    lst.set_defaults(func=_cmd_list)
 
     r = sub.add_parser("revoke", help="revoke a token by id")
     r.add_argument("--token-id", required=True)
