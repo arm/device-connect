@@ -22,22 +22,68 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Routes that don't require authentication
 PUBLIC_ROUTES = {"/", "/login", "/signup", "/api/login", "/api/signup"}
 
+# Agent API namespace — Bearer-token authenticated, JSON-only errors.
+AGENT_API_PREFIX = "/api/agent/v1/"
+
+# Subpaths under the agent API that are intentionally public (no Bearer required).
+# These power the browser-mediated CLI login flow.
+AGENT_API_PUBLIC_SUBPATHS = ("auth/cli/init", "auth/cli/poll")
+
+
+def _json_error(status: int, code: str, message: str) -> web.Response:
+    return web.json_response(
+        {"success": False, "error": {"code": code, "message": message}},
+        status=status,
+    )
+
 
 @web.middleware
 async def auth_middleware(request: web.Request, handler):
-    """Redirect unauthenticated users to login page."""
+    """Authenticate browser sessions via cookie, agent API via Bearer token."""
     path = request.path
+
     # Allow public routes and static files
     if path in PUBLIC_ROUTES or path.startswith("/static"):
         return await handler(request)
 
+    # Agent API: Bearer token, JSON 401/403 — never HTML, never redirects.
+    if path.startswith(AGENT_API_PREFIX):
+        suffix = path[len(AGENT_API_PREFIX):]
+        if any(suffix == p or suffix.startswith(p + "/") for p in AGENT_API_PUBLIC_SUBPATHS):
+            return await handler(request)
+
+        from .services import tokens as tokens_svc
+
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return _json_error(401, "missing_token", "Authorization: Bearer <token> required")
+        token = auth_header[len("Bearer "):].strip()
+        record = tokens_svc.verify_token(token)
+        if not record:
+            return _json_error(401, "invalid_token", "Token is invalid, revoked, or expired")
+        request["token"] = record
+        request["user"] = {
+            "username": record["username"],
+            "tenant": record["tenant"],
+            "role": record["role"],
+        }
+        return await handler(request)
+
+    # Browser session path
     session = await _get_session(request)
     if not session.get("username"):
+        # Preserve the requested URL so post-login redirect lands the user
+        # back on (e.g.) the CLI approval page.
+        next_url = path
+        if request.query_string:
+            next_url = f"{path}?{request.query_string}"
+        from urllib.parse import quote
+        login_url = "/login?next=" + quote(next_url, safe="") if path != "/login" else "/login"
         if request.headers.get("HX-Request"):
             resp = web.Response(status=200)
-            resp.headers["HX-Redirect"] = "/login"
+            resp.headers["HX-Redirect"] = login_url
             return resp
-        raise web.HTTPFound("/login")
+        raise web.HTTPFound(login_url)
 
     request["user"] = session
     return await handler(request)
@@ -119,11 +165,17 @@ def create_app() -> web.Application:
     app.router.add_static("/static", STATIC_DIR, name="static")
 
     # Register routes
-    from .views import auth, dashboard, devices, admin
+    from .views import (
+        auth, dashboard, devices, admin, agent_api,
+        cli_auth as cli_auth_view, coding_agents,
+    )
     auth.setup_routes(app)
     dashboard.setup_routes(app)
     devices.setup_routes(app)
     admin.setup_routes(app)
+    agent_api.setup_routes(app)
+    cli_auth_view.setup_routes(app)
+    coding_agents.setup_routes(app)
 
     # Seed admin on startup
     app.on_startup.append(_on_startup)

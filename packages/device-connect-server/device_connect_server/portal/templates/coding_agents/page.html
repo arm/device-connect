@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Coding Agents{% endblock %}
+{% block content %}
+<div class="mb-8">
+  <h1 class="text-2xl font-bold text-gray-900">Coding Agents</h1>
+  <p class="text-sm text-gray-500 mt-1">
+    Hand off this fleet to a coding agent (Claude Code, Codex, Cursor, …) in two steps.
+    Tenant <code class="bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700">{{ tenant }}</code>.
+  </p>
+</div>
+
+<!-- Step 1: download + hand-off -->
+<div class="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+  <div class="flex items-start justify-between gap-4 flex-wrap mb-4">
+    <div>
+      <h2 class="text-lg font-semibold text-gray-900 mb-1">1. Download AGENTS.md and drop it in your repo</h2>
+      <p class="text-sm text-gray-500 max-w-2xl">
+        A single Markdown playbook, rendered for tenant
+        <code class="bg-gray-100 px-1.5 py-0.5 rounded text-indigo-700">{{ tenant }}</code>
+        with your portal URL and NATS host pre-filled. The agent creates its own venv at
+        <code class="bg-gray-100 px-1 rounded">~/.dc-portalctl/venv</code>, installs the
+        CLI, runs <code class="bg-gray-100 px-1 rounded">auth login</code> (one browser
+        approval), and follows the playbook for provisioning, launching (local + SSH),
+        discovery, invocation, and event streaming.
+      </p>
+    </div>
+    <a href="/coding-agents/AGENTS.md"
+       class="shrink-0 inline-flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors">
+      <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Download AGENTS.md
+    </a>
+  </div>
+</div>
+
+<!-- Step 2: hand-off prompt -->
+<div class="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+  <h2 class="text-lg font-semibold text-gray-900 mb-1">2. Tell your agent</h2>
+  <p class="text-sm text-gray-500 mb-3">
+    Paste this into your agent. It will install the CLI, prompt you once to approve
+    in the browser, then take it from there. No manual setup on your side.
+  </p>
+  <div class="relative">
+<pre id="handoff-prompt" class="bg-gray-900 text-gray-100 rounded-lg px-4 py-3 text-xs overflow-x-auto whitespace-pre-wrap"><code>Read AGENTS.md in this repo. It describes a Device Connect fleet on tenant {{ tenant }} at {{ portal_url }}.
+Set up the dc-portalctl CLI per the playbook (install + auth login), then list the devices.</code></pre>
+    <button type="button"
+            onclick="navigator.clipboard.writeText(document.getElementById('handoff-prompt').textContent);this.textContent='Copied';setTimeout(()=>{this.textContent='Copy';},1500);"
+            class="absolute top-2 right-2 px-2 py-1 bg-white/10 hover:bg-white/20 text-gray-100 text-xs font-medium rounded">Copy</button>
+  </div>
+  <p class="text-xs text-gray-500 mt-3">
+    The browser approval is the one human-in-the-loop step — you'll see a verification
+    page from <code class="bg-gray-100 px-1 rounded">dc-portalctl auth login</code> at
+    <code class="bg-gray-100 px-1 rounded">{{ portal_url }}/auth/cli/&lt;id&gt;</code>.
+    Click Approve and the agent is authorized.
+  </p>
+</div>
+
+<!-- API tokens (advanced / fallback) -->
+<details open class="bg-white rounded-xl border border-gray-200">
+  <summary class="px-5 py-4 cursor-pointer flex items-center justify-between hover:bg-gray-50 rounded-xl">
+    <div>
+      <h2 class="text-lg font-semibold text-gray-900">API tokens (advanced)</h2>
+      <p class="text-xs text-gray-500 mt-0.5">
+        For agents that can't run <code class="bg-gray-100 px-1 rounded">dc-portalctl auth login</code> —
+        e.g. Cursor MCP servers, GitHub Actions, sandboxes without a browser. Mint a token
+        here and set it as <code class="bg-gray-100 px-1 rounded">DEVICE_CONNECT_PORTAL_TOKEN</code>.
+      </p>
+    </div>
+    <svg class="w-5 h-5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+  </summary>
+
+  <div class="border-t border-gray-200">
+    <div class="px-5 py-4 flex items-center justify-end">
+      <button type="button"
+              onclick="document.getElementById('mint-form').classList.toggle('hidden')"
+              class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700">
+        <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Create token
+      </button>
+    </div>
+
+    <!-- Mint form (collapsed by default) -->
+    <div id="mint-form" class="hidden px-5 py-4 border-t border-gray-200 bg-gray-50">
+      <form hx-post="/coding-agents/tokens"
+            hx-target="#mint-result"
+            hx-swap="innerHTML"
+            hx-on::after-request="if(event.detail.successful){this.reset();htmx.trigger('body','refresh-tokens');}"
+            class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-gray-700 mb-1" for="token-label">Label</label>
+          <input id="token-label" type="text" name="label" maxlength="80"
+                 placeholder="e.g. cursor-laptop, ci-bot"
+                 class="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500">
+        </div>
+        <div>
+          <span class="block text-xs font-medium text-gray-700 mb-1">Scopes</span>
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {% for scope in allowed_scopes %}
+            <label class="inline-flex items-center text-sm text-gray-700 bg-white border border-gray-200 rounded-lg px-3 py-1.5">
+              <input type="checkbox" name="scopes" value="{{ scope }}"
+                     {% if scope in default_scopes %}checked{% endif %}
+                     class="mr-2 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+              <code class="text-xs">{{ scope }}</code>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="submit"
+                  class="inline-flex items-center px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700">
+            Mint token
+          </button>
+          <button type="button"
+                  onclick="document.getElementById('mint-form').classList.add('hidden')"
+                  class="text-sm text-gray-500 hover:text-gray-700">Cancel</button>
+        </div>
+        <div id="mint-result"></div>
+      </form>
+    </div>
+
+    <!-- Tokens table -->
+    <div id="tokens-table"
+         hx-get="/coding-agents/tokens"
+         hx-trigger="refresh-tokens from:body">
+      {% include "coding_agents/_tokens_table.html" %}
+    </div>
+  </div>
+</details>
+{% endblock %}

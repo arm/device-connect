@@ -32,12 +32,24 @@ async def root_page(request: web.Request):
     raise web.HTTPFound("/login")
 
 
+def _safe_next(value: str | None) -> str | None:
+    """Accept only relative paths so an attacker can't bounce login to an external site."""
+    if not value:
+        return None
+    if not value.startswith("/") or value.startswith("//"):
+        return None
+    if "\n" in value or "\r" in value:
+        return None
+    return value
+
+
 async def login_page(request: web.Request):
     session = await _get_session(request)
+    next_url = _safe_next(request.query.get("next"))
     if session.get("username"):
-        target = "/admin" if session.get("role") == "admin" else "/dashboard"
+        target = next_url or ("/admin" if session.get("role") == "admin" else "/dashboard")
         raise web.HTTPFound(target)
-    return aiohttp_jinja2.render_template("login.html", request, {"error": None})
+    return aiohttp_jinja2.render_template("login.html", request, {"error": None, "next": next_url})
 
 
 async def login_submit(request: web.Request):
@@ -59,7 +71,8 @@ async def login_submit(request: web.Request):
         return aiohttp_jinja2.render_template("login.html", request, {"error": "Invalid username or password"})
 
     # Set session and redirect
-    redirect_url = "/admin" if user["role"] == "admin" else "/dashboard"
+    next_url = _safe_next(data.get("next"))
+    redirect_url = next_url or ("/admin" if user["role"] == "admin" else "/dashboard")
     if _is_htmx(request):
         response = web.Response(status=200)
         response.headers["HX-Redirect"] = redirect_url
