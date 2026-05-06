@@ -165,13 +165,17 @@ def create_app() -> web.Application:
     app.router.add_static("/static", STATIC_DIR, name="static")
 
     # Register routes
-    from .views import auth, dashboard, devices, admin, agent_api, cli_auth as cli_auth_view
+    from .views import (
+        auth, dashboard, devices, admin, agent_api,
+        cli_auth as cli_auth_view, coding_agents,
+    )
     auth.setup_routes(app)
     dashboard.setup_routes(app)
     devices.setup_routes(app)
     admin.setup_routes(app)
     agent_api.setup_routes(app)
     cli_auth_view.setup_routes(app)
+    coding_agents.setup_routes(app)
 
     # Seed admin on startup
     app.on_startup.append(_on_startup)

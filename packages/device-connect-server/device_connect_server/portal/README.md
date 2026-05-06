@@ -135,6 +135,7 @@ All settings are via environment variables:
    python your_device.py
    ```
 6. **Watch it appear**: the device shows up in the Live Devices panel on your dashboard within seconds
+7. **Hand off to a coding agent**: go to `/coding-agents` to download a tenant-specific `AGENTS.md` playbook, mint API tokens (one-time secret), or revoke them. Best for connecting Cursor / GitHub Actions / any agent that doesn't run `dc-portalctl auth login`.
 
 ### Account Model
 
@@ -168,6 +169,11 @@ All settings are via environment variables:
 | GET | `/api/devices/{name}/creds` | Download credential file |
 | GET | `/api/devices/bundle` | Download all credentials as .zip |
 | GET/POST | `/auth/cli/{request_id}` | Browser-mediated CLI login: approve / deny a `dc-portalctl auth login` request |
+| GET | `/coding-agents` | Coding Agents tab: AGENTS.md download + token management UI |
+| GET | `/coding-agents/AGENTS.md` | Tenant-rendered agent playbook (Markdown attachment) |
+| GET | `/coding-agents/tokens` | HTMX fragment: list current user's active tokens |
+| POST | `/coding-agents/tokens` | Mint a new token (label + scope checkboxes); returns one-time secret |
+| POST | `/coding-agents/tokens/{token_id}/revoke` | Revoke (owner or admin only) |
 
 ### Admin (requires admin role)
 
@@ -329,9 +335,11 @@ dc-portalctl devices stream acme-cam-001 motion_detected --follow
 
 ## Admin token operations (fallback)
 
-`auth login` is the recommended path. For automated/headless setup or to mint
-a token for another user, run the admin tool directly on the portal host
-(writes to etcd, no Bearer required):
+`auth login` is the recommended path for CLI use; the **Coding Agents tab**
+(`/coding-agents`) is the recommended path for non-admin users who want to
+mint, list, or revoke their own tokens from the browser. For automated/headless
+setup, or to mint a token for another user, run the admin tool directly on
+the portal host (writes to etcd, no Bearer required):
 
 ```bash
 python -m device_connect_server.portalctl.admin_tokens create \

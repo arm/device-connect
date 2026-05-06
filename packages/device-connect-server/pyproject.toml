@@ -90,4 +90,4 @@ Security = "https://github.com/arm/device-connect?tab=security-ov-file"
 include = ["device_connect_server*"]
 
 [tool.setuptools.package-data]
-"device_connect_server.portal" = ["templates/**/*.html", "static/**/*"]
+"device_connect_server.portal" = ["templates/**/*", "static/**/*"]
