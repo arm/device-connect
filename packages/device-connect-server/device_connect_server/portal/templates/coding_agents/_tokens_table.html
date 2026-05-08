@@ -1,0 +1,53 @@
+{% if not tokens %}
+<div class="px-5 py-8 text-center text-sm text-gray-400">
+  No tokens yet. Create one above, or run <code class="bg-gray-100 px-1 rounded">dc-portalctl auth login</code>.
+</div>
+{% else %}
+<table class="w-full text-sm">
+  <thead class="text-xs uppercase text-gray-500 bg-gray-50 border-b border-gray-200">
+    <tr>
+      <th class="text-left px-5 py-2 font-medium">Label</th>
+      <th class="text-left px-5 py-2 font-medium">Token id</th>
+      <th class="text-left px-5 py-2 font-medium">Scopes</th>
+      <th class="text-left px-5 py-2 font-medium">Created</th>
+      <th class="text-left px-5 py-2 font-medium">Status</th>
+      <th class="text-right px-5 py-2 font-medium"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in tokens %}
+    <tr class="border-b border-gray-100 {% if t.revoked %}bg-gray-50 text-gray-400{% endif %}">
+      <td class="px-5 py-3">{{ (t.label or '-')|e }}</td>
+      <td class="px-5 py-3"><code class="text-xs">dcp_{{ t.token_id }}_…</code></td>
+      <td class="px-5 py-3">
+        <div class="flex flex-wrap gap-1">
+          {% for s in t.scopes %}
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium {% if t.revoked %}bg-gray-200 text-gray-500{% else %}bg-indigo-50 text-indigo-700{% endif %}">{{ s }}</span>
+          {% endfor %}
+        </div>
+      </td>
+      <td class="px-5 py-3 text-xs text-gray-500">{{ t.created_at }}</td>
+      <td class="px-5 py-3">
+        {% if t.revoked %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600">revoked</span>
+        {% else %}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">active</span>
+        {% endif %}
+      </td>
+      <td class="px-5 py-3 text-right">
+        {% if not t.revoked %}
+        <button type="button"
+                hx-post="/coding-agents/tokens/{{ t.token_id }}/revoke"
+                hx-target="#tokens-table"
+                hx-swap="innerHTML"
+                hx-confirm="Revoke this token? Any agent or CI job using it will get 401 immediately."
+                class="text-sm text-red-600 hover:text-red-700 font-medium">
+          Revoke
+        </button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

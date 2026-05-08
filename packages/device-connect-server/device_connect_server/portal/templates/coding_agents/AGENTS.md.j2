@@ -1,0 +1,441 @@
+---
+name: device-connect
+description: Playbook for working with the Device Connect fleet on tenant `{{ tenant }}`. Load this when the user asks an agent to provision, launch, discover, invoke, or observe physical or simulated devices on this network.
+---
+
+# Device Connect — agent playbook
+
+You're working with a [Device Connect](https://github.com/arm/device-connect) fleet
+on tenant **`{{ tenant }}`**, served by the portal at **{{ portal_url }}**.
+Devices speak NATS and live under the namespace `device-connect.{{ tenant }}.>`,
+isolated from other tenants by JWT.
+
+This document is your playbook. Read top-to-bottom once, then jump to the
+section that matches what the user is asking for.
+
+## Tenant facts (substituted at download)
+
+- **Tenant:** `{{ tenant }}`
+- **Portal:** `{{ portal_url }}`
+- **NATS host:** `{{ public_host }}` (port `4222` unless overridden)
+- **Namespace:** `device-connect.{{ tenant }}.>`
+- **Example device id:** `{{ example_device_id }}` (tenant-prefixed; see "Provision")
+
+---
+
+## 1. First-time setup (run this yourself)
+
+You — the agent — are responsible for getting the CLI working. The user only
+needs to click Approve in the browser once. Install into a dedicated venv at
+`~/.dc-portalctl/venv` so it never collides with the project's own
+dependencies.
+
+```bash
+# 1. One-time: create the dedicated venv and install the CLI into it.
+#    Idempotent — safe to re-run; upgrades the CLI in place.
+python3 -m venv ~/.dc-portalctl/venv
+~/.dc-portalctl/venv/bin/pip install --upgrade pip
+~/.dc-portalctl/venv/bin/pip install --upgrade device-connect-server
+
+# 2. Put the venv's bin on PATH for this shell.
+#    (Add this line to ~/.bashrc or ~/.zshrc to persist it across sessions.)
+export PATH="$HOME/.dc-portalctl/venv/bin:$PATH"
+
+# 3. Point dc-portalctl at this portal.
+export DEVICE_CONNECT_PORTAL_URL={{ portal_url }}
+
+# 4. Browser-mediated login. Prints a verification URL — show it to the user
+#    and ask them to click Approve. The CLI's poll receives a fresh token and
+#    caches it at ~/.config/dc-portalctl/token; subsequent commands pick it up
+#    automatically.
+dc-portalctl auth login
+
+# 5. Confirm.
+dc-portalctl auth me
+```
+
+If `python3 -m venv` is blocked in your sandbox, try `pipx install
+device-connect-server` (which uses its own venv under the hood). If neither
+works, fall back to direct HTTP calls against `{{ portal_url }}/api/agent/v1/*`
+with a `DEVICE_CONNECT_PORTAL_TOKEN` minted at
+`{{ portal_url }}/coding-agents`.
+
+### CI / non-interactive use
+
+Skip the login flow entirely — mint a token at
+`{{ portal_url }}/coding-agents` and set:
+
+```bash
+export DEVICE_CONNECT_PORTAL_URL={{ portal_url }}
+export DEVICE_CONNECT_PORTAL_TOKEN=dcp_xxxxx_yyyyy
+```
+
+### Token scopes you may see
+
+- `devices:read` — list/describe devices
+- `devices:provision` — create / decommission devices
+- `devices:credentials` — re-download or rotate device credentials
+- `devices:invoke` — call functions
+- `events:read` — read event streams
+- `admin:tenants` / `admin:*` — admin only; do not request unless you are admin
+
+If you get `401 invalid_token`, the token was revoked or expired — run
+`dc-portalctl auth login` again. If you get `403`, the token doesn't have the
+scope you need; mint a new one with the right scopes at `{{ portal_url }}/coding-agents`.
+
+---
+
+## 2. Discover
+
+Use the four hierarchical meta-tools from `device-connect-agent-tools`. Always
+**start with `describe_fleet()`** to keep your context small — it's a summary,
+not a dump. Drill down only when the task needs it.
+
+| Tool | When |
+|---|---|
+| `describe_fleet()` | First call. Returns device-type counts and locations. |
+| `list_devices(device_type=…, location=…)` | Narrow down by a filter once you know the shape of the fleet. |
+| `get_device_functions(device_id)` | Read the schema of a device's RPCs before invoking. |
+| `invoke_device(device_id, function, params, llm_reasoning)` | Call a function. The reasoning string is mandatory and goes into the audit log. |
+
+Equivalent CLI:
+
+```bash
+dc-portalctl fleet describe
+dc-portalctl devices list
+dc-portalctl devices list --device-type camera --location warehouse1
+dc-portalctl devices capabilities {{ example_device_id }}
+dc-portalctl devices functions {{ example_device_id }}
+```
+
+Equivalent HTTP:
+
+```bash
+curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/fleet
+curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  "{{ portal_url }}/api/agent/v1/devices?device_type=camera"
+curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/capabilities
+```
+
+---
+
+## 3. Provision a device
+
+Provisioning creates a NATS credential bound to this tenant and registers the
+device id with the portal. Device ids are tenant-prefixed: a request for
+`cam-001` lands as `{{ tenant }}-cam-001`.
+
+```bash
+dc-portalctl devices provision cam-001 \
+    --device-type camera \
+    --location warehouse1/loading-dock \
+    --creds-output-file ./{{ tenant }}-cam-001.creds.json
+```
+
+The `.creds.json` is a NATS JWT credential. Keep it secret — anyone with that
+file can connect as the device. To re-download:
+
+```bash
+dc-portalctl devices credentials {{ tenant }}-cam-001 \
+    --output-file ./{{ tenant }}-cam-001.creds.json
+```
+
+Equivalent HTTP (returns creds inline; needs `devices:provision` scope):
+
+```bash
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"device_name":"cam-001","device_type":"camera","location":"warehouse1/loading-dock"}' \
+  {{ portal_url }}/api/agent/v1/devices
+```
+
+To decommission: `DELETE /api/agent/v1/devices/{id}` or
+`dc-portalctl devices revoke-credentials …`. Decommission revokes the JWT —
+the device process will be disconnected on its next NATS reconnect.
+
+---
+
+## 4. Author a driver
+
+A "device" in Device Connect is any Python process that subclasses
+`DeviceDriver` and runs in `DeviceRuntime`. Four decorators cover everything:
+
+| Decorator | Purpose |
+|---|---|
+| `@rpc()` | Expose a coroutine method as a callable function |
+| `@emit()` | Mark a method as an event broadcaster (body is a no-op; framework publishes) |
+| `@periodic(interval=…)` | Run a method on a timer |
+| `@on(device_type=…, event_name=…)` | Subscribe to events from other devices (D2D) |
+
+Minimum viable driver:
+
+```python
+import asyncio, signal
+from device_connect_edge import DeviceRuntime
+from device_connect_edge.drivers import DeviceDriver, rpc, emit, periodic
+from device_connect_edge.types import DeviceIdentity, DeviceStatus
+
+
+class TempSensorDriver(DeviceDriver):
+    device_type = "temp_sensor"
+
+    @property
+    def identity(self) -> DeviceIdentity:
+        return DeviceIdentity(
+            device_type="temp_sensor",
+            manufacturer="ACME", model="T1", firmware_version="0.1.0",
+            description="Demo temperature sensor",
+        )
+
+    @property
+    def status(self) -> DeviceStatus:
+        return DeviceStatus(location="lab", availability="available")
+
+    @rpc()
+    async def get_reading(self) -> dict:
+        return {"temp_c": 22.5}
+
+    @emit()
+    async def temp_changed(self, temp_c: float):
+        """Framework publishes; method body unused."""
+
+    @periodic(interval=10.0)
+    async def heartbeat(self):
+        await self.temp_changed(temp_c=22.5)
+
+
+async def run():
+    device = DeviceRuntime(driver=TempSensorDriver())
+    loop = asyncio.get_running_loop()
+    stop = asyncio.Event()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    task = asyncio.create_task(device.run())
+    await stop.wait()
+    await device.stop()
+    task.cancel()
+
+
+if __name__ == "__main__":
+    asyncio.run(run())
+```
+
+`device_id` and `tenant` are auto-detected from `NATS_CREDENTIALS_FILE`;
+don't hard-code them. For richer references see
+[`examples/dht22_sensor/device_driver.py`](https://github.com/arm/device-connect/blob/main/packages/device-connect-edge/examples/dht22_sensor/device_driver.py)
+(real GPIO hardware) and
+[`examples/number_generator/device_simulator.py`](https://github.com/arm/device-connect/blob/main/packages/device-connect-edge/examples/number_generator/device_simulator.py)
+(simulator).
+
+---
+
+## 5. Launch a device locally
+
+```bash
+export NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json
+export NATS_URL=nats://{{ public_host }}:4222
+export DEVICE_CONNECT_ALLOW_INSECURE=true   # only for dev; drop in prod
+python my_device.py
+```
+
+Verify it came online:
+
+```bash
+dc-portalctl devices list | grep {{ tenant }}-cam-001
+# or watch the portal Dashboard at {{ portal_url }}/dashboard
+```
+
+If it doesn't appear within ~5 seconds, the most common causes are:
+
+1. NATS host unreachable from the device — confirm `nats://{{ public_host }}:4222` resolves and is open.
+2. Wrong creds file — `NATS_CREDENTIALS_FILE` must point at the device's own `.creds.json`, not another tenant's.
+3. Driver process crashed at startup — check stderr.
+
+---
+
+## 6. Launch a device on a remote host (SSH)
+
+The device process is just a Python script that needs the creds file plus
+network access to NATS. Workflow:
+
+```bash
+# 1. Provision (locally) and copy the creds file to the host that will run the device.
+dc-portalctl devices provision cam-001 --device-type camera \
+    --creds-output-file ./{{ tenant }}-cam-001.creds.json
+scp ./{{ tenant }}-cam-001.creds.json my_device.py user@edge-host:~/dc/
+
+# 2. Install device-connect-edge on the host (one-time per host).
+ssh user@edge-host "python3 -m pip install --user device-connect-edge"
+
+# 3. Run it (pinned to a tmux session so it survives the SSH disconnect).
+ssh user@edge-host "tmux new -d -s dc-cam-001 \
+    'cd ~/dc && \
+     NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json \
+     NATS_URL=nats://{{ public_host }}:4222 \
+     python3 my_device.py 2>&1 | tee dc-cam-001.log'"
+
+# 4. Verify from the portal side.
+dc-portalctl devices list | grep {{ tenant }}-cam-001
+```
+
+For longer-lived deployments, prefer a systemd-user unit so the service auto-restarts:
+
+```ini
+# ~/.config/systemd/user/dc-cam-001.service
+[Service]
+WorkingDirectory=%h/dc
+Environment=NATS_CREDENTIALS_FILE=%h/dc/{{ tenant }}-cam-001.creds.json
+Environment=NATS_URL=nats://{{ public_host }}:4222
+ExecStart=/usr/bin/python3 %h/dc/my_device.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+ssh user@edge-host "systemctl --user daemon-reload && \
+                    systemctl --user enable --now dc-cam-001"
+
+# Tail logs
+ssh user@edge-host "journalctl --user -u dc-cam-001 -f"
+```
+
+To pull recent logs back without leaving a shell open:
+
+```bash
+ssh user@edge-host "journalctl --user -u dc-cam-001 --since '10 min ago'" \
+    > /tmp/dc-cam-001.log
+```
+
+---
+
+## 7. Invoke a function
+
+Always include `llm_reasoning` (the audit log requires a reason). The portal
+records who called what and why.
+
+```bash
+dc-portalctl devices invoke {{ example_device_id }} capture_frame \
+    --params '{"resolution":"4k"}' \
+    --reason "Daily inspection job"
+```
+
+For redundancy across interchangeable devices (try in order, return the first
+success):
+
+```bash
+dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
+    capture_frame --params '{}' --reason "Primary down, fail over"
+```
+
+Equivalent HTTP (`devices:invoke` scope):
+
+```bash
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"function":"capture_frame","params":{"resolution":"4k"},"reason":"Daily inspection"}' \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/invoke
+```
+
+Default per-call timeout is ~5 s. If the device is offline the call returns
+quickly with `not_available`; if it hangs the call returns `timeout`.
+
+---
+
+## 8. Observe events (and write integration tests)
+
+Event streams are **bounded** — agents can't accidentally hang forever. The
+server requires at least one of `duration`, `count`, or `follow=true`. Hard
+caps: 1 hour, 10 000 events.
+
+```bash
+# Up to 5 events or 30 seconds, whichever comes first
+dc-portalctl devices stream {{ example_device_id }} motion_detected \
+    --duration 30 --count 5 --format ndjson
+```
+
+NDJSON output ends with a `_meta` line with `closed_by`,
+`events_received`, `elapsed_s` — use it to assert the stream closed for the
+right reason.
+
+### Recipe: cross-device integration test
+
+```bash
+# Provision two devices in the same tenant
+dc-portalctl devices provision sensor-001 --device-type sensor \
+    --creds-output-file ./{{ tenant }}-sensor-001.creds.json
+dc-portalctl devices provision controller-001 --device-type controller \
+    --creds-output-file ./{{ tenant }}-controller-001.creds.json
+
+# Start both (locally or via SSH per Section 6)
+
+# In one terminal: open a bounded stream on the controller's "alert" event
+dc-portalctl devices stream {{ tenant }}-controller-001 alert \
+    --duration 30 --count 1 --format ndjson > alerts.ndjson &
+
+# In another: invoke the sensor to produce a reading that should trigger
+dc-portalctl devices invoke {{ tenant }}-sensor-001 simulate_high_temp \
+    --params '{"temp_c": 45}' --reason "Integration test: assert controller reacts"
+
+# Assert: alerts.ndjson should contain a record with reason ~ "temp"
+wait
+grep -q '"action":"watering' alerts.ndjson && echo PASS || echo FAIL
+```
+
+The same pattern works from Python — call `invoke_device` then iterate the
+NDJSON/SSE stream until the `_meta` close line.
+
+---
+
+## 9. Rotate, list, and revoke API tokens
+
+Visit **{{ portal_url }}/coding-agents** to:
+
+- Mint a new token with the scopes you need (one-time secret display)
+- See your active tokens (label, scopes, created date)
+- Revoke any token immediately (any agent or job using it gets `401`
+  on its next call)
+
+For automated rotation, mint a fresh token, write it to wherever your agent
+reads `DEVICE_CONNECT_PORTAL_TOKEN` from, then revoke the old one through the
+same portal page.
+
+---
+
+## Quick reference
+
+```bash
+# Auth
+dc-portalctl auth login            # browser-mediated, caches token
+dc-portalctl auth me               # whoami + scopes
+dc-portalctl auth logout           # forget cached token
+
+# Fleet / devices
+dc-portalctl fleet describe
+dc-portalctl devices list [--device-type X --location Y]
+dc-portalctl devices identity     <id>
+dc-portalctl devices status       <id>
+dc-portalctl devices capabilities <id>
+dc-portalctl devices functions    <id>
+dc-portalctl devices events       <id>
+
+# Provisioning
+dc-portalctl devices provision    <name> --device-type X [--location Y] \
+    --creds-output-file <path>
+dc-portalctl devices credentials  <id> --output-file <path>
+dc-portalctl devices revoke-credentials <id>
+
+# Invocation
+dc-portalctl devices invoke          <id>          <fn> --params '{…}' --reason "…"
+dc-portalctl devices invoke-fallback <id>,<id>,…   <fn> --params '{…}' --reason "…"
+
+# Events (must specify --duration, --count, or --follow)
+dc-portalctl devices stream <id> <event> --duration N [--count K] [--format ndjson]
+```
+
+Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
+`1` other.

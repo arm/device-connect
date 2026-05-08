@@ -57,7 +57,7 @@ For deployments where multiple groups share the same infrastructure (workshops, 
 
 | Tool | Required for | Install |
 |------|-------------|---------|
-| [nsc](https://github.com/nats-io/nsc) | All JWT scripts | `brew install nsc` or `go install github.com/nats-io/nsc/v2@latest` |
+| [nsc](https://github.com/nats-io/nsc) | All JWT scripts | `brew install nsc` (macOS) or `go install github.com/nats-io/nsc/v2@latest` (then `sudo ln -sf "$(go env GOPATH)/bin/nsc" /usr/local/bin/nsc`) |
 | [Docker](https://docs.docker.com/get-docker/) | Running infrastructure | docker.com |
 | [nats CLI](https://github.com/nats-io/natscli) | `verify_tenants.sh` only | `brew install nats-io/nats-tools/nats` |
 | Python 3.10+ | `manage_tenants.sh list` | Usually pre-installed |
