@@ -472,3 +472,56 @@ async def test_wait_for_event_keeps_fabric_sub_when_session_still_subscribed() -
     await mgr.wait_for_event("pi-desk", timeout=0.05)  # times out
 
     assert not fabric.unsubscribed  # session still holding it
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_scans_and_registers_under_one_lock() -> None:
+    """Regression: scan + register must happen under a single lock
+    acquisition.
+
+    Earlier wait_for_event took the manager lock twice — once to snapshot
+    the ring, again to register the waiter. _handle_event holds the same
+    lock when it appends to the ring and reads the waiter list, so an
+    event arriving between those two acquisitions would land in the ring
+    with zero waiters listening, and the just-registered waiter would
+    block until timeout despite the matching event being right there.
+
+    Hard to exercise behaviorally in single-task asyncio (no await
+    between the two blocks unless the lock is contended), so we assert
+    the structural invariant directly: the no-match path acquires the
+    lock exactly twice (once for atomic scan+register, once for
+    teardown). Pre-fix this would have been three.
+    """
+    msg = _FakeMessagingClient()
+    mgr = es.EventSubscriptionManager(msg, tenant="alice")
+
+    real_lock = mgr._lock
+    n_acquires = 0
+
+    class _CountingLock:
+        async def acquire(self) -> bool:
+            nonlocal n_acquires
+            n_acquires += 1
+            return await real_lock.acquire()
+
+        def release(self) -> None:
+            real_lock.release()
+
+        def locked(self) -> bool:
+            return real_lock.locked()
+
+        async def __aenter__(self) -> "_CountingLock":
+            await self.acquire()
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            self.release()
+
+    mgr._lock = _CountingLock()  # type: ignore[assignment]
+
+    result = await mgr.wait_for_event("pi-desk", timeout=0.01)
+    assert result is None
+    assert n_acquires == 2, (
+        f"expected 2 lock acquisitions (atomic scan+register, then teardown); "
+        f"got {n_acquires} — scan and register may have split the lock again"
+    )

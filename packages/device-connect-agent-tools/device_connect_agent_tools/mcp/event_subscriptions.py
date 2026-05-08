@@ -227,17 +227,15 @@ class EventSubscriptionManager:
             The matched event dict (``{device_id, event_name, params}``) or
             None on timeout.
         """
-        # Race fix: scan recent events first (newest → oldest). Handles the
-        # case where the worker fires the terminal event before the caller
-        # gets to subscribe.
+        # Race fix: scan recent events and register the waiter under a
+        # single lock acquisition. _handle_event holds the same lock when
+        # it appends to the ring and reads the waiter list, so any event
+        # arriving concurrently is either visible in this scan or will
+        # wake the waiter we register below — never lost between them.
         async with self._lock:
-            recent = list(self._recent.get(device_id, []))
-        for event in reversed(recent):
-            if _matches(event, event_name, match_params):
-                return event
-
-        # Ensure a fabric subscription exists for this device while we wait.
-        async with self._lock:
+            for event in reversed(self._recent.get(device_id, [])):
+                if _matches(event, event_name, match_params):
+                    return event
             if device_id not in self._device_subs:
                 self._device_subs[device_id] = await self._start_fabric_sub(device_id)
             queue: asyncio.Queue = asyncio.Queue()
