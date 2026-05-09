@@ -66,6 +66,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
 import time
@@ -1088,6 +1089,34 @@ class DeviceDriver(ABC):
                     name, sub.get("device_type"), sub.get("event_name"), e,
                 )
 
+    # Lifecycle event aliases. The registry service publishes presence
+    # changes to `device-connect.<tenant>.device.{online,offline}` (a
+    # single subject per tenant -- the device_id is in the payload, not
+    # the subject). These aliases let drivers subscribe with a familiar
+    # name; both the canonical and alias forms are accepted.
+    _LIFECYCLE_ALIAS_TO_CANONICAL: Dict[str, str] = {
+        "peer_present":   "device.online",
+        "peer_lost":      "device.offline",
+        "device.online":  "device.online",
+        "device.offline": "device.offline",
+    }
+
+    @staticmethod
+    def _device_id_matches(filter_pattern: Optional[str], source_id: str) -> bool:
+        """True when source_id matches the @on(device_id=...) filter.
+
+        - None / empty pattern matches everything.
+        - A pattern with glob characters (*, ?, [) is matched with fnmatch
+          (case-sensitive). e.g. `interlock-*` matches `interlock-01`,
+          `rack-?-laser` matches `rack-A-laser`.
+        - Otherwise an exact string equality.
+        """
+        if not filter_pattern:
+            return True
+        if any(c in filter_pattern for c in "*?["):
+            return fnmatch.fnmatchcase(source_id, filter_pattern)
+        return source_id == filter_pattern
+
     async def _setup_subscription(self, sub: Dict[str, Any]) -> None:
         """Set up a single event subscription.
 
@@ -1099,27 +1128,42 @@ class DeviceDriver(ABC):
         event_name = sub.get("event_name")
         handler = sub["handler"]
 
-        # Build subscription pattern
-        # Pattern: device-connect.{tenant}.{device_pattern}.event.{event_pattern}
-        # NOTE: NATS wildcards (*) only work at token boundaries (between dots).
-        # We can't do "robot-*" to match "robot-001" - must use "*" and filter.
-        if device_id:
-            device_pattern = device_id
-        else:
-            # Use wildcard for all devices, filter by device_type in handler
-            device_pattern = "*"
-
-        event_pattern = event_name if event_name else "*"
-
-        # Clean event name (remove "event/" prefix if present)
-        if event_pattern.startswith("event/"):
-            event_pattern = event_pattern[6:]
-
-        # Get tenant from router
         tenant = getattr(self._router, "_tenant", "default")
-        subject = f"device-connect.{tenant}.{device_pattern}.event.{event_pattern}"
-
         self_id = getattr(self, "_device_id", None) or "unknown"
+
+        # Lifecycle events are published by the registry on a shared
+        # subject per tenant; route them differently from per-device
+        # event subscriptions.
+        canonical_lifecycle = self._LIFECYCLE_ALIAS_TO_CANONICAL.get(event_name or "")
+        is_lifecycle = canonical_lifecycle is not None
+
+        # device_id may be a glob pattern (`interlock-*`, `rack-?-laser`).
+        # The broker's wildcard is single-token only and lives between
+        # dots, so for glob patterns we subscribe to `*` at the broker
+        # and filter post-hoc with fnmatch in the message handler.
+        device_id_is_glob = bool(device_id) and any(c in device_id for c in "*?[")
+
+        if is_lifecycle:
+            subject = f"device-connect.{tenant}.{canonical_lifecycle}"
+        else:
+            # Build per-device subscription pattern
+            # Pattern: device-connect.{tenant}.{device_pattern}.event.{event_pattern}
+            if not device_id or device_id_is_glob:
+                # No device_id, or a glob -- subscribe to broker wildcard
+                # and filter in-process. Filter by device_type or device_id
+                # glob applied in the handler.
+                device_pattern = "*"
+            else:
+                device_pattern = device_id
+
+            event_pattern = event_name if event_name else "*"
+
+            # Clean event name (remove "event/" prefix if present)
+            if event_pattern.startswith("event/"):
+                event_pattern = event_pattern[6:]
+
+            subject = f"device-connect.{tenant}.{device_pattern}.event.{event_pattern}"
+
         logger.info("[%s] Subscribing to: %s", self_id, subject)
 
         # Use subscribe_with_subject to get the matched subject in callback
@@ -1129,23 +1173,42 @@ class DeviceDriver(ABC):
         async def message_handler(data: bytes, matched_subject: str, _reply: Optional[str]):
             try:
                 parsed = json.loads(data.decode())
-                # Extract device_id from subject: device-connect.{tenant}.{device_id}.event.{event}
-                # Zenoh delivers key expressions with slashes; NATS uses dots — handle both.
-                sep = "/" if "/" in matched_subject else "."
-                parts = matched_subject.split(sep)
-                # Parse from the end for robustness: {prefix}.{tenant}.{device_id}.event.{name}
-                # This handles device IDs that might contain the separator.
-                if len(parts) >= 5 and parts[-2] == "event":
-                    source_device_id = sep.join(parts[2:-2])
-                elif len(parts) > 2:
-                    source_device_id = parts[2]
-                else:
-                    source_device_id = "unknown"
-                source_event_name = parsed.get("method", event_name)
                 payload = parsed.get("params", {})
 
-                # Filter by device_type if specified
-                if device_type:
+                if is_lifecycle:
+                    # Lifecycle subjects are shared across all devices in
+                    # the tenant; the device_id lives in the payload.
+                    source_device_id = payload.get("device_id", "unknown")
+                    source_event_name = canonical_lifecycle
+                else:
+                    # Extract device_id from subject: device-connect.{tenant}.{device_id}.event.{event}
+                    # Zenoh delivers key expressions with slashes; NATS uses dots — handle both.
+                    sep = "/" if "/" in matched_subject else "."
+                    parts = matched_subject.split(sep)
+                    # Parse from the end for robustness: {prefix}.{tenant}.{device_id}.event.{name}
+                    # This handles device IDs that might contain the separator.
+                    if len(parts) >= 5 and parts[-2] == "event":
+                        source_device_id = sep.join(parts[2:-2])
+                    elif len(parts) > 2:
+                        source_device_id = parts[2]
+                    else:
+                        source_device_id = "unknown"
+                    source_event_name = parsed.get("method", event_name)
+
+                # device_id filter (exact or glob). Always applied post-hoc:
+                # - lifecycle subjects don't encode the source device_id
+                # - glob device_id patterns can't be expressed at the broker
+                # Exact-match per-device subscriptions are already filtered
+                # at the broker, so this is a no-op for them.
+                if not self._device_id_matches(device_id, source_device_id):
+                    return
+
+                # Filter by device_type if specified.
+                # Skipped for lifecycle events: the registry publishes
+                # offline before the D2D peer cache forgets the device,
+                # but we don't want to depend on that ordering. Callers
+                # that need type filtering can do it inside the handler.
+                if device_type and not is_lifecycle:
                     # Try to resolve type from D2D peer cache
                     source_type = ""
                     collector = getattr(self._device, '_d2d_collector', None) if self._device else None
