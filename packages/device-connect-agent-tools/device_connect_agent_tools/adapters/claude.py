@@ -47,6 +47,8 @@ from device_connect_agent_tools.tools import (
     discover_devices as _discover_devices,
     invoke as _invoke,
     invoke_many as _invoke_many,
+    broadcast as _broadcast,
+    await_replies as _await_replies,
     invoke_device_with_fallback as _invoke_device_with_fallback,
     get_device_status as _get_device_status,
 )
@@ -147,6 +149,55 @@ async def invoke_many(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@tool(
+    "broadcast",
+    "Async selector-driven fan-out. Returns immediately with a "
+    "correlation_id; replies stream on a per-device subject keyed by id. "
+    "Each candidate self-elects via the optional CEL `where` predicate "
+    "(evaluated at the edge against identity/labels/status/bindings) and "
+    "executes the function. Use fire_at (wall-clock epoch seconds) + "
+    "on_late (skip|fire) for synchronized fan-out. Pair with "
+    "await_replies(correlation_id) to collect outcomes.",
+    {
+        "selector": str, "params": dict, "where": str, "bindings": dict,
+        "fire_at": float, "on_late": str, "llm_reasoning": str,
+    },
+)
+async def broadcast(args: dict[str, Any]) -> dict[str, Any]:
+    return _text(
+        _broadcast(
+            selector=args["selector"],
+            params=args.get("params"),
+            where=args.get("where"),
+            bindings=args.get("bindings"),
+            fire_at=args.get("fire_at"),
+            on_late=args.get("on_late", "skip"),
+            llm_reasoning=args.get("llm_reasoning"),
+        )
+    )
+
+
+@tool(
+    "await_replies",
+    "Collect replies for a broadcast() call. Subscribes to the "
+    "correlation reply subject, drains for up to `timeout` seconds (or "
+    "until `until` replies have arrived), then returns the list.",
+    {
+        "correlation_id": str, "timeout": float, "until": int,
+        "poll_interval": float,
+    },
+)
+async def await_replies(args: dict[str, Any]) -> dict[str, Any]:
+    return _text(
+        _await_replies(
+            correlation_id=args["correlation_id"],
+            timeout=float(args.get("timeout", 10.0)),
+            until=int(args["until"]) if args.get("until") is not None else None,
+            poll_interval=float(args.get("poll_interval", 0.05)),
+        )
+    )
+
+
 # Other invocation helpers
 
 
@@ -206,6 +257,8 @@ def create_device_connect_server(name: str = "device-connect"):
             discover,
             invoke,
             invoke_many,
+            broadcast,
+            await_replies,
             invoke_device_with_fallback,
             get_device_status,
             discover_devices,
@@ -218,6 +271,8 @@ __all__ = [
     "discover",
     "invoke",
     "invoke_many",
+    "broadcast",
+    "await_replies",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",

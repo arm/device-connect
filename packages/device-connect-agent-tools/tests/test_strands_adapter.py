@@ -57,6 +57,8 @@ EXPECTED_TOOLS = {
     "discover",
     "invoke",
     "invoke_many",
+    "broadcast",
+    "await_replies",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",

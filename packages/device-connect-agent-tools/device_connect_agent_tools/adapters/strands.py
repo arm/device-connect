@@ -27,6 +27,8 @@ from device_connect_agent_tools.tools import (
     discover_devices as _discover_devices,
     invoke as _invoke,
     invoke_many as _invoke_many,
+    broadcast as _broadcast,
+    await_replies as _await_replies,
     invoke_device_with_fallback as _invoke_device_with_fallback,
     get_device_status as _get_device_status,
 )
@@ -38,6 +40,8 @@ discover = strands_tool(_discover)
 # Selector-driven invocation (recommended)
 invoke = strands_tool(_invoke)
 invoke_many = strands_tool(_invoke_many)
+broadcast = strands_tool(_broadcast)
+await_replies = strands_tool(_await_replies)
 
 # Other invocation helpers
 invoke_device_with_fallback = strands_tool(_invoke_device_with_fallback)
@@ -51,6 +55,8 @@ __all__ = [
     "discover",
     "invoke",
     "invoke_many",
+    "broadcast",
+    "await_replies",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",
