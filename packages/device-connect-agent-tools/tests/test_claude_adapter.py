@@ -65,9 +65,8 @@ def _mock_sdk_and_connection():
 
 
 TOOL_NAMES = (
-    "describe_fleet",
-    "list_devices",
-    "get_device_functions",
+    "discover_labels",
+    "discover",
     "discover_devices",
     "invoke_device",
     "invoke_device_with_fallback",
