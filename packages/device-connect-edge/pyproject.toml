@@ -38,6 +38,9 @@ dependencies = [
 
 [project.optional-dependencies]
 zenoh = []  # Zenoh is now a core dependency; kept for backward compat
+predicate = [
+    "cel-python>=0.5.0",
+]
 telemetry = [
     "opentelemetry-api>=1.30.0",
     "opentelemetry-sdk>=1.30.0",
