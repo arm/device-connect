@@ -70,6 +70,8 @@ TOOL_NAMES = (
     "discover_devices",
     "invoke",
     "invoke_many",
+    "broadcast",
+    "await_replies",
     "invoke_device_with_fallback",
     "get_device_status",
 )

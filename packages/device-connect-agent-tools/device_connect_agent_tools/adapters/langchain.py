@@ -26,6 +26,8 @@ from device_connect_agent_tools.tools import (
     discover_devices as _discover_devices,
     invoke as _invoke,
     invoke_many as _invoke_many,
+    broadcast as _broadcast,
+    await_replies as _await_replies,
     invoke_device_with_fallback as _invoke_device_with_fallback,
     get_device_status as _get_device_status,
 )
@@ -37,6 +39,8 @@ discover = StructuredTool.from_function(_discover)
 # Selector-driven invocation (recommended)
 invoke = StructuredTool.from_function(_invoke)
 invoke_many = StructuredTool.from_function(_invoke_many)
+broadcast = StructuredTool.from_function(_broadcast)
+await_replies = StructuredTool.from_function(_await_replies)
 
 # Other invocation helpers
 invoke_device_with_fallback = StructuredTool.from_function(_invoke_device_with_fallback)
@@ -50,6 +54,8 @@ __all__ = [
     "discover",
     "invoke",
     "invoke_many",
+    "broadcast",
+    "await_replies",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",
