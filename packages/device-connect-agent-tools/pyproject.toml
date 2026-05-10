@@ -37,6 +37,7 @@ strands = ["strands-agents>=1.0"]
 langchain = ["langchain-core>=0.2"]
 claude = ["claude-agent-sdk>=0.1"]
 mcp = ["fastmcp>=1.0"]
+predicate = ["device-connect-edge[predicate]"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
