@@ -72,7 +72,8 @@ def _mock_langchain_and_connection():
 EXPECTED_TOOLS = {
     "discover_labels",
     "discover",
-    "invoke_device",
+    "invoke",
+    "invoke_many",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",

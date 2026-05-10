@@ -68,7 +68,8 @@ TOOL_NAMES = (
     "discover_labels",
     "discover",
     "discover_devices",
-    "invoke_device",
+    "invoke",
+    "invoke_many",
     "invoke_device_with_fallback",
     "get_device_status",
 )

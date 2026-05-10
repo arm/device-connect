@@ -4,7 +4,7 @@
 
 """Claude Agent SDK adapter — exposes Device Connect tools to claude-agent-sdk.
 
-Selector-driven discovery keeps LLM context small::
+Selector-driven discovery and invocation keep LLM context small::
 
     import anyio
     from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock
@@ -45,7 +45,8 @@ from device_connect_agent_tools.tools import (
     discover as _discover,
     discover_labels as _discover_labels,
     discover_devices as _discover_devices,
-    invoke_device as _invoke_device,
+    invoke as _invoke,
+    invoke_many as _invoke_many,
     invoke_device_with_fallback as _invoke_device_with_fallback,
     get_device_status as _get_device_status,
 )
@@ -101,25 +102,52 @@ async def discover(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-# Invocation tools
+# Selector-driven invocation tools (recommended)
 
 
 @tool(
-    "invoke_device",
-    "Call a function on a Device Connect device. Use discover() with a "
-    "function-scoped selector first to learn available functions and "
-    "parameters.",
-    {"device_id": str, "function": str, "params": dict, "llm_reasoning": str},
+    "invoke",
+    "Call exactly one function on one device. The selector must resolve "
+    "to a single (device, function) tuple -- use device(<id>).function(<name>) "
+    "or function(<name>) scope. Returns {success, device_id, function, "
+    "result|error}. Use invoke_many for fan-out across multiple targets.",
+    {"selector": str, "params": dict, "llm_reasoning": str},
 )
-async def invoke_device(args: dict[str, Any]) -> dict[str, Any]:
+async def invoke(args: dict[str, Any]) -> dict[str, Any]:
     return _text(
-        _invoke_device(
-            device_id=args["device_id"],
-            function=args["function"],
+        _invoke(
+            selector=args["selector"],
             params=args.get("params"),
             llm_reasoning=args.get("llm_reasoning"),
         )
     )
+
+
+@tool(
+    "invoke_many",
+    "Fan out a function call over a selector-resolved set of (device, "
+    "function) tuples in parallel. Partial-failure semantics: per-target "
+    "results and errors are returned even if some targets fail. Returns "
+    "{candidates, matched, succeeded, failed, results, errors}. Each "
+    "target gets a per-call timeout (default 30s).",
+    {
+        "selector": str, "params": dict, "timeout": float,
+        "max_concurrency": int, "llm_reasoning": str,
+    },
+)
+async def invoke_many(args: dict[str, Any]) -> dict[str, Any]:
+    return _text(
+        _invoke_many(
+            selector=args["selector"],
+            params=args.get("params"),
+            timeout=float(args.get("timeout", 30.0)),
+            max_concurrency=int(args.get("max_concurrency", 32)),
+            llm_reasoning=args.get("llm_reasoning"),
+        )
+    )
+
+
+# Other invocation helpers
 
 
 @tool(
@@ -148,12 +176,12 @@ async def get_device_status(args: dict[str, Any]) -> dict[str, Any]:
     return _text(_get_device_status(device_id=args["device_id"]))
 
 
-# Backward-compatible (long-deprecated — prefer discover() / discover_labels())
+# Backward-compatible (long-deprecated -- prefer discover() / invoke())
 
 
 @tool(
     "discover_devices",
-    "Deprecated — use discover() and discover_labels() instead. Discovers "
+    "Deprecated -- use discover() and discover_labels() instead. Discovers "
     "all devices with full function schemas.",
     {"device_type": str, "refresh": bool},
 )
@@ -176,7 +204,8 @@ def create_device_connect_server(name: str = "device-connect"):
         tools=[
             discover_labels,
             discover,
-            invoke_device,
+            invoke,
+            invoke_many,
             invoke_device_with_fallback,
             get_device_status,
             discover_devices,
@@ -187,7 +216,8 @@ def create_device_connect_server(name: str = "device-connect"):
 __all__ = [
     "discover_labels",
     "discover",
-    "invoke_device",
+    "invoke",
+    "invoke_many",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",
