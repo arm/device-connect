@@ -459,7 +459,7 @@ async def test_discover_invalid_selector_returns_error(device_spawner, messaging
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(discover, "device(")
-        assert "error" in result
+        assert result["error"]["code"] == "selector_parse_error"
         assert result["matched"] == 0
         assert result["results"] == []
     finally:

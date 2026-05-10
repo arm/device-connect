@@ -94,7 +94,29 @@ def _normalize_pagination(offset: int, limit: int, default_limit: int) -> tuple[
     return safe_offset, safe_limit
 
 
-def _empty_envelope(scope: str | None = None, error: str | None = None) -> dict[str, Any]:
+def _error(code: str, message: str) -> dict[str, str]:
+    """Build the canonical structured error object.
+
+    Errors are returned as data (not raised) inside the response envelope.
+    The ``code`` is a stable, machine-readable string callers may switch on;
+    ``message`` is human-readable and may include positional detail (parse
+    caret, axis name, etc.) suitable for logging or surfacing to the user.
+
+    Codes currently emitted:
+        - ``selector_parse_error``    selector string is malformed
+        - ``invalid_selector``        selector is not a usable input
+                                      (None, non-string, etc.)
+        - ``connection_error``        registry / messaging unavailable
+        - ``key_not_axis_qualified``  discover_labels key missing axis prefix
+        - ``unknown_axis``            discover_labels axis not in
+                                      {device, function, event}
+    """
+    return {"code": code, "message": message}
+
+
+def _empty_envelope(
+    scope: str | None = None, error: dict[str, str] | None = None
+) -> dict[str, Any]:
     """Build the canonical zero-result response envelope."""
     out: dict[str, Any] = {
         "matched": 0,
@@ -219,19 +241,26 @@ def discover(
 
     # Parse the selector at the system boundary; surface a clean error to
     # the caller rather than raising into agent code.
+    if not isinstance(selector, str):
+        return _empty_envelope(
+            error=_error(
+                "invalid_selector",
+                f"Selector must be a string, got {type(selector).__name__}",
+            )
+        )
     try:
         sel: Selector = parse_selector(selector)
     except SelectorParseError as e:
-        return _empty_envelope(error=str(e))
-    except (TypeError, ValueError) as e:
-        return _empty_envelope(error=f"Invalid selector: {e}")
+        return _empty_envelope(error=_error("selector_parse_error", str(e)))
 
     try:
         conn = get_connection()
         devices = conn.list_devices()
     except Exception as e:
         logger.error("discover(%r) failed loading fleet: %s", selector, e)
-        return _empty_envelope(scope=sel.scope.value, error=str(e))
+        return _empty_envelope(
+            scope=sel.scope.value, error=_error("connection_error", str(e))
+        )
 
     # Apply the device-axis filter (vacuously True when sel.device is None).
     matched_devices = [
@@ -362,7 +391,7 @@ def discover_labels(
         devices = conn.list_devices()
     except Exception as e:
         logger.error("discover_labels failed loading fleet: %s", e)
-        return _empty_envelope(error=str(e))
+        return _empty_envelope(error=_error("connection_error", str(e)))
 
     # Aggregate function and event entities once.
     functions: list[dict] = []
@@ -392,7 +421,10 @@ def discover_labels(
     # Per-key form: split on the first dot to pick an axis.
     if "." not in key:
         return _empty_envelope(
-            error=f"Key must be axis-qualified (device.<k>, function.<k>, event.<k>): {key!r}"
+            error=_error(
+                "key_not_axis_qualified",
+                f"Key must be axis-qualified (device.<k>, function.<k>, event.<k>): {key!r}",
+            )
         )
     axis, label_key = key.split(".", 1)
     if axis == "device":
@@ -406,7 +438,10 @@ def discover_labels(
         total = len(events)
     else:
         return _empty_envelope(
-            error=f"Unknown axis {axis!r} (expected device|function|event)"
+            error=_error(
+                "unknown_axis",
+                f"Unknown axis {axis!r} (expected device|function|event)",
+            )
         )
 
     counts = source.get(label_key, {})

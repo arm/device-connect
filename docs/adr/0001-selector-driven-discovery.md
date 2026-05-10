@@ -160,6 +160,32 @@ Operation tools (`invoke_many`, `broadcast`) do not paginate - that is a
 streaming-dispatch concern. Subscribe to the result channel for per-target
 detail at large fan-out.
 
+## Error responses
+
+`discover` and `discover_labels` return errors as data inside the response
+envelope rather than raising. The shape is stable so callers can branch on
+the `code` programmatically and surface `message` to logs or users:
+
+```json
+{ "matched": 0, "returned": 0, "offset": 0, "next_offset": null,
+  "results": [],
+  "error": {
+    "code": "selector_parse_error",
+    "message": "Unknown scope 'widgets' at position 0\n  widgets(*)\n  ^"
+  }
+}
+```
+
+Codes:
+
+| Code | Cause |
+| --- | --- |
+| `invalid_selector` | Selector is not a string (or otherwise unusable as input) |
+| `selector_parse_error` | Selector is a string but malformed |
+| `connection_error` | Registry or messaging backend unavailable |
+| `key_not_axis_qualified` | `discover_labels(key=...)` missing the `device.` / `function.` / `event.` prefix |
+| `unknown_axis` | `discover_labels(key=...)` axis prefix not in `{device, function, event}` |
+
 ## Worked examples
 
 ### Find every camera in lab-A and capture an image from each
