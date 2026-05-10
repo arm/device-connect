@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -51,6 +51,7 @@ class FunctionDef(BaseModel):
                 },
                 "required": []
             },
+            labels={"direction": "write", "modality": ["rgb", "4k"]},
             tags=["vision", "capture"]
         )
     """
@@ -59,6 +60,13 @@ class FunctionDef(BaseModel):
     parameters: Dict[str, Any] = Field(
         default_factory=lambda: {"type": "object", "properties": {}, "required": []},
         description="JSON Schema for function parameters"
+    )
+    labels: Optional[Dict[str, Union[str, List[str]]]] = Field(
+        default=None,
+        description="Discovery metadata as key:value pairs. Values may be a single string "
+                    "or a list of strings (composite identity). Well-known keys: direction "
+                    "(read|write), safety (critical|informational), modality (rgb|thermal|...). "
+                    "Custom keys are allowed."
     )
     tags: List[str] = Field(
         default_factory=list,
@@ -92,6 +100,13 @@ class EventDef(BaseModel):
         default=None,
         description="JSON Schema for event payload (optional)"
     )
+    labels: Optional[Dict[str, Union[str, List[str]]]] = Field(
+        default=None,
+        description="Discovery metadata as key:value pairs. Values may be a single string "
+                    "or a list of strings (composite identity). Well-known keys: safety "
+                    "(critical|informational), modality (rgb|thermal|motion|...). Custom keys "
+                    "are allowed."
+    )
     tags: List[str] = Field(
         default_factory=list,
         description="Tags for categorization"
@@ -124,6 +139,14 @@ class DeviceCapabilities(BaseModel):
     events: List[EventDef] = Field(
         default_factory=list,
         description="Events the device can emit"
+    )
+    labels: Optional[Dict[str, Union[str, List[str]]]] = Field(
+        default=None,
+        description="Discovery metadata for the device as key:value pairs. Values may be a "
+                    "single string or a list of strings (composite identity). Well-known keys: "
+                    "category (camera|robot|hub|sensor|actuator|inference; multi-valued for "
+                    "composite devices), location (e.g. 'warehouse1/loading-dock'; '/' for "
+                    "hierarchy, multi-valued for mobile devices). Custom keys are allowed."
     )
 
 

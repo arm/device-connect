@@ -10,6 +10,7 @@ from device_connect_edge.types import (
     DeviceStatus,
     FunctionDef,
     EventDef,
+    DeviceCapabilities,
 )
 
 
@@ -75,3 +76,66 @@ class TestEventDef:
             parameters={"type": "object", "properties": {"zone": {"type": "string"}}},
         )
         assert event.name == "motion_detected"
+
+
+class TestLabels:
+    """Discovery labels on FunctionDef, EventDef, DeviceCapabilities (Phase 1)."""
+
+    def test_function_labels_default_none(self):
+        f = FunctionDef(name="ping")
+        assert f.labels is None
+
+    def test_function_single_value_label(self):
+        f = FunctionDef(name="get_status", labels={"direction": "read"})
+        assert f.labels == {"direction": "read"}
+
+    def test_function_multivalued_label(self):
+        f = FunctionDef(name="capture", labels={"modality": ["rgb", "4k"]})
+        assert f.labels == {"modality": ["rgb", "4k"]}
+
+    def test_function_labels_roundtrip(self):
+        f = FunctionDef(
+            name="set_threshold",
+            labels={"direction": "write", "modality": ["rgb", "4k"], "safety": "critical"},
+        )
+        f2 = FunctionDef.model_validate_json(f.model_dump_json())
+        assert f2.labels == f.labels
+
+    def test_event_labels_default_none(self):
+        e = EventDef(name="heartbeat")
+        assert e.labels is None
+
+    def test_event_labels_roundtrip(self):
+        e = EventDef(
+            name="motion_detected",
+            labels={"modality": "motion", "safety": "informational"},
+        )
+        e2 = EventDef.model_validate_json(e.model_dump_json())
+        assert e2.labels == e.labels
+
+    def test_capabilities_labels_default_none(self):
+        c = DeviceCapabilities()
+        assert c.labels is None
+
+    def test_capabilities_labels_composite_identity(self):
+        # category multi-valued for composite devices (camera + inference)
+        c = DeviceCapabilities(
+            labels={
+                "category": ["camera", "inference"],
+                "location": "warehouse1/loading-dock",
+            }
+        )
+        assert c.labels["category"] == ["camera", "inference"]
+        assert c.labels["location"] == "warehouse1/loading-dock"
+
+    def test_capabilities_labels_roundtrip(self):
+        c = DeviceCapabilities(
+            description="Smart cam",
+            functions=[FunctionDef(name="capture", labels={"direction": "write"})],
+            events=[EventDef(name="motion", labels={"modality": "motion"})],
+            labels={"category": ["camera"], "location": "warehouse1/dock-3"},
+        )
+        c2 = DeviceCapabilities.model_validate_json(c.model_dump_json())
+        assert c2.labels == c.labels
+        assert c2.functions[0].labels == {"direction": "write"}
+        assert c2.events[0].labels == {"modality": "motion"}

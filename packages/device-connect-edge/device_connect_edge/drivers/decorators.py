@@ -57,7 +57,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Any, Callable, Dict, Optional, get_type_hints, get_origin, get_args
+from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 
 from device_connect_edge.telemetry.tracer import get_tracer, get_current_trace_id, SpanKind, StatusCode
 from device_connect_edge.telemetry.metrics import get_metrics
@@ -345,6 +345,7 @@ def _get_integration_logger(obj: Any) -> Optional[Callable[[dict], None]]:
 def rpc(
     name: Optional[str] = None,
     description: Optional[str] = None,
+    labels: Optional[Dict[str, Union[str, List[str]]]] = None,
 ) -> Callable:
     """Decorator to expose a method as an RPC-callable function.
 
@@ -355,6 +356,10 @@ def rpc(
     Args:
         name: Override function name (default: method __name__)
         description: Override description (default: first line of docstring)
+        labels: Discovery metadata as key:value pairs. Values may be a single
+            string or a list of strings (composite identity). Well-known keys:
+            direction (read|write), safety (critical|informational), modality
+            (rgb|thermal|...). Custom keys are allowed.
 
     Returns:
         Decorated method with function metadata attached
@@ -372,6 +377,11 @@ def rpc(
         @rpc(name="customName", description="Custom description")
         async def another_function(self, x: int) -> dict:
             return {"x": x}
+
+        @rpc(labels={"direction": "write", "modality": ["rgb", "4k"]})
+        async def capture_frame(self, resolution: str = "1080p") -> dict:
+            '''Capture a frame.'''
+            return {}
     """
     def decorator(func: Callable) -> Callable:
         func_name = name or func.__name__
@@ -380,6 +390,7 @@ def rpc(
         summary, arg_docs = _parse_docstring(func.__doc__)
         func._description = description or summary
         func._arg_descriptions = arg_docs
+        func._labels = labels
 
         @functools.wraps(func)
         async def wrapper(self, *args, **kwargs):
@@ -499,6 +510,7 @@ def rpc(
         wrapper._function_name = func_name
         wrapper._description = func._description
         wrapper._arg_descriptions = func._arg_descriptions
+        wrapper._labels = func._labels
         wrapper._original_func = func  # For schema extraction
 
         return wrapper
@@ -508,7 +520,8 @@ def rpc(
 
 def emit(
     name: Optional[str] = None,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    labels: Optional[Dict[str, Union[str, List[str]]]] = None,
 ) -> Callable:
     """Decorator to declare an event this driver can emit.
 
@@ -524,6 +537,10 @@ def emit(
     Args:
         name: Override event name (default: method __name__)
         description: Event description (default: first line of docstring)
+        labels: Discovery metadata as key:value pairs. Values may be a single
+            string or a list of strings (composite identity). Well-known keys:
+            safety (critical|informational), modality (rgb|thermal|motion|...).
+            Custom keys are allowed.
 
     Returns:
         Decorated method that emits event when called
@@ -550,6 +567,7 @@ def emit(
         summary, arg_docs = _parse_docstring(func.__doc__)
         func._event_description = description or summary
         func._payload_descriptions = arg_docs
+        func._labels = labels
 
         @functools.wraps(func)
         async def wrapper(self, *args, **kwargs):
@@ -624,6 +642,7 @@ def emit(
         wrapper._event_name = event_name
         wrapper._event_description = func._event_description
         wrapper._payload_descriptions = func._payload_descriptions
+        wrapper._labels = func._labels
         wrapper._original_func = func  # For schema extraction
 
         return wrapper

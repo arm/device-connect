@@ -177,6 +177,92 @@ class TestDeviceDriverBase:
         result = await driver.do_something(value=5)
         assert result == {"result": 10}
 
+
+# -- Discovery labels (Phase 1) ------------------------------------
+
+class TestRpcLabels:
+    def test_default_none(self):
+        @rpc()
+        async def f(self) -> dict:
+            """f."""
+            return {}
+
+        assert f._labels is None
+
+    def test_explicit_labels(self):
+        @rpc(labels={"direction": "write", "modality": ["rgb", "4k"]})
+        async def capture(self, resolution: str = "1080p") -> dict:
+            """Capture."""
+            return {}
+
+        assert capture._labels == {"direction": "write", "modality": ["rgb", "4k"]}
+
+
+class TestEmitLabels:
+    def test_default_none(self):
+        @emit()
+        async def heartbeat(self):
+            """heartbeat."""
+            pass
+
+        assert heartbeat._labels is None
+
+    def test_explicit_labels(self):
+        @emit(labels={"modality": "motion", "safety": "informational"})
+        async def motion_detected(self, zone: str):
+            """Motion."""
+            pass
+
+        assert motion_detected._labels == {"modality": "motion", "safety": "informational"}
+
+
+class LabeledDriver(DeviceDriver):
+    """Driver with class-level labels and per-method labels."""
+    device_type = "camera"
+    labels = {
+        "category": ["camera", "inference"],
+        "location": "warehouse1/loading-dock",
+    }
+
+    @rpc(labels={"direction": "write", "modality": ["rgb", "4k"]})
+    async def capture_frame(self, resolution: str = "1080p") -> dict:
+        """Capture a frame."""
+        return {}
+
+    @rpc()
+    async def ping(self) -> dict:
+        """Ping."""
+        return {}
+
+    @emit(labels={"modality": "motion", "safety": "informational"})
+    async def motion_detected(self, zone: str, confidence: float):
+        """Motion in zone."""
+        pass
+
+
+class TestDriverLabels:
+    def test_class_level_labels_on_capabilities(self):
+        caps = LabeledDriver().capabilities
+        assert caps.labels == {
+            "category": ["camera", "inference"],
+            "location": "warehouse1/loading-dock",
+        }
+
+    def test_function_labels_propagated(self):
+        caps = LabeledDriver().capabilities
+        fns = {f.name: f for f in caps.functions}
+        assert fns["capture_frame"].labels == {"direction": "write", "modality": ["rgb", "4k"]}
+        assert fns["ping"].labels is None
+
+    def test_event_labels_propagated(self):
+        caps = LabeledDriver().capabilities
+        evs = {e.name: e for e in caps.events}
+        assert evs["motion_detected"].labels == {"modality": "motion", "safety": "informational"}
+
+    def test_no_class_labels_defaults_to_none(self):
+        # SampleDriver above does NOT define `labels` -- inherits None from DeviceDriver
+        assert SampleDriver().capabilities.labels is None
+
     def test_capabilities_detected(self):
         """Driver should have functions and events detectable via introspection."""
         driver = SampleDriver()
