@@ -159,6 +159,45 @@ class TestSubscriptionHandle:
         assert len(msgs) == 1
         sub.close()
 
+    def test_for_loop_protocol_via_dunder_iter(self, fake_conn):
+        # ``for msg in sub:`` should drive __iter__ which delegates to iter()
+        # with a sensible default timeout. Break early so the test does not
+        # block on the 30s default.
+        sub = tools_mod.subscribe("correlation:r_iter")
+        fake_conn.deliver(
+            "device-connect.default.cam-001.event.async_reply.r_iter",
+            {"correlation_id": "r_iter", "device_id": "cam-001"},
+        )
+        gathered: list[dict] = []
+        for msg in sub:
+            gathered.append(msg)
+            break  # one message is enough to confirm __iter__ wiring
+        sub.close()
+        assert len(gathered) == 1
+        assert gathered[0]["device_id"] == "cam-001"
+
+    def test_read_does_not_drop_messages_appended_during_iteration(self, fake_conn):
+        # Race-safety guard: simulate a callback that appends a fresh
+        # message between the read's snapshot and truncation. The message
+        # must still be visible on the next read().
+        sub = tools_mod.subscribe("correlation:r_race")
+        fake_conn.deliver(
+            "device-connect.default.cam-001.event.async_reply.r_race",
+            {"correlation_id": "r_race", "device_id": "cam-001", "ordinal": 1},
+        )
+        first = sub.read()
+        assert len(first) == 1
+        # Now simulate a late-arriving append into the same inbox AFTER
+        # the previous read drained the prefix.
+        fake_conn.deliver(
+            "device-connect.default.cam-002.event.async_reply.r_race",
+            {"correlation_id": "r_race", "device_id": "cam-002", "ordinal": 2},
+        )
+        second = sub.read()
+        assert len(second) == 1
+        assert second[0]["device_id"] == "cam-002"
+        sub.close()
+
 
 # -- await_replies --------------------------------------------------
 

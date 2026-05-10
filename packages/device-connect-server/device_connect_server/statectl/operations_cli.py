@@ -109,7 +109,13 @@ def run_invoke_many(args: Any) -> int:
             llm_reasoning=args.reason,
         )
         print(_pretty(result))
-        return 0 if "error" not in result else 1
+        # Exit non-zero on a top-level error OR when any target failed, so
+        # shell pipelines can detect partial failure without parsing JSON.
+        if "error" in result:
+            return 1
+        if result.get("failed", 0) > 0:
+            return 3
+        return 0
     finally:
         try:
             disconnect()
@@ -154,21 +160,30 @@ def run_subscribe(args: Any) -> int:
     Each message is printed as one JSON line so the output can be piped
     into ``jq`` or grep. Runs until ``--timeout`` of idle silence elapses
     or ``--until`` messages have been printed (whichever comes first).
+    Exit codes:
+        0   one or more messages were printed
+        4   idle-timeout reached with zero messages
+        130 interrupted with Ctrl-C
     """
     from device_connect_agent_tools import disconnect, subscribe
 
     _connect(getattr(args, "broker", None))
+    count = 0
     try:
-        count = 0
         with subscribe(args.selector) as sub:
-            for msg in sub.iter(
-                timeout=float(args.timeout), poll_interval=0.05,
-            ):
-                print(json.dumps(msg, default=str))
-                count += 1
-                if args.until is not None and count >= int(args.until):
-                    break
-        return 0
+            try:
+                for msg in sub.iter(
+                    timeout=float(args.timeout), poll_interval=0.05,
+                ):
+                    print(json.dumps(msg, default=str))
+                    count += 1
+                    if args.until is not None and count >= int(args.until):
+                        break
+            except KeyboardInterrupt:
+                # Clean exit on Ctrl-C: the ``with`` block tears the
+                # subscription down before this returns.
+                return 130
+        return 0 if count > 0 else 4
     finally:
         try:
             disconnect()
