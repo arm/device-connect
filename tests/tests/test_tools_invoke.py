@@ -2,40 +2,65 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for device-connect-agent-tools invoke_device().
+"""Integration tests for selector-driven invocation tools.
 
-Tests that the agent SDK can invoke device RPCs via the messaging backend.
+Covers ``invoke()`` and ``invoke_many()`` against real devices registered
+via the messaging backend. Exercises single-match, ambiguous-match,
+selector-scope rejection, parallel fan-out, and partial-failure semantics
+end-to-end.
 """
 
 import asyncio
+import time
+
 import pytest
 
-
 SETTLE_TIME = 0.3
+DISCOVERY_TIMEOUT = 5.0
+
+
+async def _wait_for_devices(messaging_url, expected_ids):
+    """Connect and poll until all expected ``device_ids`` are visible."""
+    from device_connect_agent_tools import connect
+    from device_connect_agent_tools.connection import get_connection
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    deadline = time.monotonic() + DISCOVERY_TIMEOUT
+    while True:
+        conn = get_connection()
+        devices = await asyncio.to_thread(conn.list_devices)
+        ids = {d.get("device_id") for d in devices}
+        if expected_ids.issubset(ids) or time.monotonic() > deadline:
+            return devices
+        await asyncio.sleep(0.25)
+
+
+# -- invoke ---------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_invoke_sensor_reading(device_spawner, messaging_url):
-    """invoke_device() should call sensor's get_reading and return result."""
+    """invoke() calls sensor.get_reading and returns the reading payload."""
     await device_spawner.spawn_sensor(
-        "itest-tools-invoke-sensor", initial_temp=23.5, initial_humidity=50.0,
+        "itest-inv-read-sensor", initial_temp=23.5, initial_humidity=50.0,
     )
     await asyncio.sleep(SETTLE_TIME)
 
-    from device_connect_agent_tools import connect, disconnect, invoke_device
+    from device_connect_agent_tools import disconnect, invoke
 
-    await asyncio.to_thread(connect, nats_url=messaging_url)
+    await _wait_for_devices(messaging_url, {"itest-inv-read-sensor"})
     try:
         result = await asyncio.to_thread(
-            invoke_device,
-            device_id="itest-tools-invoke-sensor",
-            function="get_reading",
-            params={"unit": "celsius"},
-            llm_reasoning="Testing sensor read",
+            invoke,
+            "device(itest-inv-read-sensor).function(get_reading)",
+            {"unit": "celsius"},
+            "Testing sensor read",
         )
-        assert isinstance(result, dict)
-        assert result.get("success") is True or "temperature" in result.get("result", {})
+        assert result["success"] is True
+        assert result["device_id"] == "itest-inv-read-sensor"
+        assert result["function"] == "get_reading"
+        assert "temperature" in result["result"]
     finally:
         await asyncio.to_thread(disconnect)
 
@@ -43,25 +68,26 @@ async def test_invoke_sensor_reading(device_spawner, messaging_url):
 @pytest.mark.asyncio
 @pytest.mark.integration
 async def test_invoke_robot_dispatch(device_spawner, event_capture, messaging_url):
-    """invoke_device() should dispatch robot and trigger cleaning."""
+    """invoke() dispatches the robot and the cleaning_finished event arrives."""
     await device_spawner.spawn_robot(
-        "itest-tools-invoke-robot", clean_duration=0.3,
+        "itest-inv-robot", clean_duration=0.3,
     )
     await asyncio.sleep(SETTLE_TIME)
 
-    async with event_capture.subscribe("device-connect.*.itest-tools-invoke-robot.event.*") as events:
-        from device_connect_agent_tools import connect, disconnect, invoke_device
+    async with event_capture.subscribe(
+        "device-connect.*.itest-inv-robot.event.*"
+    ) as events:
+        from device_connect_agent_tools import disconnect, invoke
 
-        await asyncio.to_thread(connect, nats_url=messaging_url)
+        await _wait_for_devices(messaging_url, {"itest-inv-robot"})
         try:
             result = await asyncio.to_thread(
-                invoke_device,
-                device_id="itest-tools-invoke-robot",
-                function="dispatch_robot",
-                params={"zone_id": "zone-tools"},
-                llm_reasoning="Testing robot dispatch via tools",
+                invoke,
+                "device(itest-inv-robot).function(dispatch_robot)",
+                {"zone_id": "zone-tools"},
+                "Testing robot dispatch",
             )
-            assert isinstance(result, dict)
+            assert result["success"] is True
         finally:
             await asyncio.to_thread(disconnect)
 
@@ -71,42 +97,184 @@ async def test_invoke_robot_dispatch(device_spawner, event_capture, messaging_ur
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_unknown_device(messaging_url):
-    """invoke_device() on non-existent device should return error."""
-    from device_connect_agent_tools import connect, disconnect, invoke_device
+async def test_invoke_no_match_returns_no_match(device_spawner, messaging_url):
+    """A selector that resolves to zero functions returns ``no_match``."""
+    await device_spawner.spawn_camera("itest-inv-nomatch-cam", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import connect, disconnect, invoke
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
-            invoke_device,
-            device_id="nonexistent-device-xyz",
-            function="ping",
-            llm_reasoning="Testing error handling",
+            invoke,
+            "device(itest-inv-nomatch-cam).function(does_not_exist)",
         )
-        assert isinstance(result, dict)
-        assert result.get("success") is False
+        assert result["success"] is False
+        assert result["error"]["code"] == "no_match"
     finally:
         await asyncio.to_thread(disconnect)
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration
-async def test_invoke_camera_capture(device_spawner, messaging_url):
-    """invoke_device() should capture image from camera."""
-    await device_spawner.spawn_camera("itest-tools-invoke-cam")
+async def test_invoke_ambiguous_match_returns_error(device_spawner, messaging_url):
+    """A selector matching multiple (device, function) tuples returns an error."""
+    await device_spawner.spawn_camera("itest-inv-amb-cam-1", location="lab-A")
+    await device_spawner.spawn_camera("itest-inv-amb-cam-2", location="lab-A")
     await asyncio.sleep(SETTLE_TIME)
 
-    from device_connect_agent_tools import connect, disconnect, invoke_device
+    from device_connect_agent_tools import disconnect, invoke
+
+    await _wait_for_devices(
+        messaging_url, {"itest-inv-amb-cam-1", "itest-inv-amb-cam-2"}
+    )
+    try:
+        result = await asyncio.to_thread(
+            invoke, "device(itest-inv-amb-cam-*).function(capture_image)",
+        )
+        assert result["success"] is False
+        assert result["error"]["code"] == "ambiguous_match"
+        cand_ids = {c["device_id"] for c in result["candidates"]}
+        assert {"itest-inv-amb-cam-1", "itest-inv-amb-cam-2"} <= cand_ids
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_invoke_device_only_scope_rejected(device_spawner, messaging_url):
+    """A device-only selector cannot resolve to a function."""
+    await device_spawner.spawn_camera("itest-inv-scope-cam", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import connect, disconnect, invoke
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    try:
+        result = await asyncio.to_thread(invoke, "device(itest-inv-scope-cam)")
+        assert result["success"] is False
+        assert result["error"]["code"] == "invalid_invoke_scope"
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+# -- invoke_many ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_invoke_many_succeeds_across_devices(device_spawner, messaging_url):
+    """invoke_many() fans out a single function across multiple matching devices."""
+    await device_spawner.spawn_camera("itest-inv-many-cam-1", location="lab-A")
+    await device_spawner.spawn_camera("itest-inv-many-cam-2", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, invoke_many
+
+    await _wait_for_devices(
+        messaging_url, {"itest-inv-many-cam-1", "itest-inv-many-cam-2"}
+    )
+    try:
+        result = await asyncio.to_thread(
+            invoke_many,
+            "device(itest-inv-many-cam-*).function(capture_image)",
+            {"resolution": "720p"},
+        )
+        assert result["candidates"] == 2
+        assert result["matched"] == 2
+        assert result["succeeded"] == 2
+        assert result["failed"] == 0
+        ids = {row["device_id"] for row in result["results"]}
+        assert ids == {"itest-inv-many-cam-1", "itest-inv-many-cam-2"}
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_invoke_many_partial_failure(device_spawner, messaging_url):
+    """A failing target is recorded in errors while siblings succeed."""
+    await device_spawner.spawn_camera(
+        "itest-inv-many-pf-cam-1", location="lab-A", failure_rate=1.0,
+    )
+    await device_spawner.spawn_camera(
+        "itest-inv-many-pf-cam-2", location="lab-A",
+    )
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, invoke_many
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-inv-many-pf-cam-1", "itest-inv-many-pf-cam-2"},
+    )
+    try:
+        result = await asyncio.to_thread(
+            invoke_many,
+            "device(itest-inv-many-pf-cam-*).function(capture_image)",
+        )
+        assert result["candidates"] == 2
+        assert result["matched"] == 2
+        assert result["succeeded"] == 1
+        assert result["failed"] == 1
+        success_ids = {row["device_id"] for row in result["results"]}
+        error_ids = {row["device_id"] for row in result["errors"]}
+        assert success_ids == {"itest-inv-many-pf-cam-2"}
+        assert error_ids == {"itest-inv-many-pf-cam-1"}
+        for row in result["errors"]:
+            assert "code" in row["error"]
+            assert "message" in row["error"]
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_invoke_many_zero_candidates(device_spawner, messaging_url):
+    """No matches yields an empty envelope, not an error."""
+    await device_spawner.spawn_camera("itest-inv-many-zero-cam", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import connect, disconnect, invoke_many
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
     try:
         result = await asyncio.to_thread(
-            invoke_device,
-            device_id="itest-tools-invoke-cam",
-            function="capture_image",
-            params={"resolution": "720p"},
-            llm_reasoning="Testing camera capture via tools",
+            invoke_many,
+            "device(itest-no-such-device).function(capture_image)",
         )
-        assert isinstance(result, dict)
+        assert result["candidates"] == 0
+        assert result["matched"] == 0
+        assert result["succeeded"] == 0
+        assert result["failed"] == 0
+        assert result["results"] == []
+        assert result["errors"] == []
+        assert "error" not in result
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_invoke_many_function_only_selector(device_spawner, messaging_url):
+    """function(<name>) selects the function across the whole fleet."""
+    await device_spawner.spawn_sensor(
+        "itest-inv-many-fo-sensor", initial_temp=20.0,
+    )
+    await device_spawner.spawn_camera("itest-inv-many-fo-cam", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, invoke_many
+
+    await _wait_for_devices(
+        messaging_url, {"itest-inv-many-fo-cam", "itest-inv-many-fo-sensor"}
+    )
+    try:
+        result = await asyncio.to_thread(invoke_many, "function(get_reading)")
+        ids = {row["device_id"] for row in result["results"]}
+        assert "itest-inv-many-fo-sensor" in ids
+        # Camera does not have get_reading; should not be in results.
+        assert "itest-inv-many-fo-cam" not in ids
     finally:
         await asyncio.to_thread(disconnect)

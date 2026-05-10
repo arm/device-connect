@@ -320,7 +320,7 @@ AGENT_SCRIPT = '''\
 """Device Connect — starter AI agent (Strands + OpenAI).
 
 Connects to Device Connect, discovers your fleet, and reacts to device
-events by calling tools (discover_labels, discover, invoke_device).
+events by calling tools (discover_labels, discover, invoke, invoke_many).
 LLM inference runs through the Arm internal OpenAI proxy.
 
 Usage:
@@ -404,7 +404,7 @@ class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
         from strands.models.openai import OpenAIModel
         from device_connect_agent_tools.adapters.strands import (
             discover_labels, discover,
-            invoke_device, invoke_device_with_fallback, get_device_status,
+            invoke, invoke_many, invoke_device_with_fallback, get_device_status,
         )
 
         result = await super().prepare()
@@ -417,7 +417,7 @@ class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
             ),
             tools=[
                 discover_labels, discover,
-                invoke_device, invoke_device_with_fallback, get_device_status,
+                invoke, invoke_many, invoke_device_with_fallback, get_device_status,
             ],
             system_prompt=self._build_system_prompt(),
         )
@@ -454,14 +454,18 @@ class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
             f"functions, or events. Examples:\\n"
             f"      device(category:camera, location:zone-A/*)\\n"
             f"      device(robot-001).function(direction:write)\\n"
-            f"      function(safety:critical)\\n"
-            f"  - invoke_device(device_id, function, params) -- call a device function\\n\\n"
+            f"      function(safety:critical)\\n\\n"
+            f"INVOCATION TOOLS:\\n"
+            f"  - invoke(selector, params) -- call exactly one function. "
+            f"Selector must resolve to one (device, function) tuple.\\n"
+            f"  - invoke_many(selector, params) -- fan out a function call "
+            f"over a selector-resolved set in parallel.\\n\\n"
             f"INSTRUCTIONS:\\n"
             f"When you receive device events, you MUST:\\n"
             f"1. Analyze the events\\n"
             f"2. Use discover() with a function-scoped selector to check "
             f"available functions if needed\\n"
-            f"3. Use invoke_device() to interact with devices\\n"
+            f"3. Use invoke() or invoke_many() to interact with devices\\n"
             f"4. Report what you found and what actions you took\\n\\n"
             f"Always provide llm_reasoning when invoking devices.\\n"
             f"Always call at least one tool per batch of events."

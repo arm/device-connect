@@ -4,19 +4,21 @@
 
 """Device Connect Tools — framework-agnostic SDK for Device Connect IoT.
 
-Selector-driven discovery keeps LLM context small:
+Selector-driven discovery and invocation keep LLM context small:
 
-    from device_connect_agent_tools import connect, discover, discover_labels
+    from device_connect_agent_tools import connect, discover, discover_labels, invoke
 
     connect()
     vocab = discover_labels()                                       # fleet vocabulary
     cams = discover("device(category:camera, location:zone-A/*)")  # device roster
     writes = discover("device(*).function(direction:write)")        # function tuples
-    result = invoke_device("camera-001", "capture_image", {"resolution": "1080p"})
+    result = invoke("device(camera-001).function(capture_image)",
+                    {"resolution": "1080p"})
 
-The older ``describe_fleet`` / ``list_devices`` / ``get_device_functions``
-trio remains available for one release as advisory-deprecated wrappers --
-prefer ``discover`` / ``discover_labels`` for new code.
+The older ``describe_fleet`` / ``list_devices`` / ``get_device_functions`` /
+``invoke_device`` family remains available for one release as
+advisory-deprecated wrappers -- prefer ``discover`` / ``discover_labels`` /
+``invoke`` / ``invoke_many`` for new code.
 """
 
 from device_connect_agent_tools.agent import DeviceConnectAgent
@@ -25,14 +27,17 @@ from device_connect_agent_tools.tools import (
     # Selector-driven discovery (preferred)
     discover,
     discover_labels,
-    # Invocation
-    invoke_device,
+    # Selector-driven invocation (preferred)
+    invoke,
+    invoke_many,
+    # Other invocation helpers
     invoke_device_with_fallback,
     get_device_status,
-    # Advisory-deprecated discovery wrappers (one-release transition)
+    # Advisory-deprecated wrappers (one-release transition)
     describe_fleet,
     list_devices,
     get_device_functions,
+    invoke_device,
     discover_devices,
 )
 
@@ -46,13 +51,16 @@ __all__ = [
     # Selector-driven discovery (preferred)
     "discover",
     "discover_labels",
-    # Invocation
-    "invoke_device",
+    # Selector-driven invocation (preferred)
+    "invoke",
+    "invoke_many",
+    # Other invocation helpers
     "invoke_device_with_fallback",
     "get_device_status",
-    # Advisory-deprecated -- use discover() / discover_labels() instead
+    # Advisory-deprecated -- use discover / discover_labels / invoke instead
     "describe_fleet",
     "list_devices",
     "get_device_functions",
+    "invoke_device",
     "discover_devices",
 ]

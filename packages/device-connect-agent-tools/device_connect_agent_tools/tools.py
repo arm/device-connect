@@ -463,6 +463,269 @@ def discover_labels(
     return out
 
 
+# ── Selector-driven operations ───────────────────────────────────
+
+
+# Default per-target timeout for invoke_many fan-out. Configurable per call.
+DEFAULT_INVOKE_TIMEOUT = 30.0
+
+# Cap on parallel worker threads for invoke_many fan-out. Larger fleets can
+# raise this via the ``max_concurrency`` argument; the default keeps thread
+# overhead bounded while still parallelising typical 10-100 device fan-outs.
+DEFAULT_INVOKE_CONCURRENCY = 32
+
+
+def _resolve_function_tuples(
+    selector: str,
+) -> tuple[list[dict] | None, dict[str, Any] | None]:
+    """Resolve a selector to (device_id, function_name) tuples for invocation.
+
+    Walks pagination so callers do not have to. Returns ``(rows, None)`` on
+    success or ``(None, error_envelope)`` if the selector failed to parse,
+    used a non-function scope, or the registry was unreachable.
+    """
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
+        if "error" in page:
+            return None, page
+        if page["scope"] not in (
+            Scope.DEVICE_FUNCTION.value, Scope.FUNCTION_ONLY.value,
+        ):
+            return None, _empty_envelope(
+                scope=page["scope"],
+                error=_error(
+                    "invalid_invoke_scope",
+                    "invoke/invoke_many require a function-scoped selector "
+                    "(device(...).function(...) or function(...)); got "
+                    f"scope={page['scope']!r}",
+                ),
+            )
+        rows.extend(page["results"])
+        if page["next_offset"] is None:
+            break
+        offset = page["next_offset"]
+    return rows, None
+
+
+def _shape_invoke_response(
+    response: dict[str, Any],
+    device_id: str,
+    function_name: str,
+) -> dict[str, Any]:
+    """Normalize a JSON-RPC response into a {success, result|error} envelope.
+
+    JSON-RPC error objects arrive as ``{"code": int, "message": str}`` from
+    the wire; this maps them to the structured ``{code: str, message: str}``
+    error shape that the rest of the agent surface uses.
+    """
+    if "error" in response:
+        err = response["error"]
+        if isinstance(err, dict):
+            code = str(err.get("code", "invoke_failed"))
+            message = str(err.get("message", err))
+        else:
+            code, message = "invoke_failed", str(err)
+        return {
+            "success": False,
+            "device_id": device_id,
+            "function": function_name,
+            "error": {"code": code, "message": message},
+        }
+    return {
+        "success": True,
+        "device_id": device_id,
+        "function": function_name,
+        "result": response.get("result", {}),
+    }
+
+
+def invoke(
+    selector: str,
+    params: dict[str, Any] | None = None,
+    llm_reasoning: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a selector to one (device, function) tuple and invoke it.
+
+    Use this when the call is unambiguous -- one device, one function.
+    The selector must use ``device(<id>).function(<name>)`` or
+    ``function(<name>)`` scope.
+
+    Args:
+        selector: Selector expression resolving to exactly one function.
+        params: Function parameters dict. Do NOT put ``llm_reasoning``
+            inside ``params``.
+        llm_reasoning: Decision rationale for observability.
+
+    Returns:
+        On success: ``{"success": True, "device_id": ..., "function": ...,
+        "result": ...}``.
+        On failure: ``{"success": False, "error": {"code": ...,
+        "message": ...}}``. Codes include the discover() codes plus
+        ``no_match`` (zero matches), ``ambiguous_match`` (multiple
+        matches), ``invalid_invoke_scope`` (selector did not target
+        functions), and ``invoke_failed`` (the device returned an error).
+    """
+    rows, error_envelope = _resolve_function_tuples(selector)
+    if error_envelope is not None:
+        return {"success": False, "error": error_envelope["error"]}
+
+    if not rows:
+        return {
+            "success": False,
+            "error": _error(
+                "no_match",
+                f"selector matched 0 functions: {selector!r}",
+            ),
+        }
+    if len(rows) > 1:
+        return {
+            "success": False,
+            "error": _error(
+                "ambiguous_match",
+                f"selector matched {len(rows)} functions, expected exactly 1: "
+                f"{selector!r}",
+            ),
+            "candidates": [
+                {"device_id": r.get("device_id"), "function": r.get("name")}
+                for r in rows[:10]
+            ],
+        }
+
+    row = rows[0]
+    device_id = row.get("device_id") or ""
+    function_name = row.get("name") or ""
+
+    trace_id = f"trace-{uuid.uuid4().hex[:12]}"
+    if llm_reasoning:
+        truncated = (
+            llm_reasoning[:200] + "..."
+            if len(llm_reasoning) > 200 else llm_reasoning
+        )
+        logger.info(
+            "[%s] [%s::%s] Reason: %s",
+            trace_id, device_id, function_name, truncated,
+        )
+
+    try:
+        conn = get_connection()
+        clean = {k: v for k, v in (params or {}).items() if k != "llm_reasoning"}
+        response = conn.invoke(device_id, function_name, params=clean)
+    except Exception as e:
+        logger.error(
+            "[%s] %s::%s -> ERROR: %s",
+            trace_id, device_id, function_name, e,
+        )
+        return {
+            "success": False,
+            "device_id": device_id,
+            "function": function_name,
+            "error": _error("invoke_failed", str(e)),
+        }
+    return _shape_invoke_response(response, device_id, function_name)
+
+
+def invoke_many(
+    selector: str,
+    params: dict[str, Any] | None = None,
+    timeout: float = DEFAULT_INVOKE_TIMEOUT,
+    max_concurrency: int = DEFAULT_INVOKE_CONCURRENCY,
+    llm_reasoning: str | None = None,
+) -> dict[str, Any]:
+    """Resolve a selector to (device, function) tuples and invoke each in parallel.
+
+    Returns aggregated results with partial-failure semantics: a single
+    target's failure does not abort the rest. Each target gets ``timeout``
+    seconds; the overall call returns once every target has finished or
+    timed out.
+
+    Args:
+        selector: Function-scoped selector
+            (``device(...).function(...)`` or ``function(...)``).
+        params: Function parameters dict applied to every target.
+        timeout: Per-target timeout in seconds.
+        max_concurrency: Cap on parallel worker threads.
+        llm_reasoning: Decision rationale for observability.
+
+    Returns:
+        ``{"candidates": N, "matched": N, "succeeded": S, "failed": F,
+           "results": [{device_id, function, result}, ...],
+           "errors":  [{device_id, function, error}, ...]}``.
+
+        ``candidates`` is the count returned by the selector resolver.
+        ``matched`` is the same value in this release; once edge-side
+        ``where`` predicates land, ``matched`` will narrow below
+        ``candidates`` to reflect post-predicate self-election.
+
+        On selector parse / connection failure the envelope is returned
+        with all counts at zero plus a top-level ``error`` field.
+    """
+    import concurrent.futures
+
+    rows, error_envelope = _resolve_function_tuples(selector)
+    if error_envelope is not None:
+        return {
+            "candidates": 0, "matched": 0, "succeeded": 0, "failed": 0,
+            "results": [], "errors": [], "error": error_envelope["error"],
+        }
+
+    out: dict[str, Any] = {
+        "candidates": len(rows),
+        "matched": len(rows),
+        "succeeded": 0,
+        "failed": 0,
+        "results": [],
+        "errors": [],
+    }
+    if not rows:
+        return out
+
+    workers = max(1, min(max_concurrency, len(rows)))
+    clean = {k: v for k, v in (params or {}).items() if k != "llm_reasoning"}
+
+    def call_one(row: dict) -> dict[str, Any]:
+        device_id = row.get("device_id") or ""
+        function_name = row.get("name") or ""
+        try:
+            conn = get_connection()
+            response = conn.invoke(
+                device_id, function_name, params=clean, timeout=timeout,
+            )
+        except Exception as e:
+            response = {"error": {"code": "invoke_failed", "message": str(e)}}
+        return _shape_invoke_response(response, device_id, function_name)
+
+    if llm_reasoning:
+        truncated = (
+            llm_reasoning[:200] + "..."
+            if len(llm_reasoning) > 200 else llm_reasoning
+        )
+        logger.info(
+            "[invoke_many::%d targets] Reason: %s", len(rows), truncated,
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as exe:
+        futures = [exe.submit(call_one, row) for row in rows]
+        for future in concurrent.futures.as_completed(futures):
+            shaped = future.result()
+            if shaped["success"]:
+                out["results"].append({
+                    "device_id": shaped["device_id"],
+                    "function": shaped["function"],
+                    "result": shaped["result"],
+                })
+                out["succeeded"] += 1
+            else:
+                out["errors"].append({
+                    "device_id": shaped["device_id"],
+                    "function": shaped["function"],
+                    "error": shaped["error"],
+                })
+                out["failed"] += 1
+    return out
+
+
 # ── Hierarchical discovery tools ─────────────────────────────────
 
 
@@ -650,22 +913,20 @@ def invoke_device(
     params: dict[str, Any] | None = None,
     llm_reasoning: str | None = None,
 ) -> dict[str, Any]:
-    """Call a function on a Device Connect device.
+    """Call a function on a Device Connect device (deprecated; use invoke()).
 
     Args:
         device_id: Target device ID (e.g., "robot-001", "camera-001").
-        function: Function name to call (e.g., "start_cleaning", "capture_image").
-        params: Function parameters as a dictionary. Check get_device_functions() for schemas.
-            Do NOT put llm_reasoning inside params.
-        llm_reasoning: Why you're calling this function — for observability.
-
-    Example:
-        result = invoke_device(
-            device_id="robot-001", function="start_cleaning",
-            params={"zone": "zone-A"},
-            llm_reasoning="Camera detected spill in zone-A"
-        )
+        function: Function name to call.
+        params: Function parameters as a dictionary.
+        llm_reasoning: Why you're calling this function -- for observability.
     """
+    warnings.warn(
+        "invoke_device(device_id, function, ...) is deprecated; use "
+        "invoke('device(<id>).function(<name>)', params) instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     trace_id = f"trace-{uuid.uuid4().hex[:12]}"
     if llm_reasoning:
         truncated = llm_reasoning[:200] + "..." if len(llm_reasoning) > 200 else llm_reasoning
