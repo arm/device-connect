@@ -420,7 +420,7 @@ class DeviceConnection:
         The envelope shape is documented in
         ``device_connect_edge.device.DeviceRuntime._broadcast_subscription``;
         every device subscribed to ``device-connect.<tenant>.broadcast``
-        receives the message and self-elects via ``target_device_ids`` and
+        receives the message and self-elects via ``targets`` and
         the optional ``where`` predicate.
         """
         return self._run(self._async_publish_broadcast(envelope))

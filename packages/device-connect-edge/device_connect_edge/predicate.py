@@ -15,7 +15,7 @@ to execute a fan-out call. The predicate sees four top-level variables:
     bindings     shared payload supplied by the caller (selection masks,
                  thresholds, lookup tables)
 
-Examples (every example here ships with v4 spec)::
+Examples::
 
     battery > 50
     labels.category == "camera" && status.battery > 50

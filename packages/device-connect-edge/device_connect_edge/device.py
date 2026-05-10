@@ -1144,17 +1144,22 @@ class DeviceRuntime:
                 "correlation_id": "br-abc123",
                 "function": "capture_image",
                 "params": {"resolution": "4k"},
-                "target_device_ids": ["cam-001", "cam-002"],   // pre-resolved
-                "where": "status.battery > 50",                // optional CEL
-                "bindings": {"mask": [[0,1],[1,0]]},           // optional
-                "fire_at": 1234567890.5,                       // optional, epoch s
-                "on_late": "skip"                              // skip|fire
+                "targets": ["cam-001", "cam-002"],     // pre-resolved
+                "where": "status.battery > 50",        // optional CEL
+                "bindings": {"mask": [[0,1],[1,0]]},   // optional
+                "fire_at": 1234567890.5,               // optional, epoch s
+                "on_late": "skip"                      // skip|fire
             }
 
         On match, the device executes the function and emits a reply on
         ``device-connect.<tenant>.<device_id>.event.async_reply.<correlation_id>``
         with ``{correlation_id, device_id, success, result|error,
         actually_fired_at}``.
+
+        The envelope is processed in a tracked task so the subscription
+        loop does not block on ``fire_at`` sleeps or long-running driver
+        functions; subsequent broadcasts can continue to land while an
+        earlier one is in flight.
         """
         subj = f"device-connect.{self.tenant}.broadcast"
 
@@ -1169,115 +1174,151 @@ class DeviceRuntime:
             if not correlation_id:
                 return
 
-            # Self-election step 1: target_device_ids gate (pre-resolved by
-            # the dispatcher from the selector). When absent or empty, treat
-            # the broadcast as fleet-wide.
-            targets = envelope.get("target_device_ids") or []
+            # Cheap self-election: target gate (pre-resolved by the dispatcher
+            # from the selector). When absent or empty, treat as fleet-wide.
+            targets = envelope.get("targets") or []
             if targets and self.device_id not in targets:
                 return
 
-            function_name = envelope.get("function")
-            if not function_name:
+            if not envelope.get("function"):
                 return
-            params_dict = envelope.get("params", {}) or {}
 
-            # Self-election step 2: where predicate against {identity, labels,
-            # status, bindings}. A failed compile or eval is treated as
-            # fail-closed (do not execute).
-            where_expr = envelope.get("where")
-            if where_expr:
-                try:
-                    from device_connect_edge.predicate import compile_where
-                    predicate = compile_where(where_expr)
-                    caps = self._driver.capabilities if self._driver else self.capabilities
-                    status = self._driver.status if self._driver else None
-                    labels = (caps.labels if caps and caps.labels else {}) or {}
-                    status_dict = (
-                        status.model_dump() if status and hasattr(status, "model_dump") else {}
-                    )
-                    # Mirror the legacy DeviceStatus.location into labels so
-                    # ``labels.location`` works in predicates without the driver
-                    # having to declare it explicitly. Matches the dispatcher-side
-                    # flatten_device contract.
-                    if "location" not in labels and status_dict.get("location"):
-                        labels = {**labels, "location": status_dict["location"]}
-                    context = {
-                        "identity": (
-                            caps.identity.model_dump()
-                            if caps and getattr(caps, "identity", None) else {}
-                        ),
-                        "labels": labels,
-                        "status": status_dict,
-                        "bindings": envelope.get("bindings", {}) or {},
-                    }
-                    if not predicate.evaluate(context):
-                        return
-                except Exception as e:
-                    self._logger.warning(
-                        "Broadcast %s: where predicate failed (skipping): %s",
-                        correlation_id, e,
-                    )
-                    return
-
-            # fire_at: hold the message until the wall-clock deadline. The
-            # on_late policy decides what to do if the message arrives past
-            # the deadline (skip preserves coherence; fire runs anyway).
-            fire_at = envelope.get("fire_at")
-            on_late = envelope.get("on_late", "skip")
-            if fire_at is not None:
-                delay = float(fire_at) - time.time()
-                if delay < 0 and on_late == "skip":
-                    self._logger.info(
-                        "Broadcast %s arrived %.3fs late, on_late=skip",
-                        correlation_id, -delay,
-                    )
-                    return
-                if delay > 0:
-                    await asyncio.sleep(delay)
-
-            # Execute the driver function and emit the reply.
-            actually_fired_at = time.time()
-            reply_subj = (
-                f"device-connect.{self.tenant}.{self.device_id}"
-                f".event.async_reply.{correlation_id}"
-            )
-            try:
-                if self._driver is None:
-                    raise RuntimeError("no driver configured")
-                driver_functions = self._driver._get_functions()
-                if function_name not in driver_functions:
-                    raise RuntimeError(f"unknown function: {function_name}")
-                result = await self._driver.invoke(function_name, **params_dict)
-                reply_payload = {
-                    "correlation_id": correlation_id,
-                    "device_id": self.device_id,
-                    "success": True,
-                    "result": result,
-                    "actually_fired_at": actually_fired_at,
-                }
-            except Exception as e:
-                self._logger.warning(
-                    "Broadcast %s: function %s failed: %s",
-                    correlation_id, function_name, e,
-                )
-                reply_payload = {
-                    "correlation_id": correlation_id,
-                    "device_id": self.device_id,
-                    "success": False,
-                    "error": {"code": "invoke_failed", "message": str(e)},
-                    "actually_fired_at": actually_fired_at,
-                }
-            try:
-                await self.messaging.publish(
-                    reply_subj, json.dumps(reply_payload).encode(),
-                )
-            except Exception as e:  # pragma: no cover
-                self._logger.warning(
-                    "Broadcast %s: reply publish failed: %s", correlation_id, e,
-                )
+            # Hand off to a tracked task. The task owns the where evaluation,
+            # the fire_at sleep, and the driver call, so this callback returns
+            # immediately and the messaging subscription stays drained.
+            self._track_task(asyncio.create_task(
+                self._handle_broadcast_envelope(envelope, correlation_id)
+            ))
 
         await self.messaging.subscribe(subj, callback=on_msg)
         self._logger.info("Subscribed to broadcasts on %s", subj)
+
+
+    async def _handle_broadcast_envelope(
+        self, envelope: Dict[str, Any], correlation_id: str,
+    ) -> None:
+        """Process one broadcast envelope: evaluate where, honour fire_at, invoke, reply.
+
+        Runs in its own task so a long-held ``fire_at`` or slow driver
+        function does not block the subscription callback from accepting
+        subsequent broadcasts.
+        """
+        function_name = envelope.get("function")
+        params_dict = envelope.get("params", {}) or {}
+
+        # Step 1: where predicate against {identity, labels, status, bindings}.
+        # A failed compile or eval is treated as fail-closed (do not execute);
+        # the message is logged at WARNING with the correlation_id so an
+        # operator can correlate a silent skip with a misspelled label key.
+        where_expr = envelope.get("where")
+        if where_expr and not self._evaluate_where(
+            where_expr, envelope.get("bindings"), correlation_id,
+        ):
+            return
+
+        # Step 2: fire_at hold. The on_late policy decides what to do when
+        # the message arrives past the deadline (skip preserves coherence;
+        # fire runs anyway).
+        fire_at = envelope.get("fire_at")
+        on_late = envelope.get("on_late", "skip")
+        if fire_at is not None:
+            delay = float(fire_at) - time.time()
+            if delay < 0 and on_late == "skip":
+                self._logger.info(
+                    "Broadcast %s arrived %.3fs late, on_late=skip",
+                    correlation_id, -delay,
+                )
+                return
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+        # Step 3: execute and reply.
+        actually_fired_at = time.time()
+        reply_subj = (
+            f"device-connect.{self.tenant}.{self.device_id}"
+            f".event.async_reply.{correlation_id}"
+        )
+        try:
+            if self._driver is None:
+                raise RuntimeError("no driver configured")
+            driver_functions = self._driver._get_functions()
+            if function_name not in driver_functions:
+                raise RuntimeError(f"unknown function: {function_name}")
+            result = await self._driver.invoke(function_name, **params_dict)
+            reply_payload: Dict[str, Any] = {
+                "correlation_id": correlation_id,
+                "device_id": self.device_id,
+                "success": True,
+                "result": result,
+                "actually_fired_at": actually_fired_at,
+            }
+        except Exception as e:
+            self._logger.warning(
+                "Broadcast %s: function %s failed: %s",
+                correlation_id, function_name, e,
+            )
+            reply_payload = {
+                "correlation_id": correlation_id,
+                "device_id": self.device_id,
+                "success": False,
+                "error": {"code": "invoke_failed", "message": str(e)},
+                "actually_fired_at": actually_fired_at,
+            }
+        try:
+            await self.messaging.publish(
+                reply_subj, json.dumps(reply_payload).encode(),
+            )
+        except Exception as e:  # pragma: no cover
+            self._logger.warning(
+                "Broadcast %s: reply publish failed: %s", correlation_id, e,
+            )
+
+
+    def _evaluate_where(
+        self,
+        where_expr: str,
+        bindings: Optional[Dict[str, Any]],
+        correlation_id: str,
+    ) -> bool:
+        """Compile and evaluate a where predicate; return True iff it passes.
+
+        Returns False (do not execute) on compile or eval errors, logging
+        a warning so silent self-deselection is operator-visible.
+        """
+        try:
+            from device_connect_edge.predicate import compile_where
+            predicate = compile_where(where_expr)
+            caps = self._driver.capabilities if self._driver else self.capabilities
+            status = self._driver.status if self._driver else None
+            labels = (caps.labels if caps and caps.labels else {}) or {}
+            status_dict = (
+                status.model_dump() if status and hasattr(status, "model_dump") else {}
+            )
+            # Mirror DeviceStatus.location into labels so ``labels.location``
+            # works in predicates without the driver having to declare it
+            # explicitly. Matches the dispatcher-side flatten_device contract.
+            if "location" not in labels and status_dict.get("location"):
+                labels = {**labels, "location": status_dict["location"]}
+            # The DeviceIdentity model carries device_type / manufacturer /
+            # model / firmware_version but NOT device_id (which lives on the
+            # runtime). Splice it in so predicates can write the natural
+            # ``identity.device_id == "..."``.
+            identity_dict: Dict[str, Any] = {"device_id": self.device_id}
+            if caps and getattr(caps, "identity", None):
+                identity_dict.update(caps.identity.model_dump())
+            context = {
+                "identity": identity_dict,
+                "labels": labels,
+                "status": status_dict,
+                "bindings": bindings or {},
+            }
+            return bool(predicate.evaluate(context))
+        except Exception as e:
+            self._logger.warning(
+                "Broadcast %s: where predicate failed (skipping): %s",
+                correlation_id, e,
+            )
+            return False
 
 
     async def _event_dispatch_loop(self) -> None:

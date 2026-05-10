@@ -865,7 +865,7 @@ def broadcast(
             }
 
     correlation_id = f"br-{uuid.uuid4().hex[:12]}"
-    target_device_ids = sorted({
+    targets = sorted({
         row.get("device_id") for row in rows if row.get("device_id")
     })
     clean_params = {
@@ -876,7 +876,7 @@ def broadcast(
         "correlation_id": correlation_id,
         "function": function_name,
         "params": clean_params,
-        "target_device_ids": target_device_ids,
+        "targets": targets,
     }
     if where:
         envelope["where"] = where
@@ -893,7 +893,7 @@ def broadcast(
         )
         logger.info(
             "[broadcast::%s::%d targets] Reason: %s",
-            correlation_id, len(target_device_ids), truncated,
+            correlation_id, len(targets), truncated,
         )
 
     try:
@@ -902,13 +902,13 @@ def broadcast(
     except Exception as e:
         logger.error("broadcast publish failed: %s", e)
         return {
-            "candidates": len(target_device_ids),
+            "candidates": len(targets),
             "error": _error("connection_error", str(e)),
         }
 
     return {
         "correlation_id": correlation_id,
-        "candidates": len(target_device_ids),
+        "candidates": len(targets),
         "selector": selector,
         "function": function_name,
     }
@@ -955,26 +955,27 @@ class Subscription:
         Returns parsed payload dicts (already JSON-decoded by the
         connection's buffered subscription path). Subsequent calls return
         only messages that arrived after the previous call.
+
+        Race-safe against the messaging callback that appends to the same
+        inbox: each inbox is read by snapshotting its current length and
+        truncating only that prefix, so a message that arrives during
+        iteration stays buffered for the next ``read``.
         """
         if self._closed:
             return []
         out: list[dict[str, Any]] = []
         for name in self._inbox_names:
-            inboxes = self._conn.get_inbox(name)
-            buffered = inboxes.get(name, []) or []
-            # Each buffered entry is (subject, payload). We expose the
-            # parsed payload but stamp the subject onto it so callers can
-            # distinguish per-source messages without parsing it themselves.
-            for subject, payload in buffered:
+            buf = self._conn._inbox.get(name) or []
+            # Snapshot the consumed prefix length BEFORE iterating, then
+            # truncate by exactly that many items. Any message appended by
+            # the messaging callback between the snapshot and the truncation
+            # remains buffered for a subsequent ``read``.
+            n = len(buf)
+            for subject, payload in buf[:n]:
                 if not isinstance(payload, dict):
                     payload = {"raw": payload}
-                payload = {**payload, "_subject": subject}
-                out.append(payload)
-        # Fast cursor: trim per-inbox buffers we have already returned by
-        # truncating from the front. The connection layer already caps each
-        # inbox at 1000 entries, so bounded growth is its concern.
-        for name in self._inbox_names:
-            self._conn._inbox[name] = []
+                out.append({**payload, "_subject": subject})
+            self._conn._inbox[name] = buf[n:]
         if max_messages is not None:
             out = out[:max_messages]
         return out
@@ -997,6 +998,15 @@ class Subscription:
             if time.monotonic() >= deadline:
                 return
             time.sleep(poll_interval)
+
+    def __iter__(self):
+        """Allow ``for msg in sub:`` with a default 30-second idle timeout.
+
+        Delegates to :meth:`iter` with sensible defaults so the idiomatic
+        Python iteration form works. Use ``sub.iter(timeout=...)`` directly
+        when the default does not fit.
+        """
+        return self.iter(timeout=30.0, poll_interval=0.05)
 
     def close(self) -> None:
         """Tear down the underlying messaging subscriptions."""
@@ -1360,7 +1370,7 @@ def invoke_device(
         device_id: Target device ID (e.g., "robot-001", "camera-001").
         function: Function name to call.
         params: Function parameters as a dictionary.
-        llm_reasoning: Why you're calling this function -- for observability.
+        llm_reasoning: Why you are calling this function (for observability).
     """
     warnings.warn(
         "invoke_device(device_id, function, ...) is deprecated; use "

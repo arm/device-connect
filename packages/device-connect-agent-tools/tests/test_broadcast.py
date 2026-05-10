@@ -100,7 +100,7 @@ class TestBroadcast:
         env = mock_conn._published[0]
         assert env["function"] == "capture_image"
         assert env["params"] == {"resolution": "4k"}
-        assert sorted(env["target_device_ids"]) == ["cam-001", "cam-002"]
+        assert sorted(env["targets"]) == ["cam-001", "cam-002"]
         # No optional fields when caller did not set them.
         assert "where" not in env
         assert "bindings" not in env
