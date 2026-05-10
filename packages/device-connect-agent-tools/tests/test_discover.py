@@ -264,26 +264,28 @@ class TestDiscoverPagination:
 class TestDiscoverErrors:
     def test_bad_selector_returns_error_envelope(self, mock_conn):
         r = tools_mod.discover("not a selector at all")
-        assert "error" in r
+        assert r["error"]["code"] == "selector_parse_error"
         assert r["matched"] == 0
         assert r["results"] == []
 
     def test_unknown_scope_in_selector(self, mock_conn):
         r = tools_mod.discover("widgets(*)")
         assert "error" in r
-        assert "unknown scope" in r["error"].lower()
+        assert r["error"]["code"] == "selector_parse_error"
+        assert "unknown scope" in r["error"]["message"].lower()
 
     def test_connection_failure_returns_error(self):
         broken = MagicMock()
         broken.list_devices.side_effect = RuntimeError("messaging down")
         with patch.object(tools_mod, "get_connection", return_value=broken):
             r = tools_mod.discover("device(*)")
-        assert "error" in r
+        assert r["error"]["code"] == "connection_error"
+        assert "messaging down" in r["error"]["message"]
         assert r["matched"] == 0
 
     def test_non_string_selector(self, mock_conn):
         r = tools_mod.discover(None)  # type: ignore[arg-type]
-        assert "error" in r
+        assert r["error"]["code"] == "invalid_selector"
 
 
 # -- discover_labels ------------------------------------------------
@@ -328,12 +330,13 @@ class TestDiscoverLabels:
 
     def test_per_key_unknown_axis(self, mock_conn):
         v = tools_mod.discover_labels(key="thing.bogus")
-        assert "error" in v
+        assert v["error"]["code"] == "unknown_axis"
 
     def test_per_key_missing_dot(self, mock_conn):
         v = tools_mod.discover_labels(key="just_a_key")
         assert "error" in v
-        assert "axis-qualified" in v["error"]
+        assert v["error"]["code"] == "key_not_axis_qualified"
+        assert "axis-qualified" in v["error"]["message"]
 
 
 # -- Deprecation warnings ------------------------------------------
