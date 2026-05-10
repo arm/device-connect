@@ -30,6 +30,11 @@ from device_connect_agent_tools.tools import (
     # Selector-driven invocation (preferred)
     invoke,
     invoke_many,
+    broadcast,
+    # Selector-driven subscription
+    Subscription,
+    subscribe,
+    await_replies,
     # Other invocation helpers
     invoke_device_with_fallback,
     get_device_status,
@@ -54,6 +59,11 @@ __all__ = [
     # Selector-driven invocation (preferred)
     "invoke",
     "invoke_many",
+    "broadcast",
+    # Selector-driven subscription
+    "Subscription",
+    "subscribe",
+    "await_replies",
     # Other invocation helpers
     "invoke_device_with_fallback",
     "get_device_status",
