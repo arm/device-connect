@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 import warnings
 from typing import Any
@@ -760,6 +761,410 @@ def invoke_many(
                 })
                 out["failed"] += 1
     return out
+
+
+def broadcast(
+    selector: str,
+    params: dict[str, Any] | None = None,
+    where: str | None = None,
+    bindings: dict[str, Any] | None = None,
+    fire_at: float | None = None,
+    on_late: str = "skip",
+    llm_reasoning: str | None = None,
+) -> dict[str, Any]:
+    """Async selector-driven fan-out. Returns immediately with a correlation id.
+
+    Use ``broadcast`` when the caller does not want to block on the slowest
+    device. Each candidate self-elects via the optional ``where`` predicate
+    (CEL, evaluated at the edge against the device's identity, labels, live
+    status, and the shared ``bindings``) and emits its reply as an event on
+    a per-device subject keyed by ``correlation_id``::
+
+        device-connect.<zone>.<device_id>.event.async_reply.<correlation_id>
+
+    Subscribe to those replies via ``subscribe('correlation:<id>')`` or wait
+    for them with ``await_replies(correlation_id, timeout=...)``.
+
+    Args:
+        selector: Function-scoped selector. The selector must resolve to a
+            single function name across the matched devices; if multiple
+            functions match, an ``ambiguous_function`` error is returned.
+        params: Function parameters dict applied to every target.
+        where: Optional CEL predicate evaluated at the edge per candidate
+            (e.g. ``"status.battery > 50"``, ``"mask[row][col] == 1"``).
+            Validated at the dispatcher before publication so syntax
+            errors return immediately rather than reaching the wire.
+        bindings: Shared payload merged into the predicate context as
+            ``bindings.<key>``. Keep small (selection masks, thresholds,
+            top-K rankings); the same bytes ship to every device.
+        fire_at: Optional wall-clock epoch seconds. Each device holds the
+            message and fires its function from its own clock at
+            ``fire_at`` for synchronized fan-out.
+        on_late: Policy when a device receives a ``fire_at`` message after
+            the deadline. ``"skip"`` (default) drops the call; ``"fire"``
+            executes immediately.
+        llm_reasoning: Decision rationale for observability.
+
+    Returns:
+        On success: ``{"correlation_id": "br-...", "candidates": N,
+        "selector": ..., "function": ...}``.
+        On failure: ``{"candidates": 0, "error": {"code", "message"}}``
+        with codes including the discover() codes,
+        ``invalid_invoke_scope``, ``ambiguous_function``,
+        ``invalid_predicate``, and ``invalid_on_late``.
+    """
+    if on_late not in ("skip", "fire"):
+        return {
+            "candidates": 0,
+            "error": _error(
+                "invalid_on_late",
+                f"on_late must be 'skip' or 'fire', got {on_late!r}",
+            ),
+        }
+
+    rows, error_envelope = _resolve_function_tuples(selector)
+    if error_envelope is not None:
+        return {"candidates": 0, "error": error_envelope["error"]}
+
+    if not rows:
+        # Empty fan-out: still mint a correlation id so callers waiting on
+        # replies see a clean "no candidates" rather than a hang.
+        return {
+            "correlation_id": f"br-{uuid.uuid4().hex[:12]}",
+            "candidates": 0,
+            "selector": selector,
+        }
+
+    # Broadcast assumes one function per call. If the selector resolves to
+    # multiple distinct functions, surface that as a structured error so
+    # the caller can either narrow the selector or split into multiple
+    # broadcasts.
+    function_names = {row.get("name") for row in rows if row.get("name")}
+    if len(function_names) != 1:
+        return {
+            "candidates": len(rows),
+            "error": _error(
+                "ambiguous_function",
+                f"selector resolved to {len(function_names)} distinct "
+                "functions; broadcast requires exactly one function per call: "
+                f"{sorted(function_names)!r}",
+            ),
+        }
+    function_name = next(iter(function_names))
+
+    # Compile-validate the where predicate before going to the wire so a
+    # syntax error short-circuits without bothering devices.
+    if where is not None:
+        try:
+            from device_connect_edge.predicate import compile_where
+            compile_where(where)
+        except Exception as e:
+            return {
+                "candidates": len(rows),
+                "error": _error("invalid_predicate", str(e)),
+            }
+
+    correlation_id = f"br-{uuid.uuid4().hex[:12]}"
+    target_device_ids = sorted({
+        row.get("device_id") for row in rows if row.get("device_id")
+    })
+    clean_params = {
+        k: v for k, v in (params or {}).items() if k != "llm_reasoning"
+    }
+
+    envelope: dict[str, Any] = {
+        "correlation_id": correlation_id,
+        "function": function_name,
+        "params": clean_params,
+        "target_device_ids": target_device_ids,
+    }
+    if where:
+        envelope["where"] = where
+    if bindings:
+        envelope["bindings"] = bindings
+    if fire_at is not None:
+        envelope["fire_at"] = float(fire_at)
+        envelope["on_late"] = on_late
+
+    if llm_reasoning:
+        truncated = (
+            llm_reasoning[:200] + "..."
+            if len(llm_reasoning) > 200 else llm_reasoning
+        )
+        logger.info(
+            "[broadcast::%s::%d targets] Reason: %s",
+            correlation_id, len(target_device_ids), truncated,
+        )
+
+    try:
+        conn = get_connection()
+        conn.publish_broadcast(envelope)
+    except Exception as e:
+        logger.error("broadcast publish failed: %s", e)
+        return {
+            "candidates": len(target_device_ids),
+            "error": _error("connection_error", str(e)),
+        }
+
+    return {
+        "correlation_id": correlation_id,
+        "candidates": len(target_device_ids),
+        "selector": selector,
+        "function": function_name,
+    }
+
+
+# ── Selector-driven subscription ─────────────────────────────────
+
+
+# Sentinel used to recognise the broadcast-reply form of a subscribe
+# selector (``correlation:<id>``). Kept short so the selector reads
+# naturally; the parser matches an exact prefix.
+_CORRELATION_PREFIX = "correlation:"
+
+
+class Subscription:
+    """A live subscription handle returned by :func:`subscribe`.
+
+    Two selector forms produce a subscription:
+
+    * ``"correlation:<id>"`` -- replies from a prior :func:`broadcast` call,
+      keyed by ``correlation_id`` and routed across all devices that fired.
+    * Event-scoped selectors (``event(<name>)`` or
+      ``device(...).event(<name>)``) -- a multiplex of matching events
+      across the resolved candidate set.
+
+    The handle exposes a sync ``read`` API that drains buffered messages.
+    Use as a context manager (or call :meth:`close`) to tear the
+    underlying messaging subscription down deterministically::
+
+        with subscribe("correlation:" + cid) as sub:
+            for reply in sub.iter(timeout=5.0):
+                process(reply)
+    """
+
+    def __init__(self, conn: Any, inbox_names: list[str]):
+        self._conn = conn
+        self._inbox_names = list(inbox_names)
+        self._closed = False
+        self._cursor = 0  # index into the concatenated message stream
+
+    def read(self, max_messages: int | None = None) -> list[dict[str, Any]]:
+        """Drain currently buffered messages without blocking.
+
+        Returns parsed payload dicts (already JSON-decoded by the
+        connection's buffered subscription path). Subsequent calls return
+        only messages that arrived after the previous call.
+        """
+        if self._closed:
+            return []
+        out: list[dict[str, Any]] = []
+        for name in self._inbox_names:
+            inboxes = self._conn.get_inbox(name)
+            buffered = inboxes.get(name, []) or []
+            # Each buffered entry is (subject, payload). We expose the
+            # parsed payload but stamp the subject onto it so callers can
+            # distinguish per-source messages without parsing it themselves.
+            for subject, payload in buffered:
+                if not isinstance(payload, dict):
+                    payload = {"raw": payload}
+                payload = {**payload, "_subject": subject}
+                out.append(payload)
+        # Fast cursor: trim per-inbox buffers we have already returned by
+        # truncating from the front. The connection layer already caps each
+        # inbox at 1000 entries, so bounded growth is its concern.
+        for name in self._inbox_names:
+            self._conn._inbox[name] = []
+        if max_messages is not None:
+            out = out[:max_messages]
+        return out
+
+    def iter(self, timeout: float = 5.0, poll_interval: float = 0.05):
+        """Yield messages until ``timeout`` elapses with no new arrivals.
+
+        ``timeout`` resets each time at least one message is yielded, so
+        callers can drain a steady stream without re-parameterising the
+        wait. Use ``read`` instead for one-shot draining.
+        """
+        deadline = time.monotonic() + timeout
+        while not self._closed:
+            new = self.read()
+            if new:
+                for msg in new:
+                    yield msg
+                deadline = time.monotonic() + timeout
+                continue
+            if time.monotonic() >= deadline:
+                return
+            time.sleep(poll_interval)
+
+    def close(self) -> None:
+        """Tear down the underlying messaging subscriptions."""
+        if self._closed:
+            return
+        self._closed = True
+        for name in self._inbox_names:
+            try:
+                self._conn.unsubscribe_buffered(name)
+            except Exception:  # pragma: no cover - cleanup best effort
+                logger.debug("close: unsubscribe %s failed", name, exc_info=True)
+
+    def __enter__(self) -> "Subscription":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
+def _correlation_subjects(conn: Any, correlation_id: str) -> list[str]:
+    """Build the per-device wildcard reply subjects for a correlation id.
+
+    The reply template is ``device-connect.<tenant>.<device_id>.event
+    .async_reply.<correlation_id>``; ``<device_id>`` is single-token wildcarded
+    so a subscription receives replies from any device that fires the
+    broadcast without having to enumerate them up-front.
+    """
+    return [
+        f"device-connect.{conn.zone}.*.event.async_reply.{correlation_id}",
+    ]
+
+
+def _event_subjects_for_selector(selector: str) -> tuple[list[str] | None, dict[str, Any] | None]:
+    """Resolve an event-scoped selector to per-device subjects.
+
+    Returns ``(subjects, None)`` on success or ``(None, error_envelope)``
+    if the selector failed to parse or used a non-event scope.
+    """
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
+        if "error" in page:
+            return None, page
+        if page["scope"] not in (Scope.DEVICE_EVENT.value, Scope.EVENT_ONLY.value):
+            return None, _empty_envelope(
+                scope=page["scope"],
+                error=_error(
+                    "invalid_subscribe_scope",
+                    "subscribe requires an event-scoped selector "
+                    "(device(...).event(...) or event(...)) or "
+                    "'correlation:<id>'; got "
+                    f"scope={page['scope']!r}",
+                ),
+            )
+        rows.extend(page["results"])
+        if page["next_offset"] is None:
+            break
+        offset = page["next_offset"]
+
+    conn = get_connection()
+    subjects: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        device_id = row.get("device_id") or ""
+        event_name = row.get("name") or ""
+        if not device_id or not event_name:
+            continue
+        subj = f"device-connect.{conn.zone}.{device_id}.event.{event_name}"
+        if subj not in seen:
+            seen.add(subj)
+            subjects.append(subj)
+    return subjects, None
+
+
+def subscribe(selector: str) -> Subscription:
+    """Subscribe to events or broadcast replies matching a selector.
+
+    Args:
+        selector: One of:
+            - ``"correlation:<id>"`` for broadcast replies of a prior call.
+            - An event-scoped selector (``event(<name>)`` or
+              ``device(...).event(<name>)``) for live event streams.
+
+    Returns:
+        A :class:`Subscription` handle. Iterate with ``sub.iter(timeout)``
+        or drain currently-buffered messages with ``sub.read()``. Always
+        close (or use ``with``) to tear the underlying subscription down.
+
+    Raises:
+        ValueError on selector errors. The selector string is checked at
+        the boundary; downstream subscribe calls are not retried, so a
+        parse error fails fast.
+    """
+    if not isinstance(selector, str) or not selector.strip():
+        raise ValueError("subscribe selector must be a non-empty string")
+
+    conn = get_connection()
+    if selector.startswith(_CORRELATION_PREFIX):
+        correlation_id = selector[len(_CORRELATION_PREFIX):].strip()
+        if not correlation_id:
+            raise ValueError(
+                "correlation form must be 'correlation:<id>' with non-empty id"
+            )
+        subjects = _correlation_subjects(conn, correlation_id)
+        inbox_prefix = f"sub-corr-{correlation_id}-{uuid.uuid4().hex[:8]}"
+    else:
+        subjects, error_envelope = _event_subjects_for_selector(selector)
+        if error_envelope is not None:
+            err = error_envelope.get("error")
+            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            raise ValueError(msg)
+        if not subjects:
+            # Nothing to subscribe to. Return an idle Subscription so the
+            # caller's ``with subscribe(...) as sub: ...`` pattern still
+            # works without raising; ``read``/``iter`` will yield nothing.
+            return Subscription(conn, inbox_names=[])
+        inbox_prefix = f"sub-evt-{uuid.uuid4().hex[:8]}"
+
+    inbox_names: list[str] = []
+    for i, subj in enumerate(subjects):
+        name = f"{inbox_prefix}-{i}"
+        conn.subscribe_buffered(subj, name=name)
+        inbox_names.append(name)
+    return Subscription(conn, inbox_names=inbox_names)
+
+
+def await_replies(
+    correlation_id: str,
+    timeout: float = 10.0,
+    until: int | None = None,
+    poll_interval: float = 0.05,
+) -> list[dict[str, Any]]:
+    """Block until ``timeout`` elapses or ``until`` replies have arrived.
+
+    A sync helper for the common broadcast pattern: caller fires a
+    :func:`broadcast`, then waits for some replies. Builds a one-shot
+    subscription on the correlation reply subject, drains it, and tears
+    down before returning.
+
+    Args:
+        correlation_id: The id returned by :func:`broadcast`.
+        timeout: Overall wall-clock limit in seconds.
+        until: Stop early once this many replies have been collected.
+        poll_interval: How often the helper polls the subscription buffer.
+
+    Returns:
+        A list of reply payload dicts, each with at least
+        ``{correlation_id, device_id, success, result|error,
+        actually_fired_at}``.
+    """
+    if not correlation_id:
+        return []
+    sub = subscribe(f"{_CORRELATION_PREFIX}{correlation_id}")
+    try:
+        replies: list[dict[str, Any]] = []
+        deadline = time.monotonic() + timeout
+        while True:
+            new = sub.read()
+            replies.extend(new)
+            if until is not None and len(replies) >= until:
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(poll_interval)
+        return replies
+    finally:
+        sub.close()
 
 
 # ── Hierarchical discovery tools ─────────────────────────────────
