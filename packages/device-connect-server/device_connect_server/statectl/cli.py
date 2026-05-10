@@ -408,6 +408,13 @@ def create_parser() -> argparse.ArgumentParser:
     # stats
     sub.add_parser("stats", help="Key counts by namespace")
 
+    # Selector-driven operations (invoke / invoke-many / broadcast /
+    # subscribe / await). These verbs do not touch etcd; they run over
+    # the messaging fabric. They live under statectl because they all
+    # change the live state of devices.
+    from device_connect_server.statectl import operations_cli
+    operations_cli.register_subparsers(sub)
+
     return parser
 
 
@@ -430,9 +437,25 @@ async def _run(args) -> None:
     await handler(client, args)
 
 
+_OPERATIONS_DISPATCH = {
+    "invoke":       "run_invoke",
+    "invoke-many":  "run_invoke_many",
+    "broadcast":    "run_broadcast",
+    "subscribe":    "run_subscribe",
+    "await":        "run_await",
+}
+
+
 def main():
     parser = create_parser()
     args = parser.parse_args()
+    if args.cmd in _OPERATIONS_DISPATCH:
+        # Operations verbs run over messaging, not etcd. Bypass the etcd
+        # client setup that the COMMANDS dispatch table assumes.
+        from device_connect_server.statectl import operations_cli
+        handler = getattr(operations_cli, _OPERATIONS_DISPATCH[args.cmd])
+        sys.exit(handler(args))
+
     try:
         asyncio.run(_run(args))
     except KeyboardInterrupt:
