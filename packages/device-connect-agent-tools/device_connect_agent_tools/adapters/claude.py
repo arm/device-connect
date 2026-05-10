@@ -4,7 +4,7 @@
 
 """Claude Agent SDK adapter — exposes Device Connect tools to claude-agent-sdk.
 
-Hierarchical discovery keeps LLM context small::
+Selector-driven discovery keeps LLM context small::
 
     import anyio
     from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, AssistantMessage, TextBlock
@@ -42,9 +42,8 @@ from typing import Any
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
 from device_connect_agent_tools.tools import (
-    describe_fleet as _describe_fleet,
-    list_devices as _list_devices,
-    get_device_functions as _get_device_functions,
+    discover as _discover,
+    discover_labels as _discover_labels,
     discover_devices as _discover_devices,
     invoke_device as _invoke_device,
     invoke_device_with_fallback as _invoke_device_with_fallback,
@@ -56,55 +55,50 @@ def _text(result: Any) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
 
 
-# Hierarchical discovery tools (recommended)
+# Selector-driven discovery tools (recommended)
 
 
 @tool(
-    "describe_fleet",
-    "Get a high-level summary of all available devices, grouped by type and "
-    "location. Use this first to understand what is available, then call "
-    "list_devices to browse specific types or locations.",
-    {},
+    "discover_labels",
+    "Browse the label vocabulary across the fleet. Returns label keys "
+    "(category, location, direction, modality, ...) with their values and "
+    "counts. Call with no arguments to see all keys, or with key="
+    "'device.location' / 'function.direction' / etc. to paginate one key. "
+    "Use this first to learn what dimensions are available before calling "
+    "discover().",
+    {"key": str, "offset": int, "limit": int},
 )
-async def describe_fleet(args: dict[str, Any]) -> dict[str, Any]:
-    return _text(_describe_fleet())
-
-
-@tool(
-    "list_devices",
-    "Browse available devices with filtering and pagination. Returns compact "
-    "device summaries (no full schemas). Use get_device_functions for details.",
-    {
-        "device_type": str,
-        "location": str,
-        "status": str,
-        "group_by": str,
-        "offset": int,
-        "limit": int,
-    },
-)
-async def list_devices(args: dict[str, Any]) -> dict[str, Any]:
+async def discover_labels(args: dict[str, Any]) -> dict[str, Any]:
     return _text(
-        _list_devices(
-            device_type=args.get("device_type"),
-            location=args.get("location"),
-            status=args.get("status"),
-            group_by=args.get("group_by"),
+        _discover_labels(
+            key=args.get("key"),
             offset=int(args.get("offset", 0)),
-            limit=int(args.get("limit", 20)),
+            limit=int(args.get("limit", 50)),
         )
     )
 
 
 @tool(
-    "get_device_functions",
-    "Get full function schemas for a specific device. Call this after "
-    "list_devices to see what a device can do and what parameters each "
-    "function accepts.",
-    {"device_id": str},
+    "discover",
+    "Resolve a selector to matched devices, functions, or events. Selector "
+    "grammar: device(<filters>), device(<filters>).function(<filters>), "
+    "device(<filters>).event(<filters>), function(<filters>), or "
+    "event(<filters>). Filters are key:value pairs (AND across keys with "
+    "commas, OR within a key with bracket lists, glob with *). Examples: "
+    "'device(category:camera, location:zone-A/*)', "
+    "'device(*).function(direction:write)', 'event(modality:motion)'. "
+    "Response includes a label_histogram (per-key vocabulary across the "
+    "matched set) so the agent can narrow next.",
+    {"selector": str, "offset": int, "limit": int},
 )
-async def get_device_functions(args: dict[str, Any]) -> dict[str, Any]:
-    return _text(_get_device_functions(device_id=args["device_id"]))
+async def discover(args: dict[str, Any]) -> dict[str, Any]:
+    return _text(
+        _discover(
+            selector=args["selector"],
+            offset=int(args.get("offset", 0)),
+            limit=int(args.get("limit", 200)),
+        )
+    )
 
 
 # Invocation tools
@@ -112,8 +106,9 @@ async def get_device_functions(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "invoke_device",
-    "Call a function on a Device Connect device. Use get_device_functions "
-    "first to learn available functions and parameters.",
+    "Call a function on a Device Connect device. Use discover() with a "
+    "function-scoped selector first to learn available functions and "
+    "parameters.",
     {"device_id": str, "function": str, "params": dict, "llm_reasoning": str},
 )
 async def invoke_device(args: dict[str, Any]) -> dict[str, Any]:
@@ -153,13 +148,13 @@ async def get_device_status(args: dict[str, Any]) -> dict[str, Any]:
     return _text(_get_device_status(device_id=args["device_id"]))
 
 
-# Backward-compatible (deprecated — use hierarchical tools instead)
+# Backward-compatible (long-deprecated — prefer discover() / discover_labels())
 
 
 @tool(
     "discover_devices",
-    "Deprecated — use describe_fleet, list_devices, and get_device_functions "
-    "instead. Discover all devices with full function schemas.",
+    "Deprecated — use discover() and discover_labels() instead. Discovers "
+    "all devices with full function schemas.",
     {"device_type": str, "refresh": bool},
 )
 async def discover_devices(args: dict[str, Any]) -> dict[str, Any]:
@@ -179,9 +174,8 @@ def create_device_connect_server(name: str = "device-connect"):
     return create_sdk_mcp_server(
         name,
         tools=[
-            describe_fleet,
-            list_devices,
-            get_device_functions,
+            discover_labels,
+            discover,
             invoke_device,
             invoke_device_with_fallback,
             get_device_status,
@@ -191,12 +185,11 @@ def create_device_connect_server(name: str = "device-connect"):
 
 
 __all__ = [
-    "describe_fleet",
-    "list_devices",
-    "get_device_functions",
-    "discover_devices",
+    "discover_labels",
+    "discover",
     "invoke_device",
     "invoke_device_with_fallback",
     "get_device_status",
+    "discover_devices",
     "create_device_connect_server",
 ]

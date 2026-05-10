@@ -143,3 +143,60 @@ def group_devices(
         key = d.get(group_by) or "unknown"
         groups[key].append(summary)
     return {"groups": dict(sorted(groups.items())), "total": len(devices)}
+
+
+# -- Label histograms ---------------------------------------------------
+
+
+def _accumulate_label(
+    histogram: dict, multivalued_keys: set, label_key: str, label_value: Any
+) -> None:
+    """Record one ``label_key -> label_value`` observation in ``histogram``.
+
+    ``label_value`` may be a string or a list of strings. Lists are flagged
+    in ``multivalued_keys`` so the caller can annotate them in the response.
+    """
+    if isinstance(label_value, list):
+        multivalued_keys.add(label_key)
+        for v in label_value:
+            histogram[label_key][str(v)] = histogram[label_key].get(str(v), 0) + 1
+    else:
+        histogram[label_key][str(label_value)] = histogram[label_key].get(str(label_value), 0) + 1
+
+
+def label_histogram(
+    items: list[dict], *, count_unique: bool = False
+) -> tuple:
+    """Build ``{key: {value: count}}`` histograms across item labels.
+
+    Multi-valued labels (list values) increment the histogram for each
+    member -- a device with ``category: [camera, inference]`` adds 1 to
+    both ``camera`` and ``inference``. Keys observed with any list value
+    are surfaced via ``multivalued_keys`` so callers can annotate the
+    response.
+
+    Args:
+        items: Records with optional ``labels`` field (devices, functions,
+            or events).
+        count_unique: When True, also tracks how many distinct items
+            declared each key. Useful only for the device axis, where a
+            multi-valued label can otherwise mask the unique-device count.
+
+    Returns:
+        ``(histogram, multivalued_keys)`` when ``count_unique=False``;
+        ``(histogram, multivalued_keys, unique_per_key)`` when
+        ``count_unique=True``.
+    """
+    histogram: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    multivalued: set[str] = set()
+    unique: dict[str, int] | None = defaultdict(int) if count_unique else None
+    for item in items:
+        labels = item.get("labels") or {}
+        for k, v in labels.items():
+            if unique is not None:
+                unique[k] += 1
+            _accumulate_label(histogram, multivalued, k, v)
+    flat = {k: dict(vals) for k, vals in histogram.items()}
+    if unique is not None:
+        return flat, multivalued, dict(unique)
+    return flat, multivalued

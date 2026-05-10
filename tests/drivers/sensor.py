@@ -20,6 +20,7 @@ class TestSensorDriver(DeviceDriver):
     """Simulated temperature/humidity sensor for integration tests."""
 
     device_type = "test_sensor"
+    labels = {"category": "sensor"}
 
     def __init__(self, failure_rate: float = 0.0, min_latency_ms: float = 10,
                  max_latency_ms: float = 50, location: str = "test-room",
@@ -59,7 +60,7 @@ class TestSensorDriver(DeviceDriver):
     def status(self) -> DeviceStatus:
         return DeviceStatus(location=self._location, availability="available")
 
-    @rpc()
+    @rpc(labels={"direction": "read", "modality": "thermal"})
     async def get_reading(self, unit: str = "celsius") -> dict:
         """Get current temperature and humidity reading."""
         await self.simulate_delay()
@@ -78,13 +79,13 @@ class TestSensorDriver(DeviceDriver):
             "device_id": getattr(self, "_device_id", "unknown"),
         }
 
-    @rpc()
+    @rpc(labels={"direction": "write", "safety": "critical"})
     async def set_threshold(self, temperature: float, humidity: Optional[float] = None) -> dict:
         """Set alert thresholds."""
         await self.simulate_delay()
         return {"status": "success", "temperature_threshold": temperature}
 
-    @rpc()
+    @rpc(labels={"direction": "write"})
     async def set_location(self, location: str) -> dict:
         """Update the sensor's location."""
         await self.simulate_delay()
@@ -92,12 +93,12 @@ class TestSensorDriver(DeviceDriver):
         self._location = location
         return {"status": "success", "old_location": old, "location": location}
 
-    @emit()
+    @emit(labels={"modality": "thermal"})
     async def reading(self, temperature: float, humidity: float, unit: str = "celsius"):
         """Periodic sensor reading."""
         pass
 
-    @emit()
+    @emit(labels={"safety": "critical"})
     async def threshold_exceeded(self, temperature: float, humidity: float, exceeded: str):
         """Threshold exceeded alert."""
         pass

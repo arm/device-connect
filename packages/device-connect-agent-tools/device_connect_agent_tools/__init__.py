@@ -4,37 +4,36 @@
 
 """Device Connect Tools — framework-agnostic SDK for Device Connect IoT.
 
-Hierarchical discovery keeps LLM context small:
+Selector-driven discovery keeps LLM context small:
 
-    from device_connect_agent_tools import connect, describe_fleet, list_devices
+    from device_connect_agent_tools import connect, discover, discover_labels
 
     connect()
-    fleet = describe_fleet()            # bird's-eye summary (~200 tokens)
-    cameras = list_devices(device_type="camera")  # compact roster
-    info = get_device_functions("camera-001")     # full schemas for one device
+    vocab = discover_labels()                                       # fleet vocabulary
+    cams = discover("device(category:camera, location:zone-A/*)")  # device roster
+    writes = discover("device(*).function(direction:write)")        # function tuples
     result = invoke_device("camera-001", "capture_image", {"resolution": "1080p"})
 
-Strands:
-    from device_connect_agent_tools import connect
-    from device_connect_agent_tools.adapters.strands import (
-        describe_fleet, list_devices, get_device_functions, invoke_device,
-    )
-    from strands import Agent
-
-    connect()
-    agent = Agent(tools=[describe_fleet, list_devices, get_device_functions, invoke_device])
+The older ``describe_fleet`` / ``list_devices`` / ``get_device_functions``
+trio remains available for one release as advisory-deprecated wrappers --
+prefer ``discover`` / ``discover_labels`` for new code.
 """
 
 from device_connect_agent_tools.agent import DeviceConnectAgent
 from device_connect_agent_tools.connection import connect, disconnect, get_connection
 from device_connect_agent_tools.tools import (
+    # Selector-driven discovery (preferred)
+    discover,
+    discover_labels,
+    # Invocation
+    invoke_device,
+    invoke_device_with_fallback,
+    get_device_status,
+    # Advisory-deprecated discovery wrappers (one-release transition)
     describe_fleet,
     list_devices,
     get_device_functions,
     discover_devices,
-    invoke_device,
-    invoke_device_with_fallback,
-    get_device_status,
 )
 
 __all__ = [
@@ -44,14 +43,16 @@ __all__ = [
     "get_connection",
     # High-level agent
     "DeviceConnectAgent",
-    # Hierarchical discovery tools (recommended)
-    "describe_fleet",
-    "list_devices",
-    "get_device_functions",
-    # Invocation tools
+    # Selector-driven discovery (preferred)
+    "discover",
+    "discover_labels",
+    # Invocation
     "invoke_device",
     "invoke_device_with_fallback",
     "get_device_status",
-    # Backward-compatible (deprecated — use hierarchical tools instead)
+    # Advisory-deprecated -- use discover() / discover_labels() instead
+    "describe_fleet",
+    "list_devices",
+    "get_device_functions",
     "discover_devices",
 ]

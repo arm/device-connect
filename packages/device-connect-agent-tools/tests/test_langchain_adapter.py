@@ -69,19 +69,27 @@ def _mock_langchain_and_connection():
             del sys.modules[key]
 
 
+EXPECTED_TOOLS = {
+    "discover_labels",
+    "discover",
+    "invoke_device",
+    "invoke_device_with_fallback",
+    "get_device_status",
+    "discover_devices",
+}
+
+
 class TestLangchainAdapterExports:
     def test_module_exports_all_tools(self):
         from device_connect_agent_tools.adapters import langchain as adapter
 
-        for name in ("discover_devices", "invoke_device", "invoke_device_with_fallback",
-                      "get_device_status", "describe_fleet", "list_devices", "get_device_functions"):
+        for name in EXPECTED_TOOLS:
             assert hasattr(adapter, name), f"Missing export: {name}"
 
     def test_all_list(self):
         from device_connect_agent_tools.adapters import langchain as adapter
 
-        expected = {"discover_devices", "invoke_device", "invoke_device_with_fallback", "get_device_status", "list_devices", "get_device_functions", "describe_fleet"}
-        assert set(adapter.__all__) == expected
+        assert set(adapter.__all__) == EXPECTED_TOOLS
 
     def test_tools_are_structured_tool_instances(self):
         from device_connect_agent_tools.adapters import langchain as adapter

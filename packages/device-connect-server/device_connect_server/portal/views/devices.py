@@ -320,7 +320,7 @@ AGENT_SCRIPT = '''\
 """Device Connect — starter AI agent (Strands + OpenAI).
 
 Connects to Device Connect, discovers your fleet, and reacts to device
-events by calling tools (list_devices, get_device_functions, invoke_device).
+events by calling tools (discover_labels, discover, invoke_device).
 LLM inference runs through the Arm internal OpenAI proxy.
 
 Usage:
@@ -403,7 +403,7 @@ class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
         from strands import Agent
         from strands.models.openai import OpenAIModel
         from device_connect_agent_tools.adapters.strands import (
-            describe_fleet, list_devices, get_device_functions,
+            discover_labels, discover,
             invoke_device, invoke_device_with_fallback, get_device_status,
         )
 
@@ -416,7 +416,7 @@ class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
                 params={"max_tokens": self._max_tokens},
             ),
             tools=[
-                describe_fleet, list_devices, get_device_functions,
+                discover_labels, discover,
                 invoke_device, invoke_device_with_fallback, get_device_status,
             ],
             system_prompt=self._build_system_prompt(),
@@ -441,21 +441,26 @@ class StrandsOpenAIDeviceConnectAgent(DeviceConnectAgent):
         for dt, info in sorted(by_type.items()):
             locs = ", ".join(sorted(info["locations"]))
             lines.append(f"  - {info['count']}x {dt} (at: {locs})")
-        fleet = "\\n".join(lines) or "  (none yet — call describe_fleet() to refresh)"
+        fleet = "\\n".join(lines) or "  (none yet -- call discover() to refresh)"
 
         return (
             f"You are an AI agent connected to the Device Connect IoT network.\\n\\n"
             f"YOUR GOAL: {self.goal}\\n\\n"
             f"FLEET OVERVIEW ({len(self.devices)} devices):\\n{fleet}\\n\\n"
             f"DISCOVERY TOOLS:\\n"
-            f"  - describe_fleet() — fleet summary\\n"
-            f"  - list_devices(device_type=..., location=...) — browse devices\\n"
-            f"  - get_device_functions(device_id) — see what a device can do\\n"
-            f"  - invoke_device(device_id, function, params) — call a device function\\n\\n"
+            f"  - discover_labels(key=None) -- fleet label vocabulary "
+            f"(category, location, direction, modality, ...)\\n"
+            f"  - discover(selector) -- resolve a selector to devices, "
+            f"functions, or events. Examples:\\n"
+            f"      device(category:camera, location:zone-A/*)\\n"
+            f"      device(robot-001).function(direction:write)\\n"
+            f"      function(safety:critical)\\n"
+            f"  - invoke_device(device_id, function, params) -- call a device function\\n\\n"
             f"INSTRUCTIONS:\\n"
             f"When you receive device events, you MUST:\\n"
             f"1. Analyze the events\\n"
-            f"2. Use get_device_functions() to check available functions if needed\\n"
+            f"2. Use discover() with a function-scoped selector to check "
+            f"available functions if needed\\n"
             f"3. Use invoke_device() to interact with devices\\n"
             f"4. Report what you found and what actions you took\\n\\n"
             f"Always provide llm_reasoning when invoking devices.\\n"
