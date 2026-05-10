@@ -1,30 +1,18 @@
-# ADR 0001: Selector-driven discovery and operations
+# Discovery
 
-- **Status:** Accepted
+Device Connect uses one selector grammar to address devices, functions, and
+events. The same selector string drives discovery: it tells the system
+**which** entities you mean. Labels attached to devices, functions, and
+events provide the dimensions to filter on.
 
-## Summary
-
-Device Connect exposes one selector grammar that addresses devices,
-functions, and events. The same selector string drives every discovery and
-operation tool: it tells the system **which** entities you mean. Labels
-attached to devices, functions, and events provide the dimensions to filter
-on.
-
-Two reasons this matters in practice:
-
-- **Agent context budgets.** Loading every device's full schema into an LLM
-  context exhausts the budget on fleets of more than a few dozen devices.
-  Selectors let an agent narrow first and load schemas only for what it
-  actually needs.
-- **Cross-cutting queries.** Real questions are rarely "list this one
-  device" - they are "every camera in lab-A", "all critical RPCs",
-  "any motion event in zone-B". One grammar covers all of them.
+This guide covers the labels schema, the selector grammar, and the two
+tools that resolve selectors.
 
 ## Labels
 
-Labels are key/value metadata on devices, functions, and events. Values are
-strings or lists of strings. Lists express composite identity (a smart
-camera that is both `camera` and `inference`).
+Labels are key/value metadata. Values are strings or lists of strings.
+Lists express composite identity (a smart camera that is both `camera` and
+`inference`).
 
 Drivers declare labels in two places:
 
@@ -49,7 +37,7 @@ class SmartCamera(DeviceDriver):
 These keys carry conventional meaning. Custom keys are always allowed
 alongside them.
 
-| Question the agent asks | Key | Applies to | Example values |
+| Question | Key | Applies to | Example values |
 | --- | --- | --- | --- |
 | What is it? | `category` | device | `camera`, `robot`, `hub`, `sensor`, `actuator`, `inference` |
 | Where is it? | `location` | device | `lab-A`, `zone-A/dock` (`/`-hierarchical, glob-able) |
@@ -59,6 +47,13 @@ alongside them.
 
 The RPC-vs-event distinction is structural (FunctionDef vs EventDef) and is
 expressed by the selector scope, not by a label.
+
+### Drivers without label declarations
+
+Drivers that populate only the legacy `DeviceStatus.location` heartbeat
+field are still discoverable by location: the value is mirrored into
+`labels["location"]` at the discovery boundary so selector queries on
+location work without a driver change.
 
 ## Selector grammar
 
@@ -74,8 +69,7 @@ Inside `(...)`:
 
 - `key:value` - single-value match
 - `key:[v1,v2]` - OR within a key (matches if the label value contains any
-  of the listed values; multi-valued labels match if any element is in the
-  list)
+  listed value; multi-valued labels match if any element is in the list)
 - `key:pattern*` - anchored glob (`*`, `?`); `set_*` matches `set_threshold`
   but not `unset_threshold`. Use `*set*` for substring.
 - `k1:v1,k2:v2` - AND across keys
@@ -88,7 +82,7 @@ Keys inside `device(...)` resolve against device labels; keys inside
 resolve against event labels. The `.` chains: "narrow to these devices,
 then narrow to these functions or events on them."
 
-### Examples
+### Selector examples
 
 ```
 device(category:camera)                                       all cameras
@@ -102,63 +96,66 @@ function(estop)                                               fleet emergency-st
 
 ## Tools
 
-### Discovery
+### `discover(selector, offset=0, limit=200)`
 
-| Tool | What it returns |
-| --- | --- |
-| `discover_labels(key=None, offset=0, limit=50)` | Fleet label vocabulary. With no `key`, returns top values per key across each axis (device, function, event). With `key="device.location"` (etc.), paginates one key's values. Use this first when you do not know which dimensions are available. |
-| `discover(selector, offset=0, limit=200)` | Resolves a selector to matched entities. Returns devices, function tuples, or event tuples depending on the selector scope. Includes a `label_histogram` so you can see which dimensions to narrow on next without a separate call. |
+Resolves a selector to matched entities. Returns devices, function tuples,
+or event tuples depending on the selector scope. The response includes a
+`label_histogram` so you can see which dimensions to narrow on next without
+a separate call.
 
 `discover()` includes full schemas inline when the matched set is small,
 and switches to a name-and-labels summary above
 `DEVICE_CONNECT_FUNCTION_THRESHOLD` (default 20). The threshold is
-configurable.
+configurable via environment variable.
 
-### Operations
+### `discover_labels(key=None, offset=0, limit=50)`
 
-Calling a function on devices is one logical operation; the only choice is
-whether you want to wait for replies and how they are surfaced.
+Returns the fleet label vocabulary. Use this first when you do not know
+which dimensions are available.
 
-| Tool | Selector resolves to | Reply mode |
-| --- | --- | --- |
-| `invoke(selector, params)` | exactly one RPC tuple | sync, single result |
-| `invoke_many(selector, params, where=, bindings=)` | any number of RPC tuples | sync, aggregated |
-| `broadcast(selector, function, params, where=, bindings=, fire_at=, on_late=)` | any number of RPC tuples | async; correlation-tagged replies stream as events |
-| `subscribe(selector)` | events, or `correlation:<id>` for a broadcast's replies | subscription handle |
-| `await_replies(correlation_id, timeout=, until=)` | replies for one broadcast | sync helper that subscribes, collects, returns |
+- With no `key`: returns top values per key across each axis (`device_keys`,
+  `function_keys`, `event_keys`).
+- With a `key` like `"device.location"` or `"function.direction"`:
+  paginates the full value list for that one key.
 
-`invoke_many` and `broadcast` accept an optional `where` predicate
-evaluated at the edge against each candidate's identity, labels, and shared
-`bindings`. Use `where` for self-knowable state ("battery > 50%") and
-shared `bindings` for dispatcher-computed selection masks (spatial regions,
-ML score top-K, random samples).
+## Response envelope
 
-`broadcast` accepts `fire_at` (wall-clock epoch seconds) for synchronized
-fan-out: each device holds the message and fires from its own clock at the
-target time. `on_late` (`"skip"` or `"fire"`) controls behaviour when a
-device receives the message after the deadline.
-
-## Pagination
-
-`discover` and `discover_labels` accept `offset` and `limit`. Responses
-follow a stable envelope:
+`discover` returns a stable envelope:
 
 ```json
 {
-  "matched": 7421,
-  "returned": 200,
+  "scope": "device_only",
+  "matched": 47,
+  "returned": 20,
   "offset": 0,
-  "next_offset": 200,
-  "results": [...]
+  "next_offset": 20,
+  "results": [...],
+  "label_histogram": {
+    "category": {
+      "values": {"camera": 312, "robot": 89, "sensor": 601},
+      "multivalued": true,
+      "unique_devices": 1002
+    }
+  }
 }
 ```
 
-`next_offset` is `null` when there are no more pages. The hard ceiling on
-`limit` is 1000 to prevent runaway responses; ask for more pages instead.
+Fields:
 
-Operation tools (`invoke_many`, `broadcast`) do not paginate - that is a
-streaming-dispatch concern. Subscribe to the result channel for per-target
-detail at large fan-out.
+- `scope` - one of `device_only`, `device_function`, `device_event`,
+  `function_only`, `event_only`.
+- `matched` - total matched entities (across all pages).
+- `returned` - rows in this page.
+- `offset` / `next_offset` - pagination cursor; `next_offset` is `null` when
+  no more pages.
+- `results` - per-page rows. Shape depends on scope (devices, function
+  tuples, or event tuples).
+- `label_histogram` - per-key vocabulary across the matched set
+  (pre-pagination), so you can choose how to narrow next. On the device
+  axis, multi-valued keys also carry `unique_devices`.
+
+The hard ceiling on `limit` is 1000 to prevent runaway responses; ask for
+more pages instead.
 
 ## Error responses
 
@@ -176,8 +173,6 @@ the `code` programmatically and surface `message` to logs or users:
 }
 ```
 
-Codes:
-
 | Code | Cause |
 | --- | --- |
 | `invalid_selector` | Selector is not a string (or otherwise unusable as input) |
@@ -188,75 +183,49 @@ Codes:
 
 ## Worked examples
 
-### Find every camera in lab-A and capture an image from each
+### Browse the fleet vocabulary
 
 ```python
-result = invoke_many(
-    selector="device(category:camera, location:lab-A).function(capture_image)",
-    params={"resolution": "1080p"},
-)
-# {"candidates": 12, "matched": 12, "succeeded": 12, "results": [...], "errors": []}
-```
+from device_connect_agent_tools import connect, discover_labels
 
-### Async fleet emergency-stop
-
-```python
-broadcast("function(estop)")
-# {"correlation_id": "br-7f3a91", "candidates": 240}
-
-# Optionally wait for replies:
-replies = await_replies("br-7f3a91", timeout=5.0)
-```
-
-### Synchronized actuation across a phone fleet
-
-```python
-broadcast(
-    selector="device(category:phone, location:auditorium-A)",
-    function="set_flashlight",
-    params={"on": True, "color": "white"},
-    where="mask[seat_row][seat_col] == 1",
-    bindings={"mask": <bitmap>},
-    fire_at=time.time() + 0.500,
-    on_late="skip",
-)
-```
-
-### Browse the fleet vocabulary first
-
-```python
+connect()
 vocab = discover_labels()
-# {"total_devices": 1247, "total_functions": 7100,
-#  "device_keys": {"category": {...}, "location": {...}},
+# {"total_devices": 1247, "total_functions": 7100, "total_events": 1292,
+#  "device_keys":   {"category": {...}, "location": {...}},
 #  "function_keys": {"direction": {...}, "modality": {...}, "safety": {...}},
-#  "event_keys":   {"modality": {...}}}
+#  "event_keys":    {"modality": {...}}}
 
-# Then narrow to one dimension:
+# Drill into one dimension:
 locations = discover_labels(key="device.location", limit=50)
 ```
 
-### Subscribe to motion events in lab-A
+### Find every camera in lab-A
 
 ```python
-sub = subscribe("device(location:lab-A/*).event(modality:motion)")
-# {"subscription_id": "sub-abc123", "matched": 8}
+from device_connect_agent_tools import discover
+
+result = discover("device(category:camera, location:lab-A/*)")
+for d in result["results"]:
+    print(d["device_id"], d["labels"])
 ```
 
-## CLI
+### Find every write RPC on cameras, fleet-wide
 
-The same selector syntax drives the operator CLIs. Every CLI command maps
-to the matching tool call.
-
-```
-devctl discover-labels [--key K] [--offset N] [--limit M]
-devctl discover "<selector>" [--offset N] [--limit M]
-
-statectl invoke "<selector>" [--param k=v]
-statectl invoke-many "<selector>" [--param k=v] [--where E]
-statectl broadcast "<selector>" [--param k=v] [--where E] [--fire-at T]
-statectl subscribe "<selector>"
-statectl await "<correlation_id>" [--timeout T]
+```python
+result = discover("device(category:camera).function(direction:write)")
+for row in result["results"]:
+    print(row["device_id"], row["name"])
 ```
 
-CLI flags `--param k=v` and `--where E` pack into the tool arguments; the
-CLIs are thin shell wrappers over the Python tools.
+### Paginate a large result set
+
+```python
+offset = 0
+while True:
+    page = discover("device(*)", offset=offset, limit=200)
+    for d in page["results"]:
+        process(d)
+    if page["next_offset"] is None:
+        break
+    offset = page["next_offset"]
+```
