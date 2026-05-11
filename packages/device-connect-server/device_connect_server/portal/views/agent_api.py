@@ -76,6 +76,8 @@ def setup_routes(app: web.Application):
     r.add_post(PREFIX + "/devices/{device_id}/credentials:rotate", device_credentials_rotate)
     r.add_post(PREFIX + "/devices/{device_id}/invoke", device_invoke)
     r.add_post(PREFIX + "/invoke-with-fallback", invoke_with_fallback)
+    r.add_get(PREFIX + "/receipts", receipts_list)
+    r.add_get(PREFIX + "/receipts/{receipt_id}", receipt_get)
     r.add_get(
         PREFIX + "/devices/{device_id}/events/{event_name}/stream",
         device_event_stream,
@@ -666,7 +668,7 @@ async def device_invoke(request: web.Request) -> web.Response:
         mandate=mandate,
     )
     if not mandate_result.ok:
-        receipt = receipts_svc.build_receipt(
+        receipt = receipts_svc.record_receipt(receipts_svc.build_receipt(
             trace_id=trace,
             tenant=tenant,
             actor=request.get("token") or {},
@@ -680,7 +682,7 @@ async def device_invoke(request: web.Request) -> web.Response:
             mandate_required=mandate_required,
             mandate_verified=False,
             mandate_error_code=mandate_result.error_code,
-        )
+        ))
         _audit(request, "invoke_denied", trace_id=trace, device_id=full_name,
                function=function, receipt_id=receipt["receipt_id"],
                error=mandate_result.error_code)
@@ -698,7 +700,7 @@ async def device_invoke(request: web.Request) -> web.Response:
     try:
         result = await backend.rpc_invoke(tenant, full_name, function, params_for_rpc, timeout=timeout)
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        receipt = receipts_svc.build_receipt(
+        receipt = receipts_svc.record_receipt(receipts_svc.build_receipt(
             trace_id=trace,
             tenant=tenant,
             actor=request.get("token") or {},
@@ -711,7 +713,7 @@ async def device_invoke(request: web.Request) -> web.Response:
             mandate=mandate,
             mandate_required=mandate_required,
             mandate_verified=bool(mandate),
-        )
+        ))
         _audit(request, "invoke", trace_id=trace, device_id=full_name,
                function=function, elapsed_ms=elapsed_ms, success=True,
                reason=_truncate(reason, 120), receipt_id=receipt["receipt_id"])
@@ -721,7 +723,7 @@ async def device_invoke(request: web.Request) -> web.Response:
                    trace_id=trace)
     except Exception as e:
         elapsed_ms = int((time.monotonic() - started) * 1000)
-        receipt = receipts_svc.build_receipt(
+        receipt = receipts_svc.record_receipt(receipts_svc.build_receipt(
             trace_id=trace,
             tenant=tenant,
             actor=request.get("token") or {},
@@ -734,7 +736,7 @@ async def device_invoke(request: web.Request) -> web.Response:
             mandate=mandate,
             mandate_required=mandate_required,
             mandate_verified=bool(mandate),
-        )
+        ))
         _audit(request, "invoke", trace_id=trace, device_id=full_name,
                function=function, elapsed_ms=elapsed_ms, success=False,
                reason=_truncate(reason, 120), error=str(e),
@@ -795,7 +797,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
             mandate=mandate,
         )
         if not mandate_result.ok:
-            receipt = receipts_svc.build_receipt(
+            receipt = receipts_svc.record_receipt(receipts_svc.build_receipt(
                 trace_id=trace,
                 tenant=tenant,
                 actor=request.get("token") or {},
@@ -809,7 +811,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
                 mandate_required=mandate_required,
                 mandate_verified=False,
                 mandate_error_code=mandate_result.error_code,
-            )
+            ))
             receipts.append(receipt)
             failures.append({
                 "device_id": full_name,
@@ -823,7 +825,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
         try:
             response = await backend.rpc_invoke(tenant, full_name, function, params_for_rpc, timeout=timeout)
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            receipt = receipts_svc.build_receipt(
+            receipt = receipts_svc.record_receipt(receipts_svc.build_receipt(
                 trace_id=trace,
                 tenant=tenant,
                 actor=request.get("token") or {},
@@ -836,7 +838,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
                 mandate=mandate,
                 mandate_required=mandate_required,
                 mandate_verified=bool(mandate),
-            )
+            ))
             _audit(request, "invoke_fallback", trace_id=trace, device_id=full_name,
                    function=function, elapsed_ms=elapsed_ms, success=True,
                    reason=_truncate(reason, 120), receipt_id=receipt["receipt_id"])
@@ -851,7 +853,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
             )
         except Exception as e:
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            receipt = receipts_svc.build_receipt(
+            receipt = receipts_svc.record_receipt(receipts_svc.build_receipt(
                 trace_id=trace,
                 tenant=tenant,
                 actor=request.get("token") or {},
@@ -864,13 +866,13 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
                 mandate=mandate,
                 mandate_required=mandate_required,
                 mandate_verified=bool(mandate),
-            )
+            ))
             receipts.append(receipt)
             failures.append({"device_id": full_name, "error": str(e), "receipt": receipt})
 
     _audit(request, "invoke_fallback", trace_id=trace, function=function, success=False,
            reason=_truncate(reason, 120))
-    all_denied = bool(failures) and all(f.get("code", "").startswith("mandate_") or f.get("code") == "invalid_mandate" for f in failures)
+    all_denied = bool(failures) and all(_is_mandate_denial(f.get("code")) for f in failures)
     return _err(
         status=403 if all_denied else 502,
         code="all_denied" if all_denied else "all_failed",
@@ -894,6 +896,54 @@ def _mandate_for_device(
             if isinstance(mandate, dict):
                 return mandate
     return mandates_svc.extract_mandate(body, params)
+
+
+def _is_mandate_denial(code: Any) -> bool:
+    if not isinstance(code, str):
+        return False
+    return (
+        code.startswith("mandate_")
+        or code in {"invalid_mandate", "invalid_mandate_signature", "unknown_mandate_key"}
+    )
+
+
+# ── execution receipts ─────────────────────────────────────────────
+
+
+async def receipts_list(request: web.Request) -> web.Response:
+    trace = _trace_id()
+    _, err = _require_scope(request, "devices:read")
+    if err:
+        return err
+    tenant, err = _resolve_tenant(request)
+    if err:
+        return err
+    device_id = request.query.get("device_id")
+    full_device_id = _full_device_name(tenant, device_id) if device_id else None
+    try:
+        limit = int(request.query.get("limit", "100"))
+    except ValueError:
+        limit = 100
+    receipts = receipts_svc.list_receipts(
+        tenant=tenant,
+        device_id=full_device_id,
+        limit=limit,
+    )
+    return _ok({"receipts": receipts, "returned": len(receipts)}, trace_id=trace)
+
+
+async def receipt_get(request: web.Request) -> web.Response:
+    trace = _trace_id()
+    _, err = _require_scope(request, "devices:read")
+    if err:
+        return err
+    tenant, err = _resolve_tenant(request)
+    if err:
+        return err
+    receipt = receipts_svc.get_receipt(request.match_info["receipt_id"])
+    if receipt is None or receipt.get("tenant") != tenant:
+        return _err(status=404, code="not_found", message="Receipt not found", trace_id=trace)
+    return _ok({"receipt": receipt}, trace_id=trace)
 
 
 # ── event streaming (bounded) ──────────────────────────────────────

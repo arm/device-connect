@@ -14,6 +14,9 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
+_RECEIPTS: list[dict[str, Any]] = []
+_MAX_RECEIPTS = 1000
+
 
 def build_receipt(
     *,
@@ -58,6 +61,40 @@ def build_receipt(
     }
     receipt["signature"] = sign_receipt(receipt)
     return receipt
+
+
+def record_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
+    """Append a receipt to the process-local audit log."""
+    _RECEIPTS.append(dict(receipt))
+    if len(_RECEIPTS) > _MAX_RECEIPTS:
+        del _RECEIPTS[: len(_RECEIPTS) - _MAX_RECEIPTS]
+    return receipt
+
+
+def get_receipt(receipt_id: str) -> dict[str, Any] | None:
+    for receipt in reversed(_RECEIPTS):
+        if receipt.get("receipt_id") == receipt_id:
+            return dict(receipt)
+    return None
+
+
+def list_receipts(
+    *,
+    tenant: str | None = None,
+    device_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    out = []
+    for receipt in reversed(_RECEIPTS):
+        if tenant is not None and receipt.get("tenant") != tenant:
+            continue
+        if device_id is not None and receipt.get("device_id") != device_id:
+            continue
+        out.append(dict(receipt))
+        if len(out) >= safe_limit:
+            break
+    return out
 
 
 def hash_json(value: Any) -> str:

@@ -135,3 +135,35 @@ def test_execution_receipt_hashes_payload_and_can_sign(monkeypatch):
     assert receipt["response_sha256"]
     assert receipt["signature"]
     assert receipt["mandate"]["verified"] is True
+
+
+def test_execution_receipt_log_lists_latest_by_tenant_device_and_limit():
+    execution_receipts._RECEIPTS.clear()
+
+    first = execution_receipts.record_receipt({
+        "receipt_id": "rcpt-1",
+        "tenant": "acme",
+        "device_id": "acme-lock-001",
+        "status": "succeeded",
+    })
+    second = execution_receipts.record_receipt({
+        "receipt_id": "rcpt-2",
+        "tenant": "acme",
+        "device_id": "acme-heater-001",
+        "status": "denied",
+    })
+    execution_receipts.record_receipt({
+        "receipt_id": "rcpt-3",
+        "tenant": "other",
+        "device_id": "other-lock-001",
+        "status": "succeeded",
+    })
+
+    assert execution_receipts.get_receipt("rcpt-1") == first
+    assert execution_receipts.get_receipt("missing") is None
+    assert execution_receipts.list_receipts(tenant="acme") == [second, first]
+    assert execution_receipts.list_receipts(
+        tenant="acme",
+        device_id="acme-lock-001",
+    ) == [first]
+    assert execution_receipts.list_receipts(tenant="acme", limit=1) == [second]
