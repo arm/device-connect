@@ -9,6 +9,7 @@ as StructuredTool instances with correct names and descriptions.
 """
 
 import sys
+from inspect import signature
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
@@ -111,3 +112,9 @@ class TestLangchainAdapterExports:
 
         for name in adapter.__all__:
             assert len(getattr(adapter, name).description) > 0, f"{name} has empty description"
+
+    @pytest.mark.parametrize("name", ("invoke", "invoke_many", "broadcast"))
+    def test_invocation_tools_inherit_mandate_signature(self, name):
+        from device_connect_agent_tools.adapters import langchain as adapter
+
+        assert "mandate" in signature(getattr(adapter, name)._func).parameters

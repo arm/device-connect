@@ -62,6 +62,20 @@ class SimpleCapability:
         return {"value": value}
 """
 
+MANDATE_CAPABILITY_CODE = """\
+from device_connect_edge.drivers.decorators import requires_mandate, rpc
+
+class MandateCapability:
+    def __init__(self, device=None):
+        self.device = device
+
+    @requires_mandate(scope="actuation")
+    @rpc()
+    async def unlock(self, duration_s: int) -> dict:
+        \"\"\"Unlock with delegated authorization.\"\"\"
+        return {"unlocked": True}
+"""
+
 EMIT_CAPABILITY_CODE = """\
 from device_connect_edge.drivers.decorators import rpc, emit
 
@@ -205,6 +219,17 @@ class TestRpcExtraction:
         schema = loaded.function_schemas["customName"]
         assert "parameters" in schema
         assert "description" in schema
+
+    @pytest.mark.asyncio
+    async def test_function_schemas_include_mandate_metadata(self, loader, tmp_path):
+        _write_capability(tmp_path, "mandate-cap", "MandateCapability", MANDATE_CAPABILITY_CODE)
+        await loader.load_all()
+
+        loaded = loader.get_capabilities()["mandate-cap"]
+        assert loaded.function_schemas["unlock"]["mandate"] == {
+            "required": True,
+            "scope": "actuation",
+        }
 
 
 # -- Extracting @emit methods --

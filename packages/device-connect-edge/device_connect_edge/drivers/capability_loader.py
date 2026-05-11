@@ -512,6 +512,9 @@ class CapabilityLoader:
                         "description": description,
                         "parameters": parameters,
                     }
+                    mandate = getattr(attr, "_mandate", None)
+                    if mandate is not None:
+                        loaded.function_schemas[func_name]["mandate"] = mandate
 
                     # Register with namespace prefix
                     self._functions[f"{cap_id}.{func_name}"] = attr

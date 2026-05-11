@@ -110,3 +110,68 @@ class TestClaudeAdapterExports:
         assert server["name"] == "device-connect"
         bundled = {t._tool_name for t in server["tools"]}
         assert bundled == set(TOOL_NAMES)
+
+    @pytest.mark.parametrize("name", ("invoke", "invoke_many", "broadcast"))
+    def test_invocation_schemas_include_optional_mandate(self, name):
+        from device_connect_agent_tools.adapters import claude as adapter
+
+        schema = getattr(adapter, name)._tool_schema
+
+        assert schema["mandate"] is dict
+
+
+class TestClaudeAdapterMandates:
+    @pytest.mark.asyncio
+    async def test_invoke_forwards_mandate(self):
+        from device_connect_agent_tools.adapters import claude as adapter
+
+        mandate = {"format": "device-connect-hmac-v0", "closed": {"id": "m-1"}}
+
+        with patch.object(adapter, "_invoke", return_value={"success": True}) as invoke:
+            await adapter.invoke(
+                {
+                    "selector": "device(lock-001).function(unlock)",
+                    "params": {"duration_s": 30},
+                    "mandate": mandate,
+                }
+            )
+
+        assert invoke.call_args.kwargs["mandate"] == mandate
+
+    @pytest.mark.asyncio
+    async def test_invoke_many_forwards_mandate(self):
+        from device_connect_agent_tools.adapters import claude as adapter
+
+        mandate = {"format": "device-connect-hmac-v0", "closed": {"id": "m-1"}}
+
+        with patch.object(
+            adapter, "_invoke_many", return_value={"succeeded": 1}
+        ) as invoke_many:
+            await adapter.invoke_many(
+                {
+                    "selector": "device(category:lock).function(unlock)",
+                    "params": {"duration_s": 30},
+                    "mandate": mandate,
+                }
+            )
+
+        assert invoke_many.call_args.kwargs["mandate"] == mandate
+
+    @pytest.mark.asyncio
+    async def test_broadcast_forwards_mandate(self):
+        from device_connect_agent_tools.adapters import claude as adapter
+
+        mandate = {"format": "device-connect-hmac-v0", "closed": {"id": "m-1"}}
+
+        with patch.object(
+            adapter, "_broadcast", return_value={"candidates": 1}
+        ) as broadcast:
+            await adapter.broadcast(
+                {
+                    "selector": "device(category:lock).function(unlock)",
+                    "params": {"duration_s": 30},
+                    "mandate": mandate,
+                }
+            )
+
+        assert broadcast.call_args.kwargs["mandate"] == mandate

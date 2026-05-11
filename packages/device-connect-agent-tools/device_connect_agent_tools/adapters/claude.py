@@ -113,7 +113,10 @@ async def discover(args: dict[str, Any]) -> dict[str, Any]:
     "to a single (device, function) tuple -- use device(<id>).function(<name>) "
     "or function(<name>) scope. Returns {success, device_id, function, "
     "result|error}. Use invoke_many for fan-out across multiple targets.",
-    {"selector": str, "params": dict, "llm_reasoning": str},
+    {
+        "selector": str, "params": dict, "llm_reasoning": str,
+        "mandate": dict,
+    },
 )
 async def invoke(args: dict[str, Any]) -> dict[str, Any]:
     return _text(
@@ -121,6 +124,7 @@ async def invoke(args: dict[str, Any]) -> dict[str, Any]:
             selector=args["selector"],
             params=args.get("params"),
             llm_reasoning=args.get("llm_reasoning"),
+            mandate=args.get("mandate"),
         )
     )
 
@@ -134,7 +138,7 @@ async def invoke(args: dict[str, Any]) -> dict[str, Any]:
     "target gets a per-call timeout (default 30s).",
     {
         "selector": str, "params": dict, "timeout": float,
-        "max_concurrency": int, "llm_reasoning": str,
+        "max_concurrency": int, "llm_reasoning": str, "mandate": dict,
     },
 )
 async def invoke_many(args: dict[str, Any]) -> dict[str, Any]:
@@ -145,6 +149,7 @@ async def invoke_many(args: dict[str, Any]) -> dict[str, Any]:
             timeout=float(args.get("timeout", 30.0)),
             max_concurrency=int(args.get("max_concurrency", 32)),
             llm_reasoning=args.get("llm_reasoning"),
+            mandate=args.get("mandate"),
         )
     )
 
@@ -161,6 +166,7 @@ async def invoke_many(args: dict[str, Any]) -> dict[str, Any]:
     {
         "selector": str, "params": dict, "where": str, "bindings": dict,
         "fire_at": float, "on_late": str, "llm_reasoning": str,
+        "mandate": dict,
     },
 )
 async def broadcast(args: dict[str, Any]) -> dict[str, Any]:
@@ -173,6 +179,7 @@ async def broadcast(args: dict[str, Any]) -> dict[str, Any]:
             fire_at=args.get("fire_at"),
             on_late=args.get("on_late", "skip"),
             llm_reasoning=args.get("llm_reasoning"),
+            mandate=args.get("mandate"),
         )
     )
 

@@ -37,6 +37,7 @@ from device_connect_edge.drivers.decorators import (
     emit,
     before_emit,
     periodic,
+    requires_mandate,
     build_function_schema,
     build_event_schema,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "emit",
     "before_emit",
     "periodic",
+    "requires_mandate",
     "on",
     "build_function_schema",
     "build_event_schema",

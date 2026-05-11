@@ -11,7 +11,7 @@ Tests @rpc, @emit, @on decorators, schema generation, and DeviceDriver base clas
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from device_connect_edge.drivers import DeviceDriver, rpc, emit, build_function_schema, build_event_schema
+from device_connect_edge.drivers import DeviceDriver, rpc, emit, requires_mandate, build_function_schema, build_event_schema
 from device_connect_edge.drivers.base import on
 from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
@@ -196,6 +196,24 @@ class TestRpcLabels:
             return {}
 
         assert capture._labels == {"direction": "write", "modality": ["rgb", "4k"]}
+
+
+class TestRequiresMandate:
+    def test_requires_mandate_above_rpc(self):
+        @requires_mandate(scope="actuation")
+        @rpc()
+        async def unlock(self) -> dict:
+            return {}
+
+        assert unlock._mandate == {"required": True, "scope": "actuation"}
+
+    def test_requires_mandate_below_rpc(self):
+        @rpc()
+        @requires_mandate(scope="actuation")
+        async def unlock(self) -> dict:
+            return {}
+
+        assert unlock._mandate == {"required": True, "scope": "actuation"}
 
 
 class TestEmitLabels:

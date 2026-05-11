@@ -511,9 +511,19 @@ def rpc(
         wrapper._description = func._description
         wrapper._arg_descriptions = func._arg_descriptions
         wrapper._labels = func._labels
+        wrapper._mandate = getattr(func, "_mandate", None)
         wrapper._original_func = func  # For schema extraction
 
         return wrapper
+
+    return decorator
+
+
+def requires_mandate(scope: str = "actuation") -> Callable:
+    """Mark an RPC method as requiring a valid Device Mandate."""
+    def decorator(func: Callable) -> Callable:
+        func._mandate = {"required": True, "scope": scope}
+        return func
 
     return decorator
 
