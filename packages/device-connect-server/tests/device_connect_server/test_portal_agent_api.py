@@ -11,6 +11,7 @@ with the registry document.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -20,6 +21,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from device_connect_server.portal.app import auth_middleware
 from device_connect_server.portal.services import tokens as tokens_svc
 from device_connect_server.portal.views import agent_api
+from device_connect_edge import create_closed_mandate, create_open_mandate
 
 
 # A registry doc with extra fields the API must surface untouched.
@@ -57,6 +59,51 @@ SAMPLE_DEVICE = {
     },
     "registry": {"registered_at": "2026-05-01T12:00:00+00:00"},
 }
+
+PROTECTED_LOCK = {
+    "device_id": "acme-lock-001",
+    "tenant": "acme",
+    "identity": {"device_type": "lock"},
+    "status": {"online": True},
+    "capabilities": {
+        "functions": [
+            {
+                "name": "unlock",
+                "parameters": {"type": "object"},
+                "mandate": {"required": True, "scope": "actuation"},
+            },
+            {"name": "get_status", "parameters": {"type": "object"}},
+        ],
+        "events": [],
+    },
+}
+
+PRINCIPAL_KEY = "principal-secret"
+AGENT_KEY = "agent-secret"
+
+
+def _closed_mandate(device_id: str = "acme-lock-001", params: dict | None = None) -> dict:
+    now = datetime.now(timezone.utc)
+    params = params or {"duration_s": 30}
+    open_mandate = create_open_mandate(
+        principal="operator",
+        agent="agent-1",
+        device_id=device_id,
+        methods=["unlock"],
+        constraints={"duration_s": {"lte": 60}},
+        not_before=now - timedelta(seconds=5),
+        not_after=now + timedelta(minutes=5),
+        key=PRINCIPAL_KEY,
+    )
+    return create_closed_mandate(
+        open_mandate=open_mandate,
+        agent="agent-1",
+        device_id=device_id,
+        method="unlock",
+        params=params,
+        key=AGENT_KEY,
+        issued_at=now,
+    )
 
 
 @pytest.fixture
@@ -449,6 +496,121 @@ class TestInvokeTimeoutCap:
             )
             assert r.status == 200
         assert seen["timeout"] == agent_api.MAX_INVOKE_TIMEOUT_S
+
+
+class TestInvokeMandates:
+    async def test_protected_function_with_valid_mandate_returns_receipt(
+        self, invoke_client, monkeypatch,
+    ):
+        monkeypatch.setenv(
+            "DC_MANDATE_KEYS_JSON",
+            '{"operator":"principal-secret","agent-1":"agent-secret"}',
+        )
+        seen = {}
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                seen["params"] = params
+                return {"ok": True}
+
+        mandate = _closed_mandate()
+        with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=PROTECTED_LOCK,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/lock-001/invoke",
+                headers=H(),
+                json={
+                    "function": "unlock",
+                    "params": {"duration_s": 30},
+                    "mandate": mandate,
+                },
+            )
+
+        assert r.status == 200
+        body = await r.json()
+        receipt = body["result"]["receipt"]
+        assert receipt["status"] == "succeeded"
+        assert receipt["mandate"]["verified"] is True
+        assert receipt["mandate"]["principal"] == "operator"
+        assert seen["params"]["_dc_meta"]["mandate"] == mandate
+
+    async def test_protected_function_without_mandate_returns_denial_receipt(
+        self, invoke_client, monkeypatch,
+    ):
+        monkeypatch.setenv(
+            "DC_MANDATE_KEYS_JSON",
+            '{"operator":"principal-secret","agent-1":"agent-secret"}',
+        )
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                raise AssertionError("backend must not be called")
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=PROTECTED_LOCK,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/lock-001/invoke",
+                headers=H(),
+                json={"function": "unlock", "params": {"duration_s": 30}},
+            )
+
+        assert r.status == 403
+        body = await r.json()
+        assert body["error"]["code"] == "mandate_required"
+        assert body["receipt"]["status"] == "denied"
+        assert body["receipt"]["mandate"]["required"] is True
+
+    async def test_existing_dc_meta_is_preserved_when_mandate_is_attached(
+        self, invoke_client, monkeypatch,
+    ):
+        monkeypatch.setenv(
+            "DC_MANDATE_KEYS_JSON",
+            '{"operator":"principal-secret","agent-1":"agent-secret"}',
+        )
+        seen = {}
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                seen["params"] = params
+                return {"ok": True}
+
+        mandate = _closed_mandate()
+        with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=PROTECTED_LOCK,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/lock-001/invoke",
+                headers=H(),
+                json={
+                    "function": "unlock",
+                    "params": {
+                        "duration_s": 30,
+                        "_dc_meta": {"traceparent": "trace"},
+                    },
+                    "mandate": mandate,
+                },
+            )
+
+        assert r.status == 200
+        assert seen["params"]["_dc_meta"]["traceparent"] == "trace"
+        assert seen["params"]["_dc_meta"]["mandate"] == mandate
 
 
 # ── invoke-with-fallback duplicate device id (regression) ─────────
