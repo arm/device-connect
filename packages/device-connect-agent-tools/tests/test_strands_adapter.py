@@ -9,6 +9,7 @@ with @strands.tool, producing callable tools with correct names.
 """
 
 import sys
+from inspect import signature
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
@@ -88,3 +89,9 @@ class TestStrandsAdapterExports:
 
         for name in adapter.__all__:
             assert getattr(adapter, name).__name__ == name, f"{name}.__name__ mismatch"
+
+    @pytest.mark.parametrize("name", ("invoke", "invoke_many", "broadcast"))
+    def test_invocation_tools_inherit_mandate_signature(self, name):
+        from device_connect_agent_tools.adapters import strands as adapter
+
+        assert "mandate" in signature(getattr(adapter, name).__wrapped__).parameters
