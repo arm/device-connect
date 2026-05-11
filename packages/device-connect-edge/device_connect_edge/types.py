@@ -68,6 +68,12 @@ class FunctionDef(BaseModel):
                     "(read|write), safety (critical|informational), modality (rgb|thermal|...). "
                     "Custom keys are allowed."
     )
+    mandate: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional execution authorization policy metadata. When present with "
+                    "{'required': True}, the runtime requires a valid Device Mandate before "
+                    "executing this function."
+    )
     tags: List[str] = Field(
         default_factory=list,
         description="Tags for categorization (e.g., ['vision', 'capture'])"

@@ -101,6 +101,14 @@ class TestLabels:
         f2 = FunctionDef.model_validate_json(f.model_dump_json())
         assert f2.labels == f.labels
 
+    def test_function_mandate_roundtrip(self):
+        f = FunctionDef(
+            name="unlock",
+            mandate={"required": True, "scope": "actuation"},
+        )
+        f2 = FunctionDef.model_validate_json(f.model_dump_json())
+        assert f2.mandate == {"required": True, "scope": "actuation"}
+
     def test_event_labels_default_none(self):
         e = EventDef(name="heartbeat")
         assert e.labels is None

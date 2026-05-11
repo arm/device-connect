@@ -542,10 +542,30 @@ def _shape_invoke_response(
     }
 
 
+def _clean_params_with_mandate(
+    params: dict[str, Any] | None,
+    mandate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    clean = {k: v for k, v in (params or {}).items() if k != "llm_reasoning"}
+    if mandate is None:
+        return clean
+    meta = clean.get("_dc_meta")
+    if meta is None:
+        meta = {}
+    elif not isinstance(meta, dict):
+        raise ValueError("_dc_meta must be an object when mandate is provided")
+    else:
+        meta = dict(meta)
+    meta["mandate"] = mandate
+    clean["_dc_meta"] = meta
+    return clean
+
+
 def invoke(
     selector: str,
     params: dict[str, Any] | None = None,
     llm_reasoning: str | None = None,
+    mandate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve a selector to one (device, function) tuple and invoke it.
 
@@ -611,7 +631,7 @@ def invoke(
 
     try:
         conn = get_connection()
-        clean = {k: v for k, v in (params or {}).items() if k != "llm_reasoning"}
+        clean = _clean_params_with_mandate(params, mandate)
         response = conn.invoke(device_id, function_name, params=clean)
     except Exception as e:
         logger.error(
@@ -633,6 +653,7 @@ def invoke_many(
     timeout: float = DEFAULT_INVOKE_TIMEOUT,
     max_concurrency: int = DEFAULT_INVOKE_CONCURRENCY,
     llm_reasoning: str | None = None,
+    mandate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve a selector to (device, function) tuples and invoke each in parallel.
 
@@ -683,7 +704,13 @@ def invoke_many(
         return out
 
     workers = max(1, min(max_concurrency, len(rows)))
-    clean = {k: v for k, v in (params or {}).items() if k != "llm_reasoning"}
+    try:
+        clean = _clean_params_with_mandate(params, mandate)
+    except ValueError as e:
+        return {
+            "candidates": len(rows), "matched": len(rows), "succeeded": 0, "failed": len(rows),
+            "results": [], "errors": [], "error": _error("invalid_params", str(e)),
+        }
 
     def call_one(row: dict) -> dict[str, Any]:
         device_id = row.get("device_id") or ""
@@ -735,6 +762,7 @@ def broadcast(
     fire_at: float | None = None,
     on_late: str = "skip",
     llm_reasoning: str | None = None,
+    mandate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Async selector-driven fan-out. Returns immediately with a correlation id.
 
@@ -832,9 +860,13 @@ def broadcast(
     targets = sorted({
         row.get("device_id") for row in rows if row.get("device_id")
     })
-    clean_params = {
-        k: v for k, v in (params or {}).items() if k != "llm_reasoning"
-    }
+    try:
+        clean_params = _clean_params_with_mandate(params, mandate)
+    except ValueError as e:
+        return {
+            "candidates": len(targets),
+            "error": _error("invalid_params", str(e)),
+        }
 
     envelope: dict[str, Any] = {
         "correlation_id": correlation_id,
@@ -1327,6 +1359,7 @@ def invoke_device(
     function: str,
     params: dict[str, Any] | None = None,
     llm_reasoning: str | None = None,
+    mandate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call a function on a Device Connect device (deprecated; use invoke()).
 
@@ -1349,7 +1382,7 @@ def invoke_device(
 
     try:
         conn = get_connection()
-        clean = {k: v for k, v in (params or {}).items() if k != "llm_reasoning"}
+        clean = _clean_params_with_mandate(params, mandate)
         response = conn.invoke(device_id, function, params=clean)
 
         if "error" in response:

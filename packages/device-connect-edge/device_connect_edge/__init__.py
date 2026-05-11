@@ -43,6 +43,13 @@ from device_connect_edge.types import (
     FunctionDef,
     EventDef,
 )
+from device_connect_edge.mandates import (
+    MandateInvocationContext,
+    MandateVerificationResult,
+    create_closed_mandate,
+    create_open_mandate,
+    verify_mandate,
+)
 from device_connect_edge.discovery_provider import DiscoveryProvider
 from device_connect_edge.registry_client import RegistryClient
 from device_connect_edge.errors import (
@@ -66,6 +73,11 @@ __all__ = [
     "DeviceStatus",
     "FunctionDef",
     "EventDef",
+    "MandateInvocationContext",
+    "MandateVerificationResult",
+    "create_closed_mandate",
+    "create_open_mandate",
+    "verify_mandate",
     "DiscoveryProvider",
     "RegistryClient",
     "DeviceConnectError",

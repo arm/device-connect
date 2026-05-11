@@ -389,12 +389,14 @@ class DeviceDriver(ABC):
             description = getattr(attr, "_description", "")
             parameters = build_function_schema(attr)
             labels = getattr(attr, "_labels", None)
+            mandate = getattr(attr, "_mandate", None)
 
             functions.append(FunctionDef(
                 name=func_name,
                 description=description,
                 parameters=parameters,
                 labels=labels,
+                mandate=mandate,
                 tags=[]
             ))
 

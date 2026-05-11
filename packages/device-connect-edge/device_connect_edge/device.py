@@ -77,6 +77,11 @@ from device_connect_edge.types import (
     DeviceIdentity,
     DeviceStatus,
 )
+from device_connect_edge.mandates import (
+    MandateInvocationContext,
+    MandateVerificationResult,
+    verify_mandate,
+)
 
 # Type checking imports for driver support
 if TYPE_CHECKING:
@@ -161,6 +166,16 @@ def build_rpc_error(id_: str, code: int, msg: str) -> bytes:
     return json.dumps(
         {"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": msg}}
     ).encode()
+
+
+def _broadcast_error(message: str) -> Dict[str, str]:
+    code = "invoke_failed"
+    if ":" in message:
+        prefix, _, rest = message.partition(":")
+        if prefix.startswith("mandate_") or prefix in {"invalid_mandate", "unknown_mandate_key"}:
+            code = prefix
+            message = rest.strip() or message
+    return {"code": code, "message": message}
 
 
 class DeviceRuntime:
@@ -259,6 +274,7 @@ class DeviceRuntime:
         auto_commission: bool = True,
         commissioning_port: int = 5540,
         allow_insecure: Optional[bool] = None,
+        mandate_keys: Optional[Dict[str, Union[bytes, str]]] = None,
     ) -> None:
         # Store driver reference and connect driver to this device
         self._driver = driver
@@ -349,6 +365,8 @@ class DeviceRuntime:
             self.allow_insecure = os.getenv("DEVICE_CONNECT_ALLOW_INSECURE", "").lower() in ("1", "true", "yes")
         else:
             self.allow_insecure = allow_insecure
+        self._mandate_keys: Dict[str, Union[bytes, str]] = dict(mandate_keys or {})
+        self._mandate_replay_cache: set[str] = set()
         self._factory_identity: Optional[dict] = None
 
         # Initialize logger and internal state early (before commissioning checks)
@@ -1112,6 +1130,19 @@ class DeviceRuntime:
                             "device_connect.source_device": source_device or "",
                         },
                     ):
+                        mandate_result = self._verify_mandate_for_invocation(
+                            method, params_dict, dc_meta,
+                        )
+                        if not mandate_result.ok:
+                            if reply_subject:
+                                await self.messaging.publish(
+                                    reply_subject,
+                                    build_rpc_error(
+                                        payload["id"], -32041,
+                                        mandate_result.message or mandate_result.error_code or "mandate_denied",
+                                    )
+                                )
+                            return
                         # Pass source_device to driver for logging (existing pattern)
                         if source_device:
                             params_dict["source_device"] = source_device
@@ -1133,6 +1164,32 @@ class DeviceRuntime:
 
         await self.messaging.subscribe(subj, callback=on_msg)
         self._logger.info("Subscribed to commands on %s", subj)
+
+
+    def _verify_mandate_for_invocation(
+        self,
+        function_name: str,
+        params: Dict[str, Any],
+        dc_meta: Optional[Dict[str, Any]],
+    ) -> MandateVerificationResult:
+        """Verify mandate metadata when a function declares it is required."""
+        if self._driver is None:
+            return MandateVerificationResult(ok=True)
+        method = self._driver._get_functions().get(function_name)
+        mandate_policy = getattr(method, "_mandate", None)
+        if not mandate_policy or not mandate_policy.get("required"):
+            return MandateVerificationResult(ok=True)
+        meta = dc_meta if isinstance(dc_meta, dict) else {}
+        return verify_mandate(
+            meta.get("mandate"),
+            context=MandateInvocationContext(
+                device_id=self.device_id,
+                method=function_name,
+                params=params,
+            ),
+            key_resolver=self._mandate_keys.get,
+            replay_cache=self._mandate_replay_cache,
+        )
 
 
     async def _broadcast_subscription(self) -> None:
@@ -1205,6 +1262,7 @@ class DeviceRuntime:
         """
         function_name = envelope.get("function")
         params_dict = envelope.get("params", {}) or {}
+        dc_meta = params_dict.pop("_dc_meta", {})
 
         # Step 1: where predicate against {identity, labels, status, bindings}.
         # A failed compile or eval is treated as fail-closed (do not execute);
@@ -1244,6 +1302,12 @@ class DeviceRuntime:
             driver_functions = self._driver._get_functions()
             if function_name not in driver_functions:
                 raise RuntimeError(f"unknown function: {function_name}")
+            mandate_result = self._verify_mandate_for_invocation(
+                function_name, params_dict, dc_meta,
+            )
+            if not mandate_result.ok:
+                code = mandate_result.error_code or "mandate_denied"
+                raise RuntimeError(f"{code}: {mandate_result.message}")
             result = await self._driver.invoke(function_name, **params_dict)
             reply_payload: Dict[str, Any] = {
                 "correlation_id": correlation_id,
@@ -1261,7 +1325,7 @@ class DeviceRuntime:
                 "correlation_id": correlation_id,
                 "device_id": self.device_id,
                 "success": False,
-                "error": {"code": "invoke_failed", "message": str(e)},
+                "error": _broadcast_error(str(e)),
                 "actually_fired_at": actually_fired_at,
             }
         try:
