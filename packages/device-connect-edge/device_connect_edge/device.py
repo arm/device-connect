@@ -1299,13 +1299,18 @@ class DeviceRuntime:
             # explicitly. Matches the dispatcher-side flatten_device contract.
             if "location" not in labels and status_dict.get("location"):
                 labels = {**labels, "location": status_dict["location"]}
-            # The DeviceIdentity model carries device_type / manufacturer /
-            # model / firmware_version but NOT device_id (which lives on the
-            # runtime). Splice it in so predicates can write the natural
-            # ``identity.device_id == "..."``.
+            # DeviceIdentity is exposed by the driver, not by DeviceCapabilities;
+            # they are independent pydantic models. Read identity from the
+            # driver so extra fields (seat_row, seat_col, x-mhp metadata, ...)
+            # reach the predicate context. Splice in device_id which lives on
+            # the runtime so predicates can write
+            # ``identity.device_id == "..."`` naturally.
             identity_dict: Dict[str, Any] = {"device_id": self.device_id}
-            if caps and getattr(caps, "identity", None):
-                identity_dict.update(caps.identity.model_dump())
+            driver_identity = (
+                getattr(self._driver, "identity", None) if self._driver else None
+            )
+            if driver_identity is not None and hasattr(driver_identity, "model_dump"):
+                identity_dict.update(driver_identity.model_dump())
             context = {
                 "identity": identity_dict,
                 "labels": labels,
