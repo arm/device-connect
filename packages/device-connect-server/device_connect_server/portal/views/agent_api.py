@@ -657,7 +657,7 @@ async def device_invoke(request: web.Request) -> web.Response:
     mandate = mandates_svc.extract_mandate(body, params)
     timeout = _clamp_timeout(body.get("timeout"))
     reason = _truncate(body.get("reason") or body.get("llm_reasoning") or "", 500)
-    device_doc = registry_client.get_device(full_name)
+    device_doc = _device_doc(tenant, device_id)
     mandate_policy = mandates_svc.get_function_mandate_policy(device_doc, function)
     mandate_required = bool(mandate_policy and mandate_policy.get("required"))
     mandate_result = mandates_svc.verify_server_mandate(
@@ -785,7 +785,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
     receipts = []
     for idx, raw_id in enumerate(ids):
         full_name = _full_device_name(tenant, raw_id)
-        device_doc = registry_client.get_device(full_name)
+        device_doc = _device_doc(tenant, raw_id)
         mandate = _mandate_for_device(body, params, tenant, raw_id, full_name)
         mandate_policy = mandates_svc.get_function_mandate_policy(device_doc, function)
         mandate_required = bool(mandate_policy and mandate_policy.get("required"))

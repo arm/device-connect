@@ -486,6 +486,9 @@ class TestInvokeTimeoutCap:
                 return {"ok": True}
 
         with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=None,
+        ), patch(
             "device_connect_server.portal.views.agent_api.get_backend",
             return_value=_FakeBackend(),
         ):
@@ -515,9 +518,14 @@ class TestInvokeMandates:
                 return {"ok": True}
 
         mandate = _closed_mandate()
+        def _lookup_device(tenant, device_id):
+            assert tenant == "acme"
+            assert device_id == "acme-lock-001"
+            return PROTECTED_LOCK
+
         with patch(
             "device_connect_server.portal.views.agent_api.registry_client.get_device",
-            return_value=PROTECTED_LOCK,
+            side_effect=_lookup_device,
         ), patch(
             "device_connect_server.portal.views.agent_api.get_backend",
             return_value=_FakeBackend(),
@@ -553,9 +561,14 @@ class TestInvokeMandates:
             async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
                 raise AssertionError("backend must not be called")
 
+        def _lookup_device(tenant, device_id):
+            assert tenant == "acme"
+            assert device_id == "acme-lock-001"
+            return PROTECTED_LOCK
+
         with patch(
             "device_connect_server.portal.views.agent_api.registry_client.get_device",
-            return_value=PROTECTED_LOCK,
+            side_effect=_lookup_device,
         ), patch(
             "device_connect_server.portal.views.agent_api.get_backend",
             return_value=_FakeBackend(),
@@ -588,9 +601,14 @@ class TestInvokeMandates:
                 return {"ok": True}
 
         mandate = _closed_mandate()
+        def _lookup_device(tenant, device_id):
+            assert tenant == "acme"
+            assert device_id == "acme-lock-001"
+            return PROTECTED_LOCK
+
         with patch(
             "device_connect_server.portal.views.agent_api.registry_client.get_device",
-            return_value=PROTECTED_LOCK,
+            side_effect=_lookup_device,
         ), patch(
             "device_connect_server.portal.views.agent_api.get_backend",
             return_value=_FakeBackend(),
@@ -631,6 +649,9 @@ class TestInvokeFallbackDuplicates:
                 return {"ok": True, "attempt": len(attempts)}
 
         with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=None,
+        ), patch(
             "device_connect_server.portal.views.agent_api.get_backend",
             return_value=_FakeBackend(),
         ):
