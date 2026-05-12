@@ -575,3 +575,282 @@ class TestLifecycleSubscriptions:
                 msg_body, f"device-connect.beta.{did}.event.motion", None,
             )
         assert seen == ["cam-001", "cam-rear"]
+
+
+class TestLifecycleSubscriptionsD2D:
+    """D2D mode has no registry to publish ``device.{online,offline}``.
+
+    Lifecycle ``@on`` handlers must be delivered through the
+    PresenceCollector's add/remove callbacks instead. Per-device event
+    subscriptions still go through the broker, regardless of mode.
+    """
+
+    async def _setup_d2d(self, driver):
+        """Wire driver to a fake router + a real-ish PresenceCollector stand-in."""
+        from device_connect_edge.discovery import PresenceCollector
+
+        class FakeMessaging:
+            async def subscribe(self, *a, **kw): return MagicMock()
+            async def subscribe_with_subject(self, *a, **kw): return MagicMock()
+
+        class FakeDevice:
+            def __init__(self, collector):
+                self._d2d_collector = collector
+
+        class FakeRouter:
+            def __init__(self, messaging):
+                self._messaging = messaging
+                self._tenant = "beta"
+
+        messaging = FakeMessaging()
+        collector = PresenceCollector(messaging, tenant="beta", device_id="self")
+        driver._router = FakeRouter(messaging)
+        driver._device = FakeDevice(collector)
+        await driver.setup_subscriptions()
+        return collector
+
+    @pytest.mark.asyncio
+    async def test_peer_lost_routes_through_collector(self):
+        """In D2D mode, @on(event_name='peer_lost') registers an
+        on_peer_removed listener instead of subscribing to a subject."""
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(event_name="peer_lost")
+            async def on_lost(self, device_id, event_name, payload):
+                seen.append((device_id, event_name, payload))
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        collector = await self._setup_d2d(driver)
+
+        # Listener is registered on the collector, NOT a broker
+        # subscription.
+        assert len(collector._peer_removed_listeners) == 1
+
+        # Trigger the listener directly.
+        await collector._emit_peer_removed("interlock-01")
+        assert seen == [("interlock-01", "device.offline", {})]
+
+    @pytest.mark.asyncio
+    async def test_peer_present_routes_through_collector(self):
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(event_name="peer_present")
+            async def on_present(self, device_id, event_name, payload):
+                seen.append((device_id, event_name, payload))
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        collector = await self._setup_d2d(driver)
+
+        assert len(collector._new_peer_listeners) == 1
+
+        await collector._emit_new_peer("camera-7")
+        assert seen == [("camera-7", "device.online", {})]
+
+    @pytest.mark.asyncio
+    async def test_d2d_lifecycle_device_id_filter_exact(self):
+        """device_id= filter applies in the D2D delivery path too."""
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="interlock-01", event_name="peer_lost")
+            async def on_lost(self, device_id, event_name, payload):
+                seen.append(device_id)
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        collector = await self._setup_d2d(driver)
+
+        # Unrelated device -- handler should not fire.
+        await collector._emit_peer_removed("camera-99")
+        assert seen == []
+
+        # Target device -- handler fires.
+        await collector._emit_peer_removed("interlock-01")
+        assert seen == ["interlock-01"]
+
+    @pytest.mark.asyncio
+    async def test_d2d_lifecycle_device_id_filter_glob(self):
+        """Glob device_id= filter applies in the D2D delivery path."""
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="interlock-*", event_name="peer_lost")
+            async def on_lost(self, device_id, event_name, payload):
+                seen.append(device_id)
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        collector = await self._setup_d2d(driver)
+
+        for did in ("interlock-01", "interlock-99", "laser-01"):
+            await collector._emit_peer_removed(did)
+        assert seen == ["interlock-01", "interlock-99"]
+
+    @pytest.mark.asyncio
+    async def test_d2d_per_device_event_still_uses_broker(self):
+        """Per-device events go through the broker even in D2D mode."""
+        from device_connect_edge.discovery import PresenceCollector
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="cam-001", event_name="motion_detected")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        captured = {}
+
+        async def fake_subscribe(subject, callback, **kwargs):
+            captured["subject"] = subject
+            return MagicMock()
+
+        messaging = AsyncMock()
+        messaging.subscribe_with_subject = AsyncMock(side_effect=fake_subscribe)
+
+        class FakeDevice:
+            def __init__(self, collector):
+                self._d2d_collector = collector
+
+        class FakeRouter:
+            def __init__(self):
+                self._messaging = messaging
+                self._tenant = "beta"
+
+        collector = PresenceCollector(messaging, tenant="beta", device_id="self")
+        driver = MyDriver()
+        driver._router = FakeRouter()
+        driver._device = FakeDevice(collector)
+        await driver.setup_subscriptions()
+
+        # Per-device event still goes through the broker subscription;
+        # nothing is wired into the collector lifecycle listeners.
+        assert captured["subject"] == "device-connect.beta.cam-001.event.motion_detected"
+        assert collector._new_peer_listeners == []
+        assert collector._peer_removed_listeners == []
+
+
+class TestPresenceCollectorRemovedCallback:
+    """Symmetric callback for peer removals (graceful + timeout)."""
+
+    @pytest.mark.asyncio
+    async def test_graceful_departure_fires_on_peer_removed(self):
+        import json
+        from device_connect_edge.discovery import PresenceCollector
+
+        seen = []
+
+        async def on_removed(device_id):
+            seen.append(device_id)
+
+        messaging = AsyncMock()
+        collector = PresenceCollector(
+            messaging, tenant="beta", device_id="self",
+            on_peer_removed=on_removed,
+        )
+
+        # Seed: peer is currently known.
+        collector._peers["interlock-01"] = {"_last_seen": 0}
+
+        # Inject a graceful departure message.
+        msg = json.dumps({
+            "device_id": "interlock-01",
+            "departing": True,
+        }).encode()
+        await collector._on_presence(msg)
+
+        assert seen == ["interlock-01"]
+        assert "interlock-01" not in collector._peers
+
+    @pytest.mark.asyncio
+    async def test_prune_timeout_fires_on_peer_removed(self):
+        """Stale peers pruned by _prune_loop fire on_peer_removed."""
+        import time
+        from device_connect_edge.discovery import PresenceCollector
+
+        seen = []
+
+        async def on_removed(device_id):
+            seen.append(device_id)
+
+        messaging = AsyncMock()
+        collector = PresenceCollector(
+            messaging, tenant="beta", device_id="self",
+            on_peer_removed=on_removed,
+        )
+
+        # Seed: a peer whose _last_seen is way in the past.
+        collector._peers["camera-99"] = {"_last_seen": time.time() - 10_000}
+
+        # Walk the prune body directly (avoid waiting on the sleep loop).
+        async with collector._lock:
+            stale = [
+                did for did, info in collector._peers.items()
+                if time.time() - info.get("_last_seen", 0) > 1
+            ]
+            for did in stale:
+                del collector._peers[did]
+        for did in stale:
+            await collector._emit_peer_removed(did)
+
+        assert seen == ["camera-99"]
+
+    @pytest.mark.asyncio
+    async def test_add_on_peer_removed_supports_multiple_listeners(self):
+        """Multiple @on handlers can register without clobbering each other."""
+        from device_connect_edge.discovery import PresenceCollector
+
+        seen_a, seen_b = [], []
+
+        async def cb_a(d): seen_a.append(d)
+        async def cb_b(d): seen_b.append(d)
+
+        collector = PresenceCollector(AsyncMock(), tenant="beta", device_id="self")
+        collector.add_on_peer_removed(cb_a)
+        collector.add_on_peer_removed(cb_b)
+
+        await collector._emit_peer_removed("rig-7")
+        assert seen_a == ["rig-7"]
+        assert seen_b == ["rig-7"]
+
+    @pytest.mark.asyncio
+    async def test_constructor_callback_coexists_with_listeners(self):
+        """Single-listener constructor pattern keeps working."""
+        from device_connect_edge.discovery import PresenceCollector
+
+        seen_ctor, seen_added = [], []
+
+        async def ctor_cb(d): seen_ctor.append(d)
+        async def added_cb(d): seen_added.append(d)
+
+        collector = PresenceCollector(
+            AsyncMock(), tenant="beta", device_id="self",
+            on_new_peer=ctor_cb,
+        )
+        collector.add_on_new_peer(added_cb)
+
+        await collector._emit_new_peer("peer-1")
+        assert seen_ctor == ["peer-1"]
+        assert seen_added == ["peer-1"]

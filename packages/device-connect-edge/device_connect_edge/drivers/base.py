@@ -1117,6 +1117,38 @@ class DeviceDriver(ABC):
             return fnmatch.fnmatchcase(source_id, filter_pattern)
         return source_id == filter_pattern
 
+    async def _setup_lifecycle_d2d(
+        self,
+        collector,
+        canonical_lifecycle: str,
+        device_id_filter: Optional[str],
+        handler: Callable,
+    ) -> None:
+        """Route a lifecycle @on handler through PresenceCollector callbacks.
+
+        D2D mode has no registry publishing device.{online,offline}, so
+        we deliver the same logical event by subscribing to the
+        collector's per-peer add/remove notifications.
+        """
+        self_id = getattr(self, "_device_id", None) or "unknown"
+        logger.info(
+            "[%s] D2D lifecycle subscription: %s (filter=%s)",
+            self_id, canonical_lifecycle, device_id_filter,
+        )
+
+        async def deliver(source_device_id: str) -> None:
+            if not self._device_id_matches(device_id_filter, source_device_id):
+                return
+            try:
+                await handler(source_device_id, canonical_lifecycle, {})
+            except Exception as e:
+                logger.error("Error in D2D lifecycle handler: %s", e)
+
+        if canonical_lifecycle == "device.online":
+            collector.add_on_new_peer(deliver)
+        else:  # "device.offline"
+            collector.add_on_peer_removed(deliver)
+
     async def _setup_subscription(self, sub: Dict[str, Any]) -> None:
         """Set up a single event subscription.
 
@@ -1136,6 +1168,20 @@ class DeviceDriver(ABC):
         # event subscriptions.
         canonical_lifecycle = self._LIFECYCLE_ALIAS_TO_CANONICAL.get(event_name or "")
         is_lifecycle = canonical_lifecycle is not None
+
+        # D2D mode: lifecycle events come from the PresenceCollector
+        # (no registry to publish device.online/offline). Route the
+        # handler through the collector's callbacks; per-device event
+        # subscriptions still go through the broker.
+        d2d_collector = (
+            getattr(self._device, "_d2d_collector", None)
+            if (is_lifecycle and self._device is not None) else None
+        )
+        if is_lifecycle and d2d_collector is not None:
+            await self._setup_lifecycle_d2d(
+                d2d_collector, canonical_lifecycle, device_id, handler,
+            )
+            return
 
         # device_id may be a glob pattern (`interlock-*`, `rack-?-laser`).
         # The broker's wildcard is single-token only and lives between
