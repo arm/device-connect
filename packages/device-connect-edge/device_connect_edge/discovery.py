@@ -175,11 +175,11 @@ class PresenceCollector:
         messaging,
         tenant: str,
         on_new_peer: Optional[Callable[[str], Any]] = None,
+        on_peer_removed: Optional[Callable[[str], Any]] = None,
         device_id: str = "",
     ):
         self._messaging = messaging
         self._tenant = tenant
-        self._on_new_peer = on_new_peer
         self._device_id = device_id
         self._log_tag = f"D2D [{device_id}]" if device_id else "D2D"
         self._peers: Dict[str, dict] = {}
@@ -187,6 +187,66 @@ class PresenceCollector:
         self._sub = None
         self._prune_task: Optional[asyncio.Task] = None
         self._started = False
+        # Listener lists -- multiple callbacks per lifecycle event.
+        # The constructor-form callbacks seed the lists for backward
+        # compat with the single-listener pattern. Additional listeners
+        # (e.g. @on(event_name="peer_lost") handlers) attach via
+        # add_on_new_peer / add_on_peer_removed.
+        self._new_peer_listeners: List[Callable[[str], Any]] = []
+        self._peer_removed_listeners: List[Callable[[str], Any]] = []
+        if on_new_peer is not None:
+            self._new_peer_listeners.append(on_new_peer)
+        if on_peer_removed is not None:
+            self._peer_removed_listeners.append(on_peer_removed)
+
+    # Backward-compat aliases. Reading from `_on_new_peer` returns the
+    # first registered listener (or None); assigning replaces it. This
+    # preserves the existing device.py pattern of
+    # `collector._on_new_peer = lambda ...`.
+    @property
+    def _on_new_peer(self) -> Optional[Callable[[str], Any]]:
+        return self._new_peer_listeners[0] if self._new_peer_listeners else None
+
+    @_on_new_peer.setter
+    def _on_new_peer(self, cb: Optional[Callable[[str], Any]]) -> None:
+        if cb is None:
+            self._new_peer_listeners = []
+        elif self._new_peer_listeners:
+            self._new_peer_listeners[0] = cb
+        else:
+            self._new_peer_listeners.append(cb)
+
+    def add_on_new_peer(self, cb: Callable[[str], Any]) -> None:
+        """Register an additional callback for new-peer events."""
+        self._new_peer_listeners.append(cb)
+
+    def add_on_peer_removed(self, cb: Callable[[str], Any]) -> None:
+        """Register a callback for peer-removed events (graceful + timeout)."""
+        self._peer_removed_listeners.append(cb)
+
+    async def _emit_new_peer(self, device_id: str) -> None:
+        for cb in list(self._new_peer_listeners):
+            try:
+                result = cb(device_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.warning(
+                    "on_new_peer callback failed for device %s",
+                    device_id, exc_info=True,
+                )
+
+    async def _emit_peer_removed(self, device_id: str) -> None:
+        for cb in list(self._peer_removed_listeners):
+            try:
+                result = cb(device_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.warning(
+                    "on_peer_removed callback failed for device %s",
+                    device_id, exc_info=True,
+                )
 
     async def start(self) -> None:
         if self._started:
@@ -233,6 +293,7 @@ class PresenceCollector:
                 removed = self._peers.pop(device_id, None)
             if removed:
                 logger.info("%s: peer %s departed gracefully", self._log_tag, device_id)
+                await self._emit_peer_removed(device_id)
             return
 
         payload["_last_seen"] = time.time()
@@ -243,13 +304,7 @@ class PresenceCollector:
 
         if is_new:
             logger.info("%s: discovered peer %s", self._log_tag, device_id)
-            if self._on_new_peer:
-                try:
-                    result = self._on_new_peer(device_id)
-                    if inspect.isawaitable(result):
-                        await result
-                except Exception:
-                    logger.warning("on_new_peer callback failed for device %s", device_id, exc_info=True)
+            await self._emit_new_peer(device_id)
 
     async def _prune_loop(self) -> None:
         try:
@@ -264,6 +319,8 @@ class PresenceCollector:
                     for did in stale:
                         del self._peers[did]
                         logger.info("%s: peer %s timed out", self._log_tag, did)
+                for did in stale:
+                    await self._emit_peer_removed(did)
         except asyncio.CancelledError:
             raise
 
