@@ -360,3 +360,218 @@ class TestSetupSubscriptionsErrorIsolation:
         assert mock_messaging.subscribe_with_subject.await_count == 2
         # Only the second (successful) subscription was tracked
         assert len(driver._subscriptions) == 1
+
+
+# ── lifecycle subscriptions (device.online / device.offline) ──────
+
+class TestLifecycleSubscriptions:
+    """The registry publishes presence changes on a shared subject per
+    tenant: `device-connect.<tenant>.device.{online,offline}`. Drivers
+    use @on(event_name=...) to subscribe; both canonical names and
+    `peer_present`/`peer_lost` aliases must work."""
+
+    async def _setup_capture(self, driver):
+        """Wire driver to a fake router; return the captured subject + handler."""
+        captured = {}
+
+        async def fake_subscribe(subject, callback, **kwargs):
+            captured["subject"] = subject
+            captured["callback"] = callback
+            return MagicMock()
+
+        mock_messaging = AsyncMock()
+        mock_messaging.subscribe_with_subject = AsyncMock(side_effect=fake_subscribe)
+
+        class FakeRouter:
+            def __init__(self):
+                self._messaging = mock_messaging
+                self._tenant = "beta"
+
+        driver._router = FakeRouter()
+        await driver.setup_subscriptions()
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_device_offline_subscribes_to_lifecycle_subject(self):
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(event_name="device.offline")
+            async def on_lost(self, device_id, event_name, payload):
+                seen.append((device_id, event_name, payload))
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+
+        # Subscribed to the registry's lifecycle subject, not to a
+        # per-device .event.<name> subject.
+        assert captured["subject"] == "device-connect.beta.device.offline"
+
+        # Simulate a registry-published offline event.
+        import json
+        msg = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "device/offline",
+            "params": {"device_id": "interlock-01", "ts": "2026-05-06T00:00:00Z"},
+        }).encode()
+        await captured["callback"](msg, captured["subject"], None)
+
+        assert seen == [(
+            "interlock-01",
+            "device.offline",
+            {"device_id": "interlock-01", "ts": "2026-05-06T00:00:00Z"},
+        )]
+
+    @pytest.mark.asyncio
+    async def test_peer_lost_alias_resolves_to_offline_subject(self):
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(event_name="peer_lost")
+            async def on_peer_lost(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+        assert captured["subject"] == "device-connect.beta.device.offline"
+
+    @pytest.mark.asyncio
+    async def test_peer_present_alias_resolves_to_online_subject(self):
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(event_name="peer_present")
+            async def on_peer_present(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+        assert captured["subject"] == "device-connect.beta.device.online"
+
+    @pytest.mark.asyncio
+    async def test_device_id_filter_drops_other_devices(self):
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="interlock-01", event_name="peer_lost")
+            async def on_lost(self, device_id, event_name, payload):
+                seen.append(device_id)
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+
+        import json
+        # An unrelated device dropping out -- handler should NOT fire.
+        unrelated = json.dumps({
+            "method": "device/offline",
+            "params": {"device_id": "camera-99"},
+        }).encode()
+        await captured["callback"](unrelated, captured["subject"], None)
+        assert seen == []
+
+        # The device the handler cares about -- handler fires.
+        target = json.dumps({
+            "method": "device/offline",
+            "params": {"device_id": "interlock-01"},
+        }).encode()
+        await captured["callback"](target, captured["subject"], None)
+        assert seen == ["interlock-01"]
+
+    @pytest.mark.asyncio
+    async def test_per_device_event_path_unchanged(self):
+        """Non-lifecycle events still build the per-device subject."""
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="cam-001", event_name="motion_detected")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+        assert captured["subject"] == "device-connect.beta.cam-001.event.motion_detected"
+
+    @pytest.mark.asyncio
+    async def test_glob_device_id_lifecycle_filters_in_handler(self):
+        """device_id='interlock-*' on lifecycle: subscribe to shared
+        subject, filter by fnmatch in the handler."""
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="interlock-*", event_name="peer_lost")
+            async def on_lost(self, device_id, event_name, payload):
+                seen.append(device_id)
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+        assert captured["subject"] == "device-connect.beta.device.offline"
+
+        import json
+        for did, should_match in [
+            ("interlock-01", True),
+            ("interlock-99", True),
+            ("laser-01",     False),
+            ("interlock",    False),  # no suffix, glob requires at least one char after the dash
+        ]:
+            msg = json.dumps({
+                "method": "device/offline",
+                "params": {"device_id": did},
+            }).encode()
+            await captured["callback"](msg, captured["subject"], None)
+
+        assert seen == ["interlock-01", "interlock-99"]
+
+    @pytest.mark.asyncio
+    async def test_glob_device_id_per_device_uses_broker_wildcard(self):
+        """device_id='cam-*' on a non-lifecycle event subscribes to
+        the broker-wildcard subject and filters in the handler."""
+        seen = []
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_id="cam-*", event_name="motion")
+            async def on_motion(self, device_id, event_name, payload):
+                seen.append(device_id)
+
+            async def connect(self): pass
+            async def disconnect(self): pass
+
+        driver = MyDriver()
+        captured = await self._setup_capture(driver)
+        # Glob -> broker wildcard, not the literal pattern.
+        assert captured["subject"] == "device-connect.beta.*.event.motion"
+
+        import json
+        msg_body = json.dumps({"method": "motion", "params": {}}).encode()
+        # Simulate broker delivering events from three different devices.
+        for did in ("cam-001", "cam-rear", "robot-7"):
+            await captured["callback"](
+                msg_body, f"device-connect.beta.{did}.event.motion", None,
+            )
+        assert seen == ["cam-001", "cam-rear"]
