@@ -33,6 +33,7 @@ class TestDeviceConnectConnectionConfig:
 
         conn = conn_mod.DeviceConnection(nats_url="nats://myhost:4222")
         MockConfig.assert_called_once_with(
+            backend="nats",
             servers=["nats://myhost:4222"],
             credentials=None,
             tls_config=None,
@@ -92,6 +93,78 @@ class TestDeviceConnectConnectionConfig:
 
 
 # ── Auto-discovery helpers ───────────────────────────────────────
+
+
+class TestPortalCredentialsFile:
+    def test_load_portal_credentials_file(self, tmp_path):
+        creds = tmp_path / "portal.creds.json"
+        creds.write_text(
+            json.dumps(
+                {
+                    "device_id": "robot-1",
+                    "tenant": "erivan01",
+                    "nats": {
+                        "urls": ["nats://portal.deviceconnect.dev:4222"],
+                        "jwt": "eyJ-test",
+                        "nkey_seed": "SUATEST",
+                    },
+                }
+            )
+        )
+        meta = conn_mod.load_portal_credentials_file(creds)
+        assert meta["tenant"] == "erivan01"
+        assert meta["device_id"] == "robot-1"
+        assert meta["urls"] == ["nats://portal.deviceconnect.dev:4222"]
+        assert meta["auth"]["jwt"] == "eyJ-test"
+
+    @patch.object(conn_mod, "_auto_discover_tls", return_value=None)
+    @patch.object(conn_mod, "_auto_discover_credentials", return_value=None)
+    @patch("device_connect_agent_tools.connection.MessagingConfig")
+    def test_device_connection_uses_portal_urls_and_tenant(self, MockConfig, _ad_creds, _ad_tls, tmp_path):
+        creds = tmp_path / "portal.creds.json"
+        creds.write_text(
+            json.dumps(
+                {
+                    "tenant": "erivan01",
+                    "nats": {
+                        "urls": ["nats://portal.deviceconnect.dev:4222"],
+                        "jwt": "j",
+                        "nkey_seed": "s",
+                    },
+                }
+            )
+        )
+        mock_cfg = MagicMock()
+        mock_cfg.servers = ["nats://portal.deviceconnect.dev:4222"]
+        mock_cfg.credentials = {"jwt": "j", "nkey_seed": "s"}
+        mock_cfg.tls_config = None
+        mock_cfg.backend = "nats"
+        MockConfig.return_value = mock_cfg
+
+        with patch.dict(os.environ, {"NATS_CREDENTIALS_FILE": str(creds)}, clear=True):
+            conn = conn_mod.DeviceConnection()
+            MockConfig.assert_called_once()
+            kwargs = MockConfig.call_args.kwargs
+            assert kwargs["servers"] == ["nats://portal.deviceconnect.dev:4222"]
+            assert kwargs["backend"] == "nats"
+            assert conn.zone == "erivan01"
+            conn.close()
+
+    @patch.object(conn_mod, "_auto_discover_tls", return_value=None)
+    @patch.object(conn_mod, "_auto_discover_credentials", return_value=None)
+    @patch("device_connect_agent_tools.connection.MessagingConfig")
+    def test_device_connection_zone_from_tenant_env(self, MockConfig, _ad_creds, _ad_tls):
+        mock_cfg = MagicMock()
+        mock_cfg.servers = ["nats://localhost:4222"]
+        mock_cfg.credentials = None
+        mock_cfg.tls_config = None
+        mock_cfg.backend = "nats"
+        MockConfig.return_value = mock_cfg
+
+        with patch.dict(os.environ, {"TENANT": "erivan01"}, clear=True):
+            conn = conn_mod.DeviceConnection()
+            assert conn.zone == "erivan01"
+            conn.close()
 
 
 class TestAutoDiscovery:

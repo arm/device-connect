@@ -95,6 +95,65 @@ def _auto_discover_credentials() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _portal_credentials_path() -> Optional[str]:
+    """Return the portal ``.creds.json`` path from env, if configured."""
+    for name in ("NATS_CREDENTIALS_FILE", "PORTAL_CREDENTIALS_FILE"):
+        path = os.getenv(name)
+        if path and path.endswith(".creds.json") and Path(path).expanduser().is_file():
+            return str(Path(path).expanduser())
+    return None
+
+
+def load_portal_credentials_file(path: str | Path) -> Dict[str, Any]:
+    """Load tenant, broker URLs, auth, and TLS from a portal ``.creds.json`` file."""
+    data = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"expected JSON object in credentials file: {path}")
+
+    nats_config = data.get("nats", {}) if isinstance(data.get("nats"), dict) else {}
+    urls = nats_config.get("urls", [])
+    if isinstance(urls, str):
+        urls = [urls]
+
+    auth: Dict[str, Any] = {}
+    if "jwt" in nats_config:
+        auth["jwt"] = nats_config["jwt"]
+    if "nkey_seed" in nats_config:
+        auth["nkey_seed"] = nats_config["nkey_seed"]
+
+    tls_config = None
+    if "tls_ca_file" in nats_config:
+        tls_config = {"ca_file": nats_config["tls_ca_file"]}
+
+    return {
+        "tenant": data.get("tenant"),
+        "device_id": data.get("device_id"),
+        "urls": [u.strip() for u in urls if isinstance(u, str) and u.strip()],
+        "auth": auth or None,
+        "tls": tls_config,
+    }
+
+
+def _resolve_portal_credentials() -> Optional[Dict[str, Any]]:
+    path = _portal_credentials_path()
+    if not path:
+        return None
+    return load_portal_credentials_file(path)
+
+
+def _backend_for_servers(servers: List[str]) -> Optional[str]:
+    if not servers:
+        return None
+    if all(
+        url.startswith(("nats://", "tls://", "nats+tls://", "ws://", "wss://"))
+        for url in servers
+    ):
+        return "nats"
+    if all(url.startswith(("tcp/", "udp/", "tls/", "quic/")) for url in servers):
+        return "zenoh"
+    return None
+
+
 def _auto_discover_tls() -> Optional[Dict[str, Any]]:
     """Search well-known paths for the CA certificate."""
     root = _find_device_connect_root()
@@ -201,19 +260,41 @@ class DeviceConnection:
     def __init__(
         self,
         nats_url: Optional[str] = None,
-        zone: str = "default",
+        zone: Optional[str] = None,
         credentials: Optional[Dict[str, Any]] = None,
         tls_config: Optional[Dict[str, Any]] = None,
         request_timeout: float = 30.0,
+        *,
+        servers: Optional[List[str]] = None,
     ):
-        self.zone = zone
+        portal = _resolve_portal_credentials()
+
+        if zone is None:
+            zone = os.environ.get("TENANT") or (portal or {}).get("tenant")
+        self.zone = zone or "default"
         self._request_timeout = request_timeout
+
+        explicit_servers: Optional[List[str]] = None
+        if servers:
+            explicit_servers = list(servers)
+        elif nats_url:
+            explicit_servers = [nats_url]
+        elif portal and portal.get("urls"):
+            explicit_servers = portal["urls"]
+
+        explicit_credentials = credentials or (portal or {}).get("auth")
+        explicit_tls = tls_config or (portal or {}).get("tls")
+
+        backend = os.getenv("MESSAGING_BACKEND")
+        if not backend and explicit_servers:
+            backend = _backend_for_servers(explicit_servers)
 
         # Resolve config: explicit params -> env vars (via MessagingConfig) -> auto-discovery
         config = MessagingConfig(
-            servers=[nats_url] if nats_url else None,
-            credentials=credentials,
-            tls_config=tls_config,
+            backend=backend,
+            servers=explicit_servers,
+            credentials=explicit_credentials,
+            tls_config=explicit_tls,
         )
 
         self._backend = config.backend  # "nats", "zenoh", or "mqtt" (auto-detected)
@@ -642,46 +723,56 @@ class DeviceConnection:
 
 def connect(
     nats_url: Optional[str] = None,
-    zone: str = "default",
+    zone: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
     tls_config: Optional[Dict[str, Any]] = None,
     request_timeout: float = 30.0,
+    *,
+    servers: Optional[List[str]] = None,
 ) -> None:
     """Initialize the messaging connection.
 
     The backend (NATS, Zenoh, MQTT) is auto-detected from environment
     variables or can be set via MESSAGING_BACKEND.
 
+    When ``NATS_CREDENTIALS_FILE`` (or ``PORTAL_CREDENTIALS_FILE``) points at a
+    portal ``.creds.json``, broker URLs, JWT auth, TLS, and tenant are loaded
+    from that file automatically (same bundle as the MCP bridge).
+
     Resolution order (for each setting):
       1. Explicit parameter
-      2. Environment variable
-      3. Auto-discovery from well-known paths
+      2. Portal ``.creds.json`` (URLs, auth, tenant)
+      3. Environment variable
+      4. Auto-discovery from well-known paths
 
     Environment variables:
       - MESSAGING_BACKEND — "nats", "zenoh", or "mqtt" (auto-detected)
       - MESSAGING_URLS    — broker URLs (comma-separated)
       - ZENOH_CONNECT     — Zenoh endpoints (auto-selects zenoh backend)
       - NATS_URL          — NATS broker URL (legacy)
+      - NATS_CREDENTIALS_FILE — portal ``.creds.json`` (URLs + JWT + tenant)
       - TENANT            — Device Connect zone/namespace (default: "default")
 
     Args:
         nats_url: Broker URL (works for any backend despite the name).
-        zone: Device Connect tenant/zone namespace.
+        zone: Device Connect tenant/zone namespace. When omitted, uses ``TENANT``
+            env or the tenant field from a portal credentials file.
         credentials: Auth credentials dict.
         tls_config: TLS configuration dict.
         request_timeout: Default timeout for device RPC calls.
+        servers: Broker URL list (overrides env defaults; use for multi-broker NATS).
     """
     global _connection
     with _lock:
         if _connection is not None:
             return
-        zone = zone or os.environ.get("TENANT", "default")
         conn = DeviceConnection(
             nats_url=nats_url,
             zone=zone,
             credentials=credentials,
             tls_config=tls_config,
             request_timeout=request_timeout,
+            servers=servers,
         )
         conn.connect()
         _connection = conn

@@ -325,6 +325,27 @@ connect(
 )
 ```
 
+Portal-generated `.creds.json` files can also carry the broker URL and tenant.
+When `NATS_CREDENTIALS_FILE` points to one of these bundles, `connect()` reads
+the `nats.urls`, `nats.jwt`, `nats.nkey_seed`, optional TLS CA, and top-level
+`tenant` fields, so agents and the MCP bridge use the same portal endpoint and
+Device Connect namespace without passing those values separately:
+
+```json
+{
+  "tenant": "lab-a",
+  "nats": {
+    "urls": ["nats://portal.example:4222"],
+    "jwt": "...",
+    "nkey_seed": "..."
+  }
+}
+```
+
+```bash
+NATS_CREDENTIALS_FILE=./lab-a-agent.creds.json python my_agent.py
+```
+
 ### Explicit Configuration
 
 ```python
@@ -344,7 +365,7 @@ connect(
 | `MESSAGING_BACKEND` | `zenoh` (default), `nats`, or `mqtt` |
 | `MESSAGING_URLS` | Broker URLs, comma-separated (generic) |
 | `NATS_URL` | NATS broker URL (when using NATS backend) |
-| `NATS_CREDENTIALS_FILE` | Path to `.creds.json` file |
+| `NATS_CREDENTIALS_FILE` | Path to `.creds.json` file; portal bundles may also provide broker URLs and tenant |
 | `NATS_JWT` + `NATS_NKEY_SEED` | Direct JWT auth |
 | `NATS_TLS_CA_FILE` | CA certificate for TLS |
 | `TENANT` | Device Connect zone/namespace (default: `"default"`) |
@@ -352,7 +373,7 @@ connect(
 
 Resolution order: explicit parameter > environment variable > auto-discovery.
 
-### Device-to-Device Mode (No Infrastructure)
+### Device-to-Device Mode
 
 With no endpoint URLs configured, the discovery tools automatically use D2D presence-based discovery (Zenoh multicast scouting) instead of querying the registry service. No Docker infrastructure needed:
 
