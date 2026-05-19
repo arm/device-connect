@@ -574,9 +574,20 @@ def create_parser() -> argparse.ArgumentParser:
     p_reg.add_argument("--broker", default=None, help="Broker URL")
     p_reg.add_argument("--keepalive", action="store_true", help="Start heartbeat loop")
 
-    # discover command
-    p_discover = sub.add_parser("discover", help="Discover uncommissioned devices")
-    p_discover.add_argument("--timeout", type=int, default=5, help="Timeout in seconds")
+    # mdns-scan: discover uncommissioned devices on the local network.
+    # Renamed from the historical ``discover`` verb so the selector-driven
+    # ``discover`` below (which queries the fleet, not the local network)
+    # can take the natural name.
+    p_scan = sub.add_parser(
+        "mdns-scan", help="Discover uncommissioned devices via mDNS",
+        aliases=["scan"],
+    )
+    p_scan.add_argument("--timeout", type=int, default=5, help="Timeout in seconds")
+
+    # Selector-driven fleet discovery (new). Registers ``discover`` and
+    # ``discover-labels`` as parser entries.
+    from device_connect_server.devctl import selector_cli
+    selector_cli.register_subparsers(sub)
 
     # commission command
     p_commission = sub.add_parser("commission", help="Commission a device with PIN")
@@ -617,8 +628,16 @@ def main(argv: Optional[List[str]] = None) -> None:
                 loop.stop()
                 print("\nbye!")
 
-    elif args.cmd == "discover":
+    elif args.cmd in ("mdns-scan", "scan"):
         asyncio.run(discover_devices(timeout=args.timeout))
+
+    elif args.cmd == "discover":
+        from device_connect_server.devctl import selector_cli
+        sys.exit(selector_cli.run_discover(args))
+
+    elif args.cmd == "discover-labels":
+        from device_connect_server.devctl import selector_cli
+        sys.exit(selector_cli.run_discover_labels(args))
 
     elif args.cmd == "commission":
         asyncio.run(

@@ -414,13 +414,33 @@ class DeviceConnection:
 
     # ── Broadcast ────────────────────────────────────────────────────
 
+    def publish_broadcast(self, envelope: Dict[str, Any]) -> None:
+        """Publish a selector-driven broadcast envelope to the fanout subject.
+
+        The envelope shape is documented in
+        ``device_connect_edge.device.DeviceRuntime._broadcast_subscription``;
+        every device subscribed to ``device-connect.<tenant>.broadcast``
+        receives the message and self-elects via ``targets`` and
+        the optional ``where`` predicate.
+        """
+        return self._run(self._async_publish_broadcast(envelope))
+
+    async def _async_publish_broadcast(self, envelope: Dict[str, Any]) -> None:
+        subject = f"device-connect.{self.zone}.broadcast"
+        await self._client.publish(subject, json.dumps(envelope).encode())
+
     def broadcast(
         self,
         function: str,
         params: Optional[Dict[str, Any]] = None,
         timeout: float = 5.0,
     ) -> List[Dict[str, Any]]:
-        """Invoke a function on all discovered devices and collect results."""
+        """Invoke a function on all discovered devices and collect results.
+
+        Sequential sync fan-out (one invoke per device). Predates the
+        selector-driven broadcast tool; left in place for callers that want
+        a simple "call this on everyone" without setting up subscriptions.
+        """
         devices = self.list_devices()
         results = []
         for d in devices:

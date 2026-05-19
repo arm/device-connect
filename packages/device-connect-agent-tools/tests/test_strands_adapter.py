@@ -55,7 +55,10 @@ def _mock_strands_and_connection():
 EXPECTED_TOOLS = {
     "discover_labels",
     "discover",
-    "invoke_device",
+    "invoke",
+    "invoke_many",
+    "broadcast",
+    "await_replies",
     "invoke_device_with_fallback",
     "get_device_status",
     "discover_devices",
