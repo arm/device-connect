@@ -339,6 +339,62 @@ class TestDiscoverLabels:
         assert "axis-qualified" in v["error"]["message"]
 
 
+# -- Long-tail truncation -------------------------------------------
+
+
+class TestLongTailTruncation:
+    """Multi-axis ``discover_labels()`` and ``discover()`` ``label_histogram``
+    crop each key's values to the top-N by frequency, advertising the cropped
+    count via a sibling ``more`` field. Per-key ``discover_labels(key=...)``
+    enumerates fully via its own pagination cursor and is unaffected.
+
+    See ``docs/discovery.md`` §"Response envelopes" and the discovery design
+    doc §3 "Scale handling".
+    """
+
+    def test_no_more_field_when_under_top_n(self, mock_conn):
+        # Default LABEL_VALUES_TOP_N (20) >> any key in the sample fleet.
+        v = tools_mod.discover_labels()
+        for axis_keys in (v["device_keys"], v["function_keys"], v["event_keys"]):
+            for entry in axis_keys.values():
+                assert "more" not in entry, (
+                    "more should be omitted when no truncation occurred"
+                )
+
+    def test_more_field_present_when_over_top_n(self, mock_conn):
+        # Force truncation: cap at 2 values per key. ``category`` on the device
+        # axis has 4 distinct values (camera, inference, robot, sensor).
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 2):
+            v = tools_mod.discover_labels()
+        cat = v["device_keys"]["category"]
+        assert len(cat["values"]) == 2
+        assert cat["more"] == 2  # 4 distinct values - 2 returned
+
+    def test_truncation_keeps_highest_count_values(self, mock_conn):
+        # ``category`` counts: camera=2, inference=1, robot=1, sensor=1.
+        # Top-2 by count desc, then alpha tiebreak → camera, inference.
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 2):
+            v = tools_mod.discover_labels()
+        cat = v["device_keys"]["category"]
+        assert list(cat["values"].keys()) == ["camera", "inference"]
+
+    def test_per_key_form_ignores_top_n_truncation(self, mock_conn):
+        # The per-key form is paginated; LABEL_VALUES_TOP_N must not crop it.
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 1):
+            v = tools_mod.discover_labels(key="device.category")
+        assert "more" not in v
+        assert len(v["values"]) == 4
+
+    def test_discover_label_histogram_also_truncates(self, mock_conn):
+        # ``discover()`` returns the same per-key vocabulary shape under
+        # ``label_histogram``; truncation should apply there too.
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 2):
+            r = tools_mod.discover("device(*)")
+        cat = r["label_histogram"]["category"]
+        assert len(cat["values"]) == 2
+        assert cat["more"] == 2
+
+
 # -- Deprecation warnings ------------------------------------------
 
 

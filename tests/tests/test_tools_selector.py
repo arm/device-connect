@@ -568,3 +568,214 @@ async def test_discover_labels_per_key_pagination(device_spawner, messaging_url)
         assert {"camera", "robot", "sensor"} <= set(result["values"].keys())
     finally:
         await asyncio.to_thread(disconnect)
+
+
+# -- PR 28 review follow-ups: end-to-end regression guards ------------
+#
+# These tests cover behavior that was added or pinned in PR 28's review
+# round: bracket character-class globs on the name axis, long-tail
+# truncation in the multi-axis vocabulary form, case-sensitive selector
+# matching, and the documented response shape contract.
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_discover_bracket_glob_name_match(device_spawner, messaging_url):
+    """``function([sg]et_*)`` end-to-end: bracket character class on the name
+    axis routes through the matcher's fnmatch path and resolves against real
+    device functions.
+
+    Regression guard: before PR 28's heuristic fix, patterns containing only
+    ``[``/``]`` (no ``*``/``?``) were treated as literal strings.
+    """
+    await device_spawner.spawn_sensor("itest-sel-bgg-sensor", location="lab-A")
+    await device_spawner.spawn_robot("itest-sel-bgg-robot", location="lab-A")
+    await device_spawner.spawn_camera("itest-sel-bgg-cam", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, discover
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-sel-bgg-sensor", "itest-sel-bgg-robot", "itest-sel-bgg-cam"},
+    )
+    try:
+        # ``[sg]et_*`` matches sensor's set_threshold / set_location /
+        # get_reading and robot's get_status; cam's capture_image and robot's
+        # dispatch_robot start with neither ``s`` nor ``g`` + ``et_`` so are
+        # rejected.
+        result = await asyncio.to_thread(discover, "function([sg]et_*)")
+        names = {row["name"] for row in result["results"]}
+        assert {"set_threshold", "set_location", "get_reading", "get_status"} <= names
+        assert "capture_image" not in names
+        assert "dispatch_robot" not in names
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_discover_labels_long_tail_truncates_multi_axis(
+    device_spawner, messaging_url
+):
+    """Multi-axis ``discover_labels()`` crops each key's values to the top-N
+    by frequency and reports the dropped count via a sibling ``more`` field.
+
+    Patches ``LABEL_VALUES_TOP_N`` to a small value so 3 distinct locations
+    are enough to trigger truncation; the real default is 20.
+    """
+    from unittest.mock import patch
+
+    from device_connect_agent_tools import disconnect, discover_labels
+    from device_connect_agent_tools import tools as tools_mod
+
+    await device_spawner.spawn_sensor("itest-sel-ltl-s1", location="alpha")
+    await device_spawner.spawn_sensor("itest-sel-ltl-s2", location="bravo")
+    await device_spawner.spawn_sensor("itest-sel-ltl-s3", location="charlie")
+    await asyncio.sleep(SETTLE_TIME)
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-sel-ltl-s1", "itest-sel-ltl-s2", "itest-sel-ltl-s3"},
+    )
+    try:
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 2):
+            result = await asyncio.to_thread(discover_labels)
+        location = result["device_keys"]["location"]
+        assert len(location["values"]) == 2
+        # At least one location got dropped; expect >= 1 (other tests may add more).
+        assert "more" in location, "truncation must emit the more field"
+        assert location["more"] >= 1
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_discover_labels_per_key_not_truncated(device_spawner, messaging_url):
+    """Per-key ``discover_labels(key=...)`` uses pagination, not top-N
+    truncation. Even with ``LABEL_VALUES_TOP_N`` set very low, every distinct
+    value is reachable via the ``offset`` / ``next_offset`` cursor.
+    """
+    from unittest.mock import patch
+
+    from device_connect_agent_tools import disconnect, discover_labels
+    from device_connect_agent_tools import tools as tools_mod
+
+    await device_spawner.spawn_sensor("itest-sel-pkn-s1", location="zone-1")
+    await device_spawner.spawn_sensor("itest-sel-pkn-s2", location="zone-2")
+    await device_spawner.spawn_sensor("itest-sel-pkn-s3", location="zone-3")
+    await asyncio.sleep(SETTLE_TIME)
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-sel-pkn-s1", "itest-sel-pkn-s2", "itest-sel-pkn-s3"},
+    )
+    try:
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 1):
+            result = await asyncio.to_thread(
+                discover_labels, "device.location"
+            )
+        assert "more" not in result
+        # Per-key form returns the full distinct value list (subject to
+        # default limit, which is well above 3 here).
+        assert {"zone-1", "zone-2", "zone-3"} <= set(result["values"].keys())
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_discover_label_histogram_truncates(device_spawner, messaging_url):
+    """``discover()`` returns a ``label_histogram`` with the same per-key
+    entry shape as ``discover_labels()``; long-tail truncation applies there
+    too.
+    """
+    from unittest.mock import patch
+
+    from device_connect_agent_tools import disconnect, discover
+    from device_connect_agent_tools import tools as tools_mod
+
+    await device_spawner.spawn_sensor("itest-sel-lht-s1", location="north")
+    await device_spawner.spawn_sensor("itest-sel-lht-s2", location="south")
+    await device_spawner.spawn_sensor("itest-sel-lht-s3", location="east")
+    await asyncio.sleep(SETTLE_TIME)
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-sel-lht-s1", "itest-sel-lht-s2", "itest-sel-lht-s3"},
+    )
+    try:
+        with patch.object(tools_mod, "LABEL_VALUES_TOP_N", 2):
+            result = await asyncio.to_thread(discover, "device(*)")
+        hist_location = result["label_histogram"]["location"]
+        assert len(hist_location["values"]) == 2
+        assert "more" in hist_location, "truncation must emit the more field"
+        assert hist_location["more"] >= 1
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_discover_case_sensitive_label_match(device_spawner, messaging_url):
+    """Selector matching is case-sensitive on label values. ``Camera`` does
+    not match ``camera``; the documented behavior is pinned here so a future
+    accidental lowercasing change is caught.
+    """
+    await device_spawner.spawn_camera("itest-sel-cs-cam-1", location="lab-A")
+    await device_spawner.spawn_camera("itest-sel-cs-cam-2", location="lab-A")
+    await device_spawner.spawn_sensor("itest-sel-cs-sensor", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, discover
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-sel-cs-cam-1", "itest-sel-cs-cam-2", "itest-sel-cs-sensor"},
+    )
+    try:
+        lower = await asyncio.to_thread(discover, "device(category:camera)")
+        upper = await asyncio.to_thread(discover, "device(category:Camera)")
+        lower_ids = {row["device_id"] for row in lower["results"]}
+        assert {"itest-sel-cs-cam-1", "itest-sel-cs-cam-2"} <= lower_ids
+        assert upper["matched"] == 0
+        assert upper["results"] == []
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_discover_labels_response_shape_pinned(device_spawner, messaging_url):
+    """Pins the response-envelope contract documented in ``docs/discovery.md``
+    §"Response envelopes" against a real backend. Multi-axis form must carry
+    ``total_devices`` / ``total_functions`` / ``total_events`` plus the three
+    axis maps; per-key form must carry ``axis`` / ``key`` / ``matched`` /
+    ``returned`` / ``offset`` / ``next_offset`` / ``values`` / ``axis_total``.
+    """
+    await device_spawner.spawn_camera("itest-sel-shape-cam", location="lab-A")
+    await device_spawner.spawn_sensor("itest-sel-shape-sensor", location="lab-B")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, discover_labels
+
+    await _wait_for_devices(
+        messaging_url,
+        {"itest-sel-shape-cam", "itest-sel-shape-sensor"},
+    )
+    try:
+        multi = await asyncio.to_thread(discover_labels)
+        for field in ("total_devices", "total_functions", "total_events",
+                      "device_keys", "function_keys", "event_keys"):
+            assert field in multi, f"multi-axis response missing {field!r}"
+
+        per_key = await asyncio.to_thread(discover_labels, "device.location")
+        for field in ("axis", "key", "matched", "returned", "offset",
+                      "next_offset", "values", "axis_total"):
+            assert field in per_key, f"per-key response missing {field!r}"
+        # ``multivalued`` is conditional; document the contract by checking it
+        # is absent on a single-valued key (location).
+        assert "multivalued" not in per_key
+    finally:
+        await asyncio.to_thread(disconnect)

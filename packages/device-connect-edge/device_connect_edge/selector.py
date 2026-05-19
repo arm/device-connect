@@ -42,6 +42,16 @@ from typing import Dict, List, Optional, Tuple, Union
 LabelValue = Union[str, List[str]]
 Labels = Dict[str, LabelValue]
 
+# Characters that make ``fnmatch`` treat a pattern as a glob rather than a
+# literal. Must stay in sync with ``fnmatch``'s grammar — ``*`` (any run),
+# ``?`` (any single char), and ``[seq]`` / ``[!seq]`` character classes.
+_GLOB_META = frozenset("*?[")
+
+
+def _is_glob(pattern: str) -> bool:
+    """True if ``pattern`` contains any ``fnmatch`` meta-character."""
+    return any(c in _GLOB_META for c in pattern)
+
 
 class SelectorParseError(ValueError):
     """Raised when a selector string cannot be parsed."""
@@ -80,7 +90,8 @@ class KeyFilter:
     """Filter on a single label key.
 
     Values are OR'd: any matching value is sufficient. Each value may contain
-    glob characters (``*`` and ``?``) per ``fnmatch`` semantics.
+    glob characters per ``fnmatch`` semantics (``*``, ``?``, and ``[seq]`` /
+    ``[!seq]`` character classes).
 
     ``children`` is reserved for grammar extensions (nested boolean
     expressions, AND-within-key, negation) and is empty in the current
@@ -105,7 +116,7 @@ class KeyFilter:
         else:
             actual = (label_value,)
         for pattern in self.values:
-            if "*" in pattern or "?" in pattern:
+            if _is_glob(pattern):
                 for a in actual:
                     if fnmatch.fnmatchcase(a, pattern):
                         return True
@@ -130,7 +141,7 @@ class Filter:
         """True iff this filter matches the given entity."""
         if self.name_match is not None:
             pattern = self.name_match
-            if "*" in pattern or "?" in pattern:
+            if _is_glob(pattern):
                 if not fnmatch.fnmatchcase(name, pattern):
                     return False
             elif name != pattern:

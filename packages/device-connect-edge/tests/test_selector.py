@@ -57,6 +57,24 @@ class TestKeyFilter:
         assert kf.matches("lab-A/optics-bench")
         assert not kf.matches("lab-B")
 
+    def test_character_class_glob(self):
+        # ``[abc]rgb`` is an fnmatch character class — should match argb/brgb/crgb
+        # and not literal text "[abc]rgb". Regression guard against treating
+        # ``[``-bearing patterns as literal strings.
+        kf = KeyFilter("modality", ("[abc]rgb",))
+        assert kf.matches("argb")
+        assert kf.matches("brgb")
+        assert kf.matches("crgb")
+        assert not kf.matches("drgb")
+        assert not kf.matches("[abc]rgb")
+
+    def test_negated_character_class_glob(self):
+        # ``[!abc]rgb`` matches any single character not in {a,b,c} followed by ``rgb``.
+        kf = KeyFilter("modality", ("[!abc]rgb",))
+        assert kf.matches("drgb")
+        assert kf.matches("xrgb")
+        assert not kf.matches("argb")
+
 
 # -- Filter --------------------------------------------------------
 
@@ -77,6 +95,16 @@ class TestFilter:
         assert f.matches("set_threshold", {})
         assert f.matches("set_location", {})
         assert not f.matches("get_reading", {})
+
+    def test_name_match_character_class_glob(self):
+        # Brackets-only pattern (no ``*`` / ``?``) exercises the glob-detection
+        # heuristic in isolation — a ``*`` in the pattern would route through
+        # fnmatch regardless and hide the bug.
+        f = Filter(name_match="[sg]et_threshold")
+        assert f.matches("set_threshold", {})
+        assert f.matches("get_threshold", {})
+        assert not f.matches("put_threshold", {})
+        assert not f.matches("[sg]et_threshold", {})
 
     def test_and_across_keys(self):
         f = Filter(

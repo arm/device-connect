@@ -82,6 +82,15 @@ Keys inside `device(...)` resolve against device labels; keys inside
 resolve against event labels. The `.` chains: "narrow to these devices,
 then narrow to these functions or events on them."
 
+### Case sensitivity
+
+Selector matching is **case-sensitive** on both label keys and values, so
+`device(category:Camera)` and `device(category:camera)` are not
+equivalent. Kubernetes label selectors and AWS resource tag matching are
+case-sensitive; we follow that convention. Use lowercase for label keys
+and values as the convention in this repo; drivers in `tests/drivers/`
+follow that.
+
 ### Selector examples
 
 ```
@@ -118,9 +127,14 @@ which dimensions are available.
 - With a `key` like `"device.location"` or `"function.direction"`:
   paginates the full value list for that one key.
 
-## Response envelope
+## Response envelopes
 
-`discover` returns a stable envelope:
+The three response shapes below — one for `discover`, two for
+`discover_labels` — are the source of truth for callers. Fields not
+listed are reserved for forward-compatible extensions; do not rely on
+field order.
+
+### `discover`
 
 ```json
 {
@@ -156,6 +170,96 @@ Fields:
 
 The hard ceiling on `limit` is 1000 to prevent runaway responses; ask for
 more pages instead.
+
+### `discover_labels` — multi-axis form (no `key`)
+
+```json
+{
+  "total_devices": 1247,
+  "total_functions": 7100,
+  "total_events": 1292,
+  "device_keys": {
+    "category": {
+      "values": {"camera": 312, "robot": 89, "sensor": 601},
+      "multivalued": true,
+      "unique_devices": 1002
+    },
+    "location": {
+      "values": {"warehouse1/loading-dock": 120, "warehouse1/yard": 80, "lab-A/optics-bench": 45},
+      "more": 1227
+    }
+  },
+  "function_keys": {
+    "direction": {"values": {"read": 4200, "write": 2900}}
+  },
+  "event_keys": {
+    "modality": {"values": {"motion": 812, "thermal": 480}}
+  }
+}
+```
+
+Fields:
+
+- `total_devices` / `total_functions` / `total_events` - fleet-wide entity
+  counts on each axis.
+- `device_keys` / `function_keys` / `event_keys` - per-axis vocabulary.
+  Each value is a map of label key → entry, where each entry contains:
+  - `values` - `{value: count}` map sorted by descending count, capped
+    at the top-N most-frequent values per key (default `20`,
+    configurable via `DEVICE_CONNECT_LABEL_VALUES_TOP_N`).
+  - `more` - present and `> 0` iff the value list was cropped; the
+    integer count of values omitted from this page. Omitted when no
+    truncation occurred. To enumerate the full list, switch to the
+    per-key form (`discover_labels(key="device.location")`).
+  - `multivalued` - present and `true` iff at least one entity carries a
+    list value for this key. Omitted when the key is single-valued
+    everywhere on this axis.
+  - `unique_devices` - device-axis only; the number of devices that
+    carry this key at least once (deduplicates list values). Omitted on
+    the function and event axes.
+
+The same per-key entry shape is used inside `discover()`'s
+`label_histogram`, including `more` truncation. Per-key
+`discover_labels(key=...)` enumerates fully via its own pagination
+cursor and is not truncated.
+
+### `discover_labels` — per-key form (`key="device.location"`, etc.)
+
+This form is paginated, not truncated: every distinct value is reachable
+across pages via the `offset` / `next_offset` cursor. There is no
+`more` field here; that field is specific to the multi-axis form above.
+
+```json
+{
+  "axis": "device",
+  "key": "location",
+  "matched": 247,
+  "returned": 50,
+  "offset": 0,
+  "next_offset": 50,
+  "values": {"lab-A/optics-bench": 12, "lab-A/dock": 9, "warehouse1/yard": 8},
+  "axis_total": 1247,
+  "multivalued": true
+}
+```
+
+Fields:
+
+- `axis` - one of `"device"`, `"function"`, `"event"` (parsed from the
+  dotted `key` argument).
+- `key` - the label key without the axis prefix.
+- `matched` - total distinct values for this key on this axis (across
+  all pages).
+- `returned` - values on this page.
+- `offset` / `next_offset` - pagination cursor; `next_offset` is `null`
+  when no more pages.
+- `values` - `{value: count}` map for this page, sorted by descending
+  count.
+- `axis_total` - total entities on this axis (e.g., devices when
+  `axis == "device"`); use as the denominator if you want coverage
+  percentages.
+- `multivalued` - present and `true` iff this key is multivalued on this
+  axis. Omitted otherwise.
 
 ## Error responses
 
@@ -229,3 +333,26 @@ while True:
         break
     offset = page["next_offset"]
 ```
+
+## Known limits
+
+### Client-side filtering (v1)
+
+`discover()` and `discover_labels()` currently load the full fleet via
+`Connection.list_devices()` and apply the selector in-process. This is
+fine at today's fleet sizes (low hundreds of devices) but does not scale
+to the 10K-device worked example: the entire device list crosses the
+wire on every call, regardless of how selective the selector is.
+
+Push-down to the registry is intentionally deferred for v1 — the
+selector grammar and response envelopes are designed so that swapping
+the in-process filter for a registry-side query is a transparent
+optimization, not a breaking change. Until then, callers running
+against large fleets should:
+
+- prefer `discover_labels(key=…)` over `discover()` when they only need
+  vocabulary, and
+- treat `discover("device(*)")` as an O(fleet) operation, not O(matched).
+
+The operations layer should plan for push-down ahead of fleet growth
+past ~1K devices.

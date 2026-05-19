@@ -65,6 +65,24 @@ except (ValueError, TypeError):
     )
     DC_FUNCTION_THRESHOLD = 20
 
+# Multi-axis ``discover_labels()`` and ``discover()`` ``label_histogram``
+# crop each key's values to this many entries (the highest-frequency
+# values), advertising the cropped count via a sibling ``more`` field.
+# Per the discovery design doc §3 "Scale handling": the multi-axis form
+# is meant to be self-limiting; agents needing the full value list use
+# ``discover_labels(key=...)`` which paginates instead.
+#
+# Stored unclamped so test patches see what they set; ``_format_label_histogram``
+# clamps to ``[1, 200]`` at use to keep invariants regardless of override path.
+try:
+    LABEL_VALUES_TOP_N = int(os.getenv("DEVICE_CONNECT_LABEL_VALUES_TOP_N", "20"))
+except (ValueError, TypeError):
+    logger.warning(
+        "Invalid DEVICE_CONNECT_LABEL_VALUES_TOP_N value %r, defaulting to 20",
+        os.getenv("DEVICE_CONNECT_LABEL_VALUES_TOP_N"),
+    )
+    LABEL_VALUES_TOP_N = 20
+
 # Hard ceiling on per-call ``limit`` to prevent runaway responses in large
 # fleets. A caller asking for limit=100000 still gets at most this many
 # rows per page (with ``next_offset`` to continue).
@@ -213,6 +231,10 @@ def discover(
     ``key:pattern*`` (glob), ``k1:v1,k2:v2`` (AND across keys), bare-string
     id/name match, or ``*`` to match all.
 
+    Matching is case-sensitive on both keys and values
+    (``category:Camera`` and ``category:camera`` are not equivalent). Use
+    lowercase by convention.
+
     Args:
         selector: A selector expression string.
         offset: Pagination offset (rows skipped).
@@ -339,13 +361,22 @@ def _format_label_histogram(
     ``unique`` is supplied (device axis only), the per-key unique device
     count is exposed as ``unique_devices`` so the agent can reconcile
     histogram totals with the underlying device cardinality.
+
+    Long-tail keys are cropped to the top ``LABEL_VALUES_TOP_N`` values
+    by frequency; the dropped count is reported via a sibling ``more``
+    field so agents can choose to switch to the paginated per-key form.
     """
+    # Read + clamp at call time: env var / ``patch.object`` overrides take
+    # effect, and the [1, 200] bound holds regardless of how the override
+    # was set.
+    top_n = max(1, min(LABEL_VALUES_TOP_N, 200))
     out: dict[str, Any] = {}
     for key, counts in histogram.items():
-        entry: dict[str, Any] = {
-            # Sort values most-frequent first; alphabetical tie-break for stability.
-            "values": dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))),
-        }
+        # Sort values most-frequent first; alphabetical tie-break for stability.
+        sorted_values = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        entry: dict[str, Any] = {"values": dict(sorted_values[:top_n])}
+        if len(sorted_values) > top_n:
+            entry["more"] = len(sorted_values) - top_n
         if key in multivalued:
             entry["multivalued"] = True
             if unique is not None and key in unique:
@@ -365,6 +396,11 @@ def discover_labels(
     ``function_keys``, ``event_keys``) with all keys and their top values.
     With ``key`` (e.g. ``"device.location"``, ``"function.direction"``):
     paginates the full value list for that one key.
+
+    The ``key`` axis prefix and label key are case-sensitive
+    (``"Device.Location"`` does not resolve), matching the case-sensitive
+    matching ``discover()`` uses on label values. Use lowercase by
+    convention.
 
     Args:
         key: Optional dotted axis.key (``device.<k>``, ``function.<k>``,
