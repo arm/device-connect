@@ -226,3 +226,43 @@ class TestFlattenDevice:
         assert result["device_type"] is None
         assert result["functions"] == []
         assert result["events"] == []
+
+
+# ── parse_event_payload: non-dict params (regression for fuzz finding) ─
+
+
+class TestParseEventPayloadNonDictParams:
+    """JSON-RPC ``params`` may be omitted, ``null``, an object, or an array
+    per the spec. Earlier ``parse_event_payload`` chained ``.get`` and
+    crashed when ``params`` was explicitly present but non-dict (e.g.
+    ``null``). These tests pin the normalize-to-dict behavior.
+    """
+
+    def test_params_explicit_null(self):
+        data = json.dumps({"method": "evt", "params": None}).encode()
+        result = conn_mod.parse_event_payload(data)
+        assert result == {"device_id": "unknown", "event_name": "evt", "params": {}}
+
+    def test_params_array(self):
+        data = json.dumps({"method": "evt", "params": [1, 2, 3]}).encode()
+        result = conn_mod.parse_event_payload(data)
+        assert result["params"] == {}
+        assert result["device_id"] == "unknown"
+
+    def test_params_scalar(self):
+        data = json.dumps({"method": "evt", "params": "string"}).encode()
+        result = conn_mod.parse_event_payload(data)
+        assert result["params"] == {}
+
+    def test_params_missing(self):
+        data = json.dumps({"method": "evt"}).encode()
+        result = conn_mod.parse_event_payload(data)
+        assert result == {"device_id": "unknown", "event_name": "evt", "params": {}}
+
+    def test_params_happy_path(self):
+        data = json.dumps(
+            {"method": "evt", "params": {"device_id": "cam-001", "x": 1}}
+        ).encode()
+        result = conn_mod.parse_event_payload(data)
+        assert result["device_id"] == "cam-001"
+        assert result["params"] == {"device_id": "cam-001", "x": 1}

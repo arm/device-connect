@@ -71,7 +71,7 @@ import json
 import logging
 import time
 from abc import ABC
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 from device_connect_edge.types import (
     FunctionDef,
@@ -129,6 +129,14 @@ class DeviceDriver(ABC):
     # DeviceRuntime.run() will call wait_for_device() for each type before
     # starting background tasks. Example: depends_on = ("robot", "speaker")
     depends_on: Tuple[str, ...] = ()
+
+    # Override in subclasses to attach discovery metadata to the device. Carried on
+    # DeviceCapabilities. Values may be a single string or a list of strings (composite
+    # identity). Well-known keys: category (camera|robot|hub|sensor|actuator|inference),
+    # location (e.g. 'warehouse1/loading-dock'). Custom keys are allowed.
+    # Example:
+    #     labels = {"category": ["camera", "inference"], "location": "warehouse1/dock-3"}
+    labels: Optional[Dict[str, Union[str, List[str]]]] = None
 
     # Type alias for event callback
     EventCallback = Callable[[str, Dict[str, Any]], Any]
@@ -250,7 +258,8 @@ class DeviceDriver(ABC):
         return DeviceCapabilities(
             description=self.__class__.__doc__ or "",
             functions=self.functions,
-            events=self.events
+            events=self.events,
+            labels=self.labels,
         )
 
     @property
@@ -348,7 +357,7 @@ class DeviceDriver(ABC):
     # Properties to skip during attribute scanning to avoid recursion
     _SKIP_ATTRS = frozenset([
         "capabilities", "functions", "events", "identity", "status",
-        "device_type"
+        "device_type", "labels"
     ])
 
     def _collect_functions(self) -> List[FunctionDef]:
@@ -380,11 +389,13 @@ class DeviceDriver(ABC):
             func_name = getattr(attr, "_function_name", attr_name)
             description = getattr(attr, "_description", "")
             parameters = build_function_schema(attr)
+            labels = getattr(attr, "_labels", None)
 
             functions.append(FunctionDef(
                 name=func_name,
                 description=description,
                 parameters=parameters,
+                labels=labels,
                 tags=[]
             ))
 
@@ -419,11 +430,13 @@ class DeviceDriver(ABC):
             event_name = getattr(attr, "_event_name", attr_name)
             description = getattr(attr, "_event_description", "")
             payload_schema = build_event_schema(attr)
+            labels = getattr(attr, "_labels", None)
 
             events.append(EventDef(
                 name=event_name,
                 description=description,
                 payload_schema=payload_schema,
+                labels=labels,
                 tags=[]
             ))
 

@@ -8,12 +8,12 @@ Import tools from the adapter matching your agent framework:
 
     # Strands
     from device_connect_agent_tools.adapters.strands import (
-        describe_fleet, list_devices, get_device_functions, invoke_device,
+        discover_labels, discover, invoke_device,
     )
 
     # LangChain
     from device_connect_agent_tools.adapters.langchain import (
-        describe_fleet, list_devices, get_device_functions, invoke_device,
+        discover_labels, discover, invoke_device,
     )
 
     # Claude Agent SDK

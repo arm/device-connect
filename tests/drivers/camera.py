@@ -20,6 +20,7 @@ class TestCameraDriver(DeviceDriver):
     """Simulated camera for integration tests."""
 
     device_type = "test_camera"
+    labels = {"category": "camera"}
 
     def __init__(self, failure_rate: float = 0.0, min_latency_ms: float = 10,
                  max_latency_ms: float = 50, location: str = "test-zone"):
@@ -51,7 +52,7 @@ class TestCameraDriver(DeviceDriver):
     def status(self) -> DeviceStatus:
         return DeviceStatus(location=self._location)
 
-    @rpc()
+    @rpc(labels={"direction": "write", "modality": "rgb"})
     async def capture_image(self, resolution: str = "1080p") -> dict:
         """Capture a simulated test image."""
         await self.simulate_delay()
@@ -64,12 +65,12 @@ class TestCameraDriver(DeviceDriver):
             "device_id": getattr(self, "_device_id", "unknown"),
         }
 
-    @emit()
+    @emit(labels={"modality": "motion"})
     async def state_change_detected(self, zone_id: str, state_class: str, details: Optional[str] = None):
         """State change detected in camera view."""
         pass
 
-    @emit()
+    @emit(labels={"modality": "rgb"})
     async def object_detected(self, label: str, confidence: float, bbox: Optional[list] = None):
         """Object detected in camera view."""
         pass

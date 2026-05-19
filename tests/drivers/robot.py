@@ -19,6 +19,7 @@ class TestRobotDriver(DeviceDriver):
     """Simulated cleaning robot for integration tests."""
 
     device_type = "test_robot"
+    labels = {"category": "robot"}
 
     def __init__(self, clean_duration: float = 0.5, failure_rate: float = 0.0,
                  min_latency_ms: float = 10, max_latency_ms: float = 50,
@@ -59,7 +60,7 @@ class TestRobotDriver(DeviceDriver):
     def status(self) -> DeviceStatus:
         return DeviceStatus(location=self._location)
 
-    @rpc()
+    @rpc(labels={"direction": "write", "safety": "critical"})
     async def dispatch_robot(self, zone_id: str) -> dict:
         """Dispatch the robot to clean a zone."""
         await self.simulate_delay()
@@ -72,7 +73,7 @@ class TestRobotDriver(DeviceDriver):
         self._cleaning_task = asyncio.create_task(self._do_cleaning(zone_id))
         return {"status": "accepted", "zone_id": zone_id, "estimated_duration": self._clean_duration}
 
-    @rpc()
+    @rpc(labels={"direction": "read"})
     async def get_status(self) -> dict:
         """Get current robot status."""
         await self.simulate_delay()

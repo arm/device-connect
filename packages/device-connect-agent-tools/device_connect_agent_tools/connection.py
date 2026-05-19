@@ -125,6 +125,16 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     status = raw.get("status") or {}
     caps = raw.get("capabilities") or {}
 
+    # Mirror the legacy DeviceStatus.location field into labels["location"]
+    # when the driver did not declare it via DeviceCapabilities.labels. Drivers
+    # using only the legacy field would otherwise be invisible to selector
+    # queries on location.
+    legacy_location = raw.get("location") or status.get("location")
+    caps_labels = caps.get("labels")
+    merged_labels = caps_labels
+    if legacy_location and (not caps_labels or "location" not in caps_labels):
+        merged_labels = {**(caps_labels or {}), "location": legacy_location}
+
     # NOTE: The raw ``capabilities`` dict is intentionally NOT included in
     # the flattened output.  ``functions`` and ``events`` are extracted to
     # the top level for direct access.  Including both would duplicate data
@@ -132,11 +142,16 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "device_id": raw.get("device_id"),
         "device_type": raw.get("device_type") or identity.get("device_type"),
-        "location": raw.get("location") or status.get("location"),
+        "location": legacy_location,
         "status": status,
         "identity": identity,
         "functions": caps.get("functions", []),
         "events": caps.get("events", []),
+        # Discovery labels declared by the driver (DeviceCapabilities.labels),
+        # with status.location mirrored in when caps did not carry it. None
+        # when neither source provided any label -- discover() treats that
+        # as "no label-based match," not "matches everything."
+        "labels": merged_labels,
     }
 
 
@@ -167,8 +182,13 @@ def parse_event_payload(data: bytes) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Expected JSON object")
     method = payload.get("method", "")
-    dev_id = payload.get("params", {}).get("device_id", "unknown")
-    params = payload.get("params", {})
+    # JSON-RPC allows ``params`` to be omitted, null, an object, or an array.
+    # ``.get(default)`` only fires when the key is absent — an explicit ``null``
+    # returns ``None``, which would crash a chained ``.get``. Same for array
+    # params. Normalize to a dict so the device_id lookup is safe.
+    raw_params = payload.get("params")
+    params = raw_params if isinstance(raw_params, dict) else {}
+    dev_id = params.get("device_id", "unknown")
     return {"device_id": dev_id, "event_name": method, "params": params}
 
 
