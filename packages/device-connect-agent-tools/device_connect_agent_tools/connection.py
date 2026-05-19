@@ -182,8 +182,13 @@ def parse_event_payload(data: bytes) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Expected JSON object")
     method = payload.get("method", "")
-    dev_id = payload.get("params", {}).get("device_id", "unknown")
-    params = payload.get("params", {})
+    # JSON-RPC allows ``params`` to be omitted, null, an object, or an array.
+    # ``.get(default)`` only fires when the key is absent — an explicit ``null``
+    # returns ``None``, which would crash a chained ``.get``. Same for array
+    # params. Normalize to a dict so the device_id lookup is safe.
+    raw_params = payload.get("params")
+    params = raw_params if isinstance(raw_params, dict) else {}
+    dev_id = params.get("device_id", "unknown")
     return {"device_id": dev_id, "event_name": method, "params": params}
 
 
