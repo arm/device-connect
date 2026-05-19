@@ -872,6 +872,31 @@ def broadcast(
         k: v for k, v in (params or {}).items() if k != "llm_reasoning"
     }
 
+    # Advisory only: WARN (don't block) when the matched set includes a
+    # safety:critical RPC, so typo'd selectors that sweep across critical
+    # functions are operator-visible. Broadcast is the ESTOP path.
+    critical_rows = [
+        row for row in rows
+        if (row.get("labels") or {}).get("safety") == "critical"
+    ]
+    if critical_rows:
+        # Dedupe device_ids before slicing so the sample reflects distinct
+        # devices, not the first 3 (possibly same-device) critical rows.
+        sample_ids = sorted({
+            row["device_id"] for row in critical_rows if row.get("device_id")
+        })[:3]
+        if where:
+            shown = where if len(where) <= 80 else where[:77] + "..."
+            where_snippet = f" where={shown!r}"
+        else:
+            where_snippet = ""
+        logger.warning(
+            "[broadcast::%s::%s] matched %d row(s) labeled safety:critical "
+            "(sample devices: %s);%s proceeding (advisory only)",
+            function_name, correlation_id, len(critical_rows), sample_ids,
+            where_snippet,
+        )
+
     envelope: dict[str, Any] = {
         "correlation_id": correlation_id,
         "function": function_name,

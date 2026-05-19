@@ -9,11 +9,14 @@ as the discover/invoke tests so selectors exercise real device, function,
 and event names.
 """
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from device_connect_agent_tools import tools as tools_mod
+
+_TOOLS_LOGGER = "device_connect_agent_tools.tools"
 
 
 SAMPLE_DEVICES = [
@@ -199,3 +202,109 @@ class TestBroadcast:
         )
         env = mock_conn._published[0]
         assert "llm_reasoning" not in env["params"]
+
+
+# -- broadcast: safety:critical advisory WARN -----------------------
+
+
+# Fleet with a single ``safety:critical`` RPC. Robot's ``dispatch_robot``
+# mirrors the production driver convention (tests/drivers/robot.py).
+_CRITICAL_FLEET = [
+    {
+        "device_id": "robot-001",
+        "device_type": "cleaner_robot",
+        "location": "lab-A",
+        "status": {"state": "idle"},
+        "identity": {"device_type": "cleaner_robot"},
+        "labels": {"category": "robot"},
+        "functions": [
+            {
+                "name": "dispatch_robot",
+                "parameters": {},
+                "labels": {"direction": "write", "safety": "critical"},
+            },
+        ],
+        "events": [],
+    },
+]
+
+
+class TestBroadcastSafetyCriticalAdvisory:
+    """``broadcast()`` is the canonical async-critical workload (ESTOP) and
+    must not be blocked, but the discovery design doc calls for an advisory
+    surface: when a matched row carries ``labels.safety == "critical"``,
+    emit a WARN so a typo'd selector that sweeps across critical functions
+    is operator-visible (the agent never sees the matched set otherwise).
+    """
+
+    def test_warn_emitted_when_critical_row_present(self, mock_conn, caplog):
+        mock_conn.list_devices.return_value = _CRITICAL_FLEET
+        caplog.set_level(logging.WARNING, logger=_TOOLS_LOGGER)
+
+        r = tools_mod.broadcast("device(*).function(dispatch_robot)")
+
+        critical_warnings = [
+            rec for rec in caplog.records
+            if rec.name == _TOOLS_LOGGER
+            and rec.levelno == logging.WARNING
+            and "safety:critical" in rec.getMessage()
+        ]
+        assert len(critical_warnings) == 1
+        msg = critical_warnings[0].getMessage()
+        # WARN identifies the function, correlation id, count, and a sample device.
+        assert "dispatch_robot" in msg
+        assert r["correlation_id"] in msg
+        assert "robot-001" in msg
+
+    def test_no_warn_when_no_critical_rows(self, mock_conn, caplog):
+        # Default SAMPLE_DEVICES has no safety:critical functions.
+        caplog.set_level(logging.WARNING, logger=_TOOLS_LOGGER)
+
+        tools_mod.broadcast("device(*).function(capture_image)")
+
+        assert not [
+            rec for rec in caplog.records
+            if rec.name == _TOOLS_LOGGER and "safety:critical" in rec.getMessage()
+        ], "no critical rows in fleet — WARN should not fire"
+
+    def test_return_envelope_unchanged_when_critical(self, mock_conn):
+        # Advisory layer must not gate the call — broadcast still publishes
+        # and returns the normal envelope.
+        mock_conn.list_devices.return_value = _CRITICAL_FLEET
+
+        r = tools_mod.broadcast("device(*).function(dispatch_robot)")
+
+        assert "error" not in r
+        assert r["correlation_id"].startswith("br-")
+        assert r["candidates"] == 1
+        assert r["function"] == "dispatch_robot"
+        assert mock_conn.publish_broadcast.call_count == 1
+
+    def test_warn_includes_truncated_where_predicate(self, mock_conn, caplog):
+        try:
+            import celpy  # noqa: F401
+        except ImportError:
+            pytest.skip("cel-python not installed")
+
+        mock_conn.list_devices.return_value = _CRITICAL_FLEET
+        caplog.set_level(logging.WARNING, logger=_TOOLS_LOGGER)
+
+        long_where = "labels.category == 'robot'" + " && true" * 30  # >> 80 chars
+        tools_mod.broadcast(
+            "device(*).function(dispatch_robot)", where=long_where,
+        )
+
+        critical_warnings = [
+            rec for rec in caplog.records
+            if rec.name == _TOOLS_LOGGER
+            and rec.levelno == logging.WARNING
+            and "safety:critical" in rec.getMessage()
+        ]
+        assert len(critical_warnings) == 1
+        msg = critical_warnings[0].getMessage()
+        # The where clause appears in the WARN but is truncated; the full
+        # 200+ char predicate must not be inlined.
+        assert "where=" in msg
+        assert len(long_where) > 100  # sanity
+        assert long_where not in msg  # untruncated form is absent
+        assert "..." in msg  # truncation indicator

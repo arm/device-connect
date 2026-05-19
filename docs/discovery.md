@@ -462,7 +462,7 @@ mask = build_mask_from_scores(threshold=0.8)  # caller-side selection
 broadcast(
     "device(category:phone, location:auditorium-A).function(set_flashlight)",
     params={"on": True, "color": "white"},
-    where="mask[seat_row][seat_col] == 1 && status.battery > 30",
+    where="bindings.mask[identity.seat_row][identity.seat_col] == 1 && status.battery > 30",
     bindings={"mask": mask},
     fire_at=time.time() + 0.5,
     on_late="skip",

@@ -356,3 +356,66 @@ async def test_subscribe_correlation_form(device_spawner, messaging_url):
         assert ids == {"itest-bcs-cam-1", "itest-bcs-cam-2"}
     finally:
         await asyncio.to_thread(disconnect)
+
+
+# -- PR 29 review #1: safety:critical advisory WARN ------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_broadcast_safety_critical_emits_advisory_warn_and_proceeds(
+    device_spawner, messaging_url, caplog,
+):
+    """Broadcasting to a function tagged ``safety:critical`` emits an
+    advisory WARN at the dispatcher and still publishes; the device
+    receives the envelope and replies normally.
+
+    Pinned end-to-end via a real backend so the advisory wiring isn't
+    accidentally short-circuited by future refactors of the dispatch
+    path. ``dispatch_robot`` on the production robot driver carries
+    ``safety:critical`` (tests/drivers/robot.py).
+    """
+    import logging
+
+    _TOOLS_LOGGER = "device_connect_agent_tools.tools"
+
+    await device_spawner.spawn_robot("itest-bcsc-robot", location="lab-A")
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import await_replies, broadcast, disconnect
+
+    await _wait_for_devices(messaging_url, {"itest-bcsc-robot"})
+    caplog.set_level(logging.WARNING, logger=_TOOLS_LOGGER)
+    try:
+        result = await asyncio.to_thread(
+            broadcast,
+            "device(itest-bcsc-robot).function(dispatch_robot)",
+            {"zone_id": "lab-A"},
+        )
+        # Advisory does not block — broadcast publishes and returns normally.
+        assert "error" not in result
+        assert result["correlation_id"].startswith("br-")
+        assert result["function"] == "dispatch_robot"
+        assert result["candidates"] == 1
+
+        # Exactly one advisory WARN, naming the function and the device.
+        criticals = [
+            rec for rec in caplog.records
+            if rec.name == _TOOLS_LOGGER
+            and rec.levelno == logging.WARNING
+            and "safety:critical" in rec.getMessage()
+        ]
+        assert len(criticals) == 1
+        msg = criticals[0].getMessage()
+        assert "dispatch_robot" in msg
+        assert "itest-bcsc-robot" in msg
+        assert result["correlation_id"] in msg
+
+        # Reply path still works.
+        replies = await asyncio.to_thread(
+            await_replies, result["correlation_id"], timeout=5.0, until=1,
+        )
+        assert len(replies) == 1
+        assert replies[0]["device_id"] == "itest-bcsc-robot"
+    finally:
+        await asyncio.to_thread(disconnect)
