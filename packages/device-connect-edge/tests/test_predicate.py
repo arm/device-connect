@@ -14,7 +14,10 @@ import pytest
 
 celpy = pytest.importorskip("celpy")
 
-from device_connect_edge.predicate import (
+# ``predicate`` imports ``celpy`` at module load, so the import below must
+# follow the ``importorskip`` to keep the test module runnable on minimal
+# installs (without the ``[predicate]`` extra).
+from device_connect_edge.predicate import (  # noqa: E402
     PredicateCompileError,
     PredicateEvalError,
     WherePredicate,

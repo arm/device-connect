@@ -11,12 +11,10 @@ typoed dest, alias drift).
 """
 from __future__ import annotations
 
-import json
 
 import pytest
 
 from device_connect_server.devctl import cli as devctl_cli
-from device_connect_server.devctl import selector_cli
 from device_connect_server.statectl import cli as statectl_cli
 from device_connect_server.statectl import operations_cli
 

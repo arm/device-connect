@@ -8,7 +8,6 @@ Uses the same labeled mock fleet (cam-001, cam-002, robot-001, sensor-001)
 as the discover/invoke tests so selectors exercise real device, function,
 and event names.
 """
-import json
 import logging
 from unittest.mock import MagicMock, patch
 

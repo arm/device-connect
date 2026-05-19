@@ -8,7 +8,6 @@ Uses a small labeled fleet (cam-001, cam-002, robot-001, sensor-001) drawn
 from the existing DC test driver vocabulary so every selector exercises
 real device, function, and event names.
 """
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
