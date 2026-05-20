@@ -407,20 +407,29 @@ dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
     capture_frame --params '{}' --reason "Primary down, fail over"
 ```
 
-Default per-call timeout is ~10 s (override with `--timeout`). The portal
-**always returns HTTP 200** with a success envelope; the embedded
-`response` field carries either the device's result or a JSON-RPC error
-dict `{"error": {"code": int, "message": str}}`. Codes from the NATS
-backend:
+Default per-call timeout is ~10 s (override with `--timeout`). Two
+failure classes — they surface differently:
+
+**Device-level failures (target offline, unresponsive, or returns its own
+error)** → HTTP **200** with a success envelope; the embedded `response`
+field carries a JSON-RPC error dict
+`{"error": {"code": int, "message": str}}`. Codes from the NATS backend:
 
 - `-1` "Device {id} is not responding" — no responders (target offline,
   wrong tenant prefix, or unknown id; the invoke path doesn't do a
   registry existence check, so bad ids surface here, not as 404)
 - `-2` "Request timed out after {timeout}s" — target busy / unresponsive
-- `-3` "<other>" — generic transport error
+- `-3` "<other>" — generic transport error caught inside `nats_rpc.invoke`
 
-HTTP 502 `invoke_failed` only fires if the portal handler itself crashes
-(rare). HTTP equivalent: [Appendix A](#appendix-a-http-api-reference).
+**Infrastructure-level failures (broker unreachable, registry creds
+missing / wrong, NATS connect failure, handler crash)** → HTTP **502
+`invoke_failed`** with `message` carrying the underlying exception. The
+NATS-backend code path is the giveaway: `nc = await connect()` runs
+*before* the try/except in `services/nats_rpc.py:58`, so connection-time
+failures propagate out and the agent-API handler catches them at status
+502. Same shape for the Zenoh/MQTT backends if their connect step fails.
+
+HTTP equivalent: [Appendix A](#appendix-a-http-api-reference).
 
 ---
 
@@ -534,7 +543,8 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | Device retries `nkeys library required for JWT auth` forever | `nkeys` missing, or `pynacl` wheel incompatible with libc | `pip install nkeys`; on glibc < 2.34 rebuild pynacl from source (Section 5) |
 | Device registers fine but `@periodic` / `@on` never fire | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
 | `invoke_remote` raises `PublishError` / `RequestTimeoutError` | Target offline, wrong tenant-prefixed id, or unresponsive. Backend-dependent: NATS → `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh → typically `RequestTimeoutError` after retries | `dc-portalctl devices list` to confirm id; check target's logs |
-| `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1 / -2` | -1 = "Device not responding" (no responders); -2 = "Request timed out". The portal returns 200 with the error embedded — not 502 | Verify target with `dc-portalctl devices list`; inspect target logs |
+| `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1 / -2` | Device-level failure: -1 = "Device not responding" (no responders), -2 = "Request timed out". Target offline / unresponsive | Verify target with `dc-portalctl devices list`; inspect target logs |
+| `dc-portalctl devices invoke` returns HTTP 502 `invoke_failed` | Infrastructure-level failure — broker unreachable, registry creds missing/wrong, or backend connect failed (these raise from `services/nats_rpc.connect()` before the try/except in `invoke`) | Check portal logs for the underlying exception; verify NATS broker reachable and `registry.creds.json` is present and valid |
 | `revoke-credentials` or `delete` returns HTTP 501 `not_implemented` | Backend hasn't wired `rotate_device_credentials` / `remove_device` (none do as of 0.2.3) | See Section 3 lifecycle limitations callout; stop the device process directly and/or edit the backing store |
 | Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
 | `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~10 min (matches server-side TTL) | Rerun; the URL is fresh each time |
