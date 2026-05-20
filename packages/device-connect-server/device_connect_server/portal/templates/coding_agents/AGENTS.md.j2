@@ -77,13 +77,16 @@ git clone https://github.com/arm/device-connect.git /tmp/device-connect
 ~/.dc-portalctl/venv/bin/pip install -e '/tmp/device-connect/packages/device-connect-server[portal]'
 ```
 
-**macOS Python 3.14+ (python.org build) only:** the framework Python has no
-system trust store, so the first HTTPS call fails with `SSL:
-CERTIFICATE_VERIFY_FAILED`. `dc-portalctl` uses `aiohttp`, which reads
-`SSL_CERT_FILE` (not the `requests`-specific `REQUESTS_CA_BUNDLE`).
-`certifi` is not a declared dependency of the `[portal]` extra — install
-it explicitly into the same venv, then point `SSL_CERT_FILE` at its
-bundle:
+**macOS python.org framework Python only** (not Homebrew, not pyenv, not
+the system `/usr/bin/python3`): the framework build ships without a
+populated trust store, so the first HTTPS call fails with `SSL:
+CERTIFICATE_VERIFY_FAILED`. (The python.org installer also ships an
+`Install Certificates.command` script that does roughly this same fix —
+running it once is the other way out.) `dc-portalctl` uses `aiohttp`,
+which reads `SSL_CERT_FILE` (not the `requests`-specific
+`REQUESTS_CA_BUNDLE`). `certifi` is not a declared dependency of the
+`[portal]` extra — install it explicitly into the same venv, then point
+`SSL_CERT_FILE` at its bundle:
 
 ```bash
 ~/.dc-portalctl/venv/bin/pip install --upgrade certifi
@@ -429,11 +432,12 @@ field carries a JSON-RPC error dict
 **Infrastructure-level failures (broker unreachable, registry creds
 missing / wrong, NATS connect failure, handler crash)** → HTTP **502
 `invoke_failed`** with `message` carrying the underlying exception. The
-NATS-backend code path is the giveaway: `nc = await connect()` runs
-*before* the try/except in
-`device_connect_server/portal/services/nats_rpc.py:58`, so connection-time
-failures propagate out and the agent-API handler catches them at status
-502. Same shape for the Zenoh/MQTT backends if their connect step fails.
+NATS-backend code path is the giveaway: in
+`device_connect_server.portal.services.nats_rpc.invoke()` the
+`await connect()` call runs *before* the try/except, so connection-time
+failures propagate out of `invoke()` and the agent-API handler catches
+them at status 502. Same shape for the Zenoh/MQTT backends if their
+connect step fails.
 
 HTTP equivalent: [Appendix A](#appendix-a-http-api-reference).
 
@@ -542,7 +546,7 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `dc-portalctl: command not found` after a clean install | PyPI release of `device-connect-server` is missing the CLI | Install editable from source — see Section 1 |
-| `SSL: CERTIFICATE_VERIFY_FAILED` on first CLI call | No system trust store (python.org Python 3.14+ on macOS) | Export `SSL_CERT_FILE` to certifi's bundle — see Section 1 |
+| `SSL: CERTIFICATE_VERIFY_FAILED` on first CLI call | No system trust store — typical of macOS python.org framework builds, where certificates aren't installed unless you run the bundled `Install Certificates.command` | Install `certifi` and export `SSL_CERT_FILE` — see Section 1 |
 | Connect attempts hang / time out | URL scheme or port doesn't match the deployment (portals can be HTTP:8080 or HTTPS:443) | Use `{{ portal_url }}` from "Tenant facts" verbatim — don't guess scheme/port |
 | `HTTP 401 invalid_token` on a previously-working setup | Cached token expired or was revoked | Re-run `dc-portalctl auth login` |
 | `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
@@ -550,7 +554,7 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | Device process crashes at startup with `AttributeError: '...' object has no attribute '_routines_collected'` (or `_internal_handlers_collected`) | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
 | `invoke_remote` raises `PublishError` / `RequestTimeoutError` | Target offline, wrong tenant-prefixed id, or unresponsive. Backend-dependent: NATS → `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh → typically `RequestTimeoutError` after retries | `dc-portalctl devices list` to confirm id; check target's logs |
 | `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1 / -2` | Device-level failure: -1 = "Device not responding" (no responders), -2 = "Request timed out". Target offline / unresponsive | Verify target with `dc-portalctl devices list`; inspect target logs |
-| `dc-portalctl devices invoke` returns HTTP 502 `invoke_failed` | Infrastructure-level failure — broker unreachable, registry creds missing/wrong, or backend connect failed (these raise from `device_connect_server/portal/services/nats_rpc.connect()` before the try/except in `invoke`) | Check portal logs for the underlying exception; verify NATS broker reachable and `registry.creds.json` is present and valid |
+| `dc-portalctl devices invoke` returns HTTP 502 `invoke_failed` | Infrastructure-level failure — broker unreachable, registry creds missing/wrong, or backend connect failed (`device_connect_server.portal.services.nats_rpc.connect()` raises before the try/except in `invoke()`) | Check portal logs for the underlying exception; verify NATS broker reachable and `registry.creds.json` is present and valid |
 | `revoke-credentials` or `delete` returns HTTP 501 `not_implemented` | Backend hasn't wired `rotate_device_credentials` / `remove_device` (none do as of 0.2.3) | See Section 3 lifecycle limitations callout; stop the device process directly and/or edit the backing store |
 | Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
 | `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~10 min (matches server-side TTL) | Rerun; the URL is fresh each time |
