@@ -58,9 +58,10 @@ export PATH="$HOME/.dc-portalctl/venv/bin:$PATH"
 export DEVICE_CONNECT_PORTAL_URL={{ portal_url }}
 
 # 4. Browser-mediated login. Prints a verification URL — show it to the user
-#    and ask them to click Approve. The CLI polls for ~5 minutes; if it times
-#    out, just rerun the command. On success the token is cached at
-#    ~/.config/dc-portalctl/token; subsequent commands pick it up automatically.
+#    and ask them to click Approve. The CLI polls for ~10 minutes (matches the
+#    server-side request TTL); if it times out, just rerun the command. On
+#    success the token is cached at ~/.config/dc-portalctl/token; subsequent
+#    commands pick it up automatically.
 dc-portalctl auth login
 
 # 5. Confirm.
@@ -163,8 +164,16 @@ dc-portalctl devices credentials {{ tenant }}-cam-001 \
     --output-file ./{{ tenant }}-cam-001.creds.json
 ```
 
-To decommission: `dc-portalctl devices revoke-credentials <id>`. Decommission
-revokes the JWT; the device process disconnects on its next NATS reconnect.
+Two different lifecycle operations — don't confuse them:
+
+- **Rotate credentials (keep the device):** `dc-portalctl devices
+  revoke-credentials <id>` invalidates the current JWT but leaves the device
+  record. Pair it with `dc-portalctl devices credentials <id>
+  --output-file …` to mint a fresh creds file.
+- **Decommission (remove the device entirely):** `dc-portalctl devices
+  delete <id> --confirm` removes the device record and revokes its JWT. The
+  device process disconnects on its next NATS reconnect.
+
 HTTP equivalents live in [Appendix A](#appendix-a-http-api-reference).
 
 ---
@@ -389,9 +398,9 @@ dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
     capture_frame --params '{}' --reason "Primary down, fail over"
 ```
 
-Default per-call timeout is ~5 s. If the device is offline the call returns
-quickly with `not_available`; if it hangs the call returns `timeout`. HTTP
-equivalent: [Appendix A](#appendix-a-http-api-reference).
+Default per-call timeout is ~10 s (override with `--timeout`). If the device
+is offline the call returns quickly with `not_available`; if it hangs the
+call returns `timeout`. HTTP equivalent: [Appendix A](#appendix-a-http-api-reference).
 
 ---
 
@@ -477,7 +486,8 @@ dc-portalctl devices events       <id>
 dc-portalctl devices provision    <name> --device-type X [--location Y] \
     --creds-output-file <path>
 dc-portalctl devices credentials  <id> --output-file <path>
-dc-portalctl devices revoke-credentials <id>
+dc-portalctl devices revoke-credentials <id>      # rotate JWT, keep device
+dc-portalctl devices delete       <id> --confirm  # decommission entirely
 
 # Invocation
 dc-portalctl devices invoke          <id>          <fn> --params '{…}' --reason "…"
@@ -498,14 +508,14 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 |---|---|---|
 | `dc-portalctl: command not found` after a clean install | PyPI release of `device-connect-server` is missing the CLI | Install editable from source — see Section 1 |
 | `SSL: CERTIFICATE_VERIFY_FAILED` on first CLI call | No system trust store (python.org Python 3.14+ on macOS) | Export `SSL_CERT_FILE` to certifi's bundle — see Section 1 |
-| Connect attempts to `:443` time out / hang | Used `http://` URL; server is HTTPS-only | Use `{{ portal_url }}` |
+| Connect attempts hang / time out | URL scheme or port doesn't match the deployment (portals can be HTTP:8080 or HTTPS:443) | Use `{{ portal_url }}` from "Tenant facts" verbatim — don't guess scheme/port |
 | `HTTP 401 invalid_token` on a previously-working setup | Cached token expired or was revoked | Re-run `dc-portalctl auth login` |
 | `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
 | Device retries `nkeys library required for JWT auth` forever | `nkeys` missing, or `pynacl` wheel incompatible with libc | `pip install nkeys`; on glibc < 2.34 rebuild pynacl from source (Section 5) |
 | Device registers fine but `@periodic` / `@on` never fire | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
 | `invoke_remote` returns `not_available` | Target device offline or wrong tenant-prefixed id | `dc-portalctl devices list` to confirm id; check target's logs |
 | Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
-| `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~5 min | Rerun; the URL is fresh each time |
+| `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~10 min (matches server-side TTL) | Rerun; the URL is fresh each time |
 
 ---
 
@@ -533,7 +543,7 @@ POST /api/agent/v1/devices/{id}/invoke
      {"function":"capture_frame","params":{...},"reason":"..."}
 
 # Stream events (events:read scope) — must specify duration|count|follow
-GET  /api/agent/v1/devices/{id}/events/{event_name}?duration=30&count=5&format=ndjson
+GET  /api/agent/v1/devices/{id}/events/{event_name}/stream?duration=30&count=5&format=ndjson
 ```
 
 Worked example:
