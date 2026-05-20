@@ -48,7 +48,7 @@ dependencies.
 #    Idempotent — safe to re-run; upgrades the CLI in place.
 python3 -m venv ~/.dc-portalctl/venv
 ~/.dc-portalctl/venv/bin/pip install --upgrade pip
-~/.dc-portalctl/venv/bin/pip install --upgrade 'device-connect-server[all]'
+~/.dc-portalctl/venv/bin/pip install --upgrade 'device-connect-server[portal]'
 
 # 2. Put the venv's bin on PATH for this shell.
 #    (Add this line to ~/.bashrc or ~/.zshrc to persist it across sessions.)
@@ -74,7 +74,7 @@ point landed. Install editable from source as a fallback:
 
 ```bash
 git clone https://github.com/arm/device-connect.git /tmp/device-connect
-~/.dc-portalctl/venv/bin/pip install -e '/tmp/device-connect/packages/device-connect-server[all]'
+~/.dc-portalctl/venv/bin/pip install -e '/tmp/device-connect/packages/device-connect-server[portal]'
 ```
 
 **macOS Python 3.14+ (python.org build) only:** the framework Python has no
@@ -189,7 +189,7 @@ A "device" in Device Connect is any Python process that subclasses
 | `@emit()` | Mark a method as an event broadcaster (body is a no-op; framework publishes) |
 | `@periodic(interval=…)` | Run a method on a timer |
 | `@on(device_type=…, event_name=…)` | Subscribe to events from other devices (D2D) |
-| `self.invoke_remote(device_id, function, **params, timeout=…)` | From inside an `@rpc()` or `@periodic` method, call another device's function. Returns the response dict; raises on timeout / `not_available`. |
+| `self.invoke_remote(device_id, function, **params, timeout=…)` | From inside an `@rpc()` or `@periodic` method, call another device's function. Returns the JSON-RPC response dict — check for an `error` key before reading `result`. Raises `RequestTimeoutError` (from `device_connect_edge.messaging.exceptions`) if the target is offline or "no responders". |
 
 Minimum viable driver:
 
@@ -398,9 +398,12 @@ dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
     capture_frame --params '{}' --reason "Primary down, fail over"
 ```
 
-Default per-call timeout is ~10 s (override with `--timeout`). If the device
-is offline the call returns quickly with `not_available`; if it hangs the
-call returns `timeout`. HTTP equivalent: [Appendix A](#appendix-a-http-api-reference).
+Default per-call timeout is ~10 s (override with `--timeout`). Offline or
+unresponsive targets surface from the portal as HTTP 502
+`{"code":"invoke_failed", "message":"..."}` (the underlying
+`RequestTimeoutError` / "no responders" string is in `message`); unknown
+device ids return HTTP 404 `{"code":"not_found"}`. HTTP equivalent:
+[Appendix A](#appendix-a-http-api-reference).
 
 ---
 
@@ -513,7 +516,8 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
 | Device retries `nkeys library required for JWT auth` forever | `nkeys` missing, or `pynacl` wheel incompatible with libc | `pip install nkeys`; on glibc < 2.34 rebuild pynacl from source (Section 5) |
 | Device registers fine but `@periodic` / `@on` never fire | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
-| `invoke_remote` returns `not_available` | Target device offline or wrong tenant-prefixed id | `dc-portalctl devices list` to confirm id; check target's logs |
+| `invoke_remote` raises `RequestTimeoutError` ("no responders") | Target device offline or wrong tenant-prefixed id | `dc-portalctl devices list` to confirm id; check target's logs |
+| `dc-portalctl devices invoke` returns `invoke_failed` (HTTP 502) | Same as above — server caught a `RequestTimeoutError` from the messaging layer | Check `message` field for the underlying cause; verify target is online |
 | Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
 | `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~10 min (matches server-side TTL) | Rerun; the URL is fresh each time |
 
