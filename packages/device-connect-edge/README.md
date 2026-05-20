@@ -160,6 +160,46 @@ To force D2D mode even when a router URL is set (e.g., router available but no r
 DEVICE_CONNECT_DISCOVERY_MODE=d2d ZENOH_CONNECT=tcp/localhost:7447 DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
 ```
 
+### Local Zenoh shortcuts from containers
+
+When a device runs in Docker (or Kubernetes), its **connect** URL is often an internal
+service name (`tcp/zenoh:7447`), while agents on the host need a **published** locator
+(`tcp/localhost:7447` or `tcp/host.docker.internal:7447`).
+
+Use separate advertise routes (connect unchanged):
+
+```bash
+ZENOH_CONNECT=tcp/zenoh:7447
+DEVICE_CONNECT_LOCAL_ZENOH_ROUTES=tcp/host.docker.internal:7447
+```
+
+Docker Compose example (device service on the same network as `zenoh`):
+
+```yaml
+services:
+  zenoh:
+    image: eclipse/zenoh:latest
+    ports:
+      - "7447:7447"
+  my-device:
+    environment:
+      ZENOH_CONNECT: tcp/zenoh:7447
+      DEVICE_CONNECT_LOCAL_ZENOH_ROUTES: tcp/host.docker.internal:7447
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+Advertise the **Zenoh router** reachable from the agent, not the container’s bridge IP.
+Manual override: set `status={"local_zenoh": {"routes": ["tcp/localhost:7447"]}}` on
+`DeviceRuntime` (wins over auto-advertise and `DEVICE_CONNECT_LOCAL_ZENOH_ROUTES`).
+Disable auto-advertise entirely with `DEVICE_CONNECT_ADVERTISE_LOCAL_ZENOH=false`.
+
+| Variable | Role |
+|----------|------|
+| `ZENOH_CONNECT` / `MESSAGING_URLS` | Where the device connects |
+| `DEVICE_CONNECT_LOCAL_ZENOH_ROUTES` | Comma-separated locators published in `status.local_zenoh` |
+| `DEVICE_CONNECT_ADVERTISE_LOCAL_ZENOH` | Set to `false` to omit auto `local_zenoh` |
+
 **How it works:** Each device announces its presence (capabilities, identity, status) via `device-connect.{tenant}.{device_id}.presence` messages. Other devices subscribe to a wildcard and maintain an in-memory peer table. Device-to-device RPC works identically to infrastructure mode.
 
 **Trade-offs vs full infrastructure:**

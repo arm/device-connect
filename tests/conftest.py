@@ -62,6 +62,10 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "llm: requires real LLM API key")
     config.addinivalue_line("markers", "slow: takes > 30 seconds")
     config.addinivalue_line("markers", "conformance: messaging backend conformance test")
+    config.addinivalue_line(
+        "markers",
+        "portal: portal credential bundle tests (manage their own messaging env)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -108,8 +112,20 @@ def messaging_url(messaging_backend):
 
 
 @pytest.fixture(autouse=True)
-def _set_backend_env(messaging_backend):
-    """Set env vars so SDK/agent-tools auto-detect the correct backend."""
+def _set_backend_env(request):
+    """Set env vars so SDK/agent-tools auto-detect the correct backend.
+
+    Skipped for ``@pytest.mark.portal`` tests, which configure messaging via
+    ``DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE`` instead of parametrized backends.
+    """
+    if request.node.get_closest_marker("portal") is not None:
+        yield
+        return
+    if "messaging_backend" not in request.fixturenames:
+        yield
+        return
+
+    messaging_backend = request.getfixturevalue("messaging_backend")
     os.environ["MESSAGING_BACKEND"] = messaging_backend
     if messaging_backend == "zenoh":
         os.environ["DEVICE_CONNECT_DISCOVERY_MODE"] = "d2d"

@@ -20,6 +20,7 @@ Framework-agnostic tools for Device Connect — discover and invoke devices from
   - [Connection](#connection)
     - [Auto-Discovery](#auto-discovery)
     - [JWT Credentials](#jwt-credentials)
+    - [Portal-assisted local Zenoh routes](#portal-assisted-local-zenoh-routes)
     - [Explicit Configuration](#explicit-configuration)
     - [Environment Variables](#environment-variables)
     - [Device-to-Device Mode (No Infrastructure)](#device-to-device-mode-no-infrastructure)
@@ -115,7 +116,7 @@ describe_fleet()                       ~200 tokens  (counts by type and location
               └─▸ invoke_device(...)   call a function
 ```
 
-**Small-fleet shortcut:** When the fleet has 5 or fewer devices, `describe_fleet()` and `list_devices()` automatically include full function schemas in the response — the agent can skip straight to `invoke_device()` in one or two calls. The threshold is configurable via the `DEVICE_CONNECT_SMALL_FLEET_THRESHOLD` environment variable (set to `0` to always require drill-down).
+**Small-fleet shortcut:** When the fleet has 5 or fewer devices, `describe_fleet()` and `list_devices()` automatically include full function schemas in the response — the agent can skip straight to `invoke_device()` in one or two calls. The threshold is configurable via the `DEVICE_CONNECT_SMALL_FLEET_THRESHOLD` environment variable (set to `0` to always require drill-down). The same shortcut applies regardless of how the agent connected (portal local Zenoh, portal NATS/registry, or explicit `NATS_URL`).
 
 **Example — an agent resolving "check the lobby cameras":**
 
@@ -325,6 +326,93 @@ connect(
 )
 ```
 
+### Portal-assisted local Zenoh routes
+
+A **credential bundle** can carry two independent pieces of configuration:
+
+| Block | Role |
+|-------|------|
+| `nats` (portal route) | Identity and policy — JWT/NKey (or TLS) to reach the tenant through the portal or cloud NATS router, plus registry-backed discovery when that path is used. |
+| `local` (optional) | Data-plane shortcut — explicit Zenoh locator(s) and optional scoped TLS files for same-LAN unicast to a router or device, without replacing portal identity. |
+
+When `DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE` (or `DEVICE_CONNECT_CREDENTIALS_FILE`) points at such a bundle **and** you do not also set broker URLs via `connect(...)` or `NATS_URL` / `ZENOH_CONNECT` / `MESSAGING_URLS`, agent tools:
+
+1. Prefer the **local** Zenoh route when `DEVICE_CONNECT_PREFER_LOCAL` is true (default) and `local.routes` is present.
+2. Use **D2D presence discovery** on that Zenoh session (peers on the same router/LAN), not the registry.
+3. **Fall back** to the portal `nats` route if the local Zenoh `connect()` fails (then discovery uses the registry again).
+4. Set **`zone` / `tenant`** from the bundle’s `tenant` (or `zone`) field when `connect(zone=...)` is omitted.
+
+Set `DEVICE_CONNECT_PREFER_LOCAL=false` to skip the local block and use the portal NATS route even when `local` is present.
+
+#### Example bundle
+
+```json
+{
+  "tenant": "lab-a",
+  "device_id": "robot-001",
+  "nats": {
+    "urls": ["nats://portal.example:4222"],
+    "jwt": "...",
+    "nkey_seed": "..."
+  },
+  "local": {
+    "routes": ["tls/192.168.1.42:7447"],
+    "tls": {
+      "ca_file": "/path/to/ca.pem",
+      "cert_file": "/path/to/client.pem",
+      "key_file": "/path/to/client-key.pem"
+    },
+    "expires_at": "2026-05-20T18:00:00Z"
+  }
+}
+```
+
+Equivalent keys are accepted for tooling compatibility: top-level `local_routes`, block `local_zenoh`, or `zenoh.local_routes` / `zenoh.tls` (see `load_portal_credentials_file()` in code).
+
+#### Running an agent with a portal bundle
+
+```bash
+export DEVICE_CONNECT_ALLOW_INSECURE=true   # dev / lab only
+export DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE=~/lab-agent.creds.json
+# Do not set NATS_URL or ZENOH_CONNECT — the bundle selects the route.
+
+python -c "
+from device_connect_agent_tools import connect, disconnect, describe_fleet, invoke_device
+connect()
+print(describe_fleet())
+disconnect()
+"
+```
+
+Integration tests for this path live in [`tests/tests/test_tools_portal.py`](../tests/tests/test_tools_portal.py) (`pytest -m portal`).
+
+#### Explicit local routes vs “auto-discover on my subnet”
+
+**What this release does:** the agent does **not** scan the subnet or infer a device IP. It only uses **explicit** `local.routes` from the bundle (or falls back to portal NATS). That is intentional for the first cut: the locator, TLS trust, and expiry are security-sensitive and are meant to be **issued** (portal, ops, or device provisioning), not guessed.
+
+**What you might expect (and how it relates):**
+
+- **Portal credentials only, no `local` block** — Works today. The agent uses NATS + registry like any remote agent; no LAN shortcut.
+- **Same LAN, no portal bundle** — [Device-to-Device mode](#device-to-device-mode-no-infrastructure) uses Zenoh multicast scouting; peers appear without knowing their IP. That path does not mix in portal JWT policy; it is a separate dev/LAN workflow.
+- **Portal identity + automatic LAN shortcut** — Reasonable future direction, not implemented here. An agent could:
+  - read device endpoints from the registry (if devices publish a reachable Zenoh/NATS locator and scoped certs), then
+  - probe reachability (subnet, or any routable IP), then
+  - open a direct session while still using portal-issued trust material.
+
+That would require devices (or the portal) to **advertise** a connectable local endpoint in registration data, plus new agent logic to try direct routes before the portal path. “Same subnet” alone is not enough: the agent still needs a **locator** (`tcp/192.168.1.5:7447`, `tls/...`) and often **mTLS** trust roots tied to the tenant.
+
+**Registry-advertised local routes (implemented):** when the bundle has portal `nats` but no `local` block, agent-tools can query the registry (over the portal route) for devices whose `status.local_zenoh` advertises LAN Zenoh locators, then try those routes before staying on NATS. Devices running on Zenoh with explicit `messaging_urls` publish `local_zenoh` automatically (disable with `DEVICE_CONNECT_ADVERTISE_LOCAL_ZENOH=false` on the device). For **containerized devices**, set `DEVICE_CONNECT_LOCAL_ZENOH_ROUTES` to the host/LAN-reachable Zenoh router (see [device-connect-edge — containers](../device-connect-edge/README.md#local-zenoh-shortcuts-from-containers)). Disable agent-side discovery with `DEVICE_CONNECT_DISCOVER_LOCAL_FROM_REGISTRY=false`.
+
+**What the portal emits today:** the [Device Connect Portal](../device-connect-server/device_connect_server/portal/README.md) typically downloads agent `.creds.json` files with `tenant` + `nats` (JWT) only. The portal UI may later copy `local_zenoh` from registered devices into agent bundles; until then, devices advertise routes in the registry and agents discover them as above.
+
+#### Precedence (summary)
+
+| Source | Effect |
+|--------|--------|
+| `connect(messaging_urls=[...])` or `NATS_URL` / `ZENOH_CONNECT` / `MESSAGING_URLS` | Ignores the portal bundle for broker selection (bundle may still supply credentials if not overridden). |
+| Portal bundle + no URL env | Local Zenoh if `local.routes` and prefer-local; else portal NATS. |
+| `security_infra/` auto-discovery | Used only when the bundle and env did not supply credentials/TLS. |
+
 ### Explicit Configuration
 
 ```python
@@ -347,6 +435,12 @@ connect(
 | `NATS_CREDENTIALS_FILE` | Path to `.creds.json` file |
 | `NATS_JWT` + `NATS_NKEY_SEED` | Direct JWT auth |
 | `NATS_TLS_CA_FILE` | CA certificate for TLS |
+| `DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE` | Portal-issued bundle with portal credentials and optional local Zenoh route |
+| `DEVICE_CONNECT_CREDENTIALS_FILE` | Generic alias for a portal-issued credential bundle |
+| `DEVICE_CONNECT_PREFER_LOCAL` | Set to `false` to ignore local Zenoh routes in portal bundles |
+| `DEVICE_CONNECT_DISCOVER_LOCAL_FROM_REGISTRY` | Set to `false` to skip registry `status.local_zenoh` discovery when the bundle has no `local` block (default: `true`) |
+| `DEVICE_CONNECT_ADVERTISE_LOCAL_ZENOH` | On devices: set to `false` to omit `status.local_zenoh` from registration/heartbeats (default: `true` when using Zenoh with explicit URLs) |
+| `DEVICE_CONNECT_LOCAL_ZENOH_ROUTES` | On devices: comma-separated Zenoh locators to **advertise** in `status.local_zenoh` (connect URLs unchanged; use for Docker/K8s) |
 | `TENANT` | Device Connect zone/namespace (default: `"default"`) |
 | `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `d2d` to skip registry and discover via presence |
 
@@ -459,6 +553,7 @@ invoke_device = wrap_tool(_invoke_device)
 | `connect(messaging_urls, zone, credentials, tls_config)` | Initialize messaging connection |
 | `disconnect()` | Close connection and release resources |
 | `get_connection()` | Get current connection (auto-connects if needed) |
+| `load_portal_credentials_file(path)` | Parse a portal bundle into `{tenant, portal, local}` (see [portal routes](#portal-assisted-local-zenoh-routes)) |
 
 ### Hierarchical Discovery Tools
 

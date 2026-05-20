@@ -80,7 +80,9 @@ services:
       - itest-net
     restart: unless-stopped
 
-  # Zenoh router (no auth, no multicast scouting — use router mode for tests)
+  # Zenoh router (no auth, no multicast scouting — use router mode for tests).
+  # Containerized devices: ZENOH_CONNECT=tcp/zenoh:7447 and
+  # DEVICE_CONNECT_LOCAL_ZENOH_ROUTES=tcp/host.docker.internal:7447 (with extra_hosts).
   zenoh:
     image: eclipse/zenoh:latest
     container_name: itest-zenoh

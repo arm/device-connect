@@ -40,6 +40,7 @@ from device_connect_edge.types import (
     DeviceCapabilities,
     DeviceIdentity,
     DeviceStatus,
+    LocalZenohRoute,
     FunctionDef,
     EventDef,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "DeviceCapabilities",
     "DeviceIdentity",
     "DeviceStatus",
+    "LocalZenohRoute",
     "FunctionDef",
     "EventDef",
     "DiscoveryProvider",

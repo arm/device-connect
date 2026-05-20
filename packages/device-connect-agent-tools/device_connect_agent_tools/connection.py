@@ -110,6 +110,144 @@ def _auto_discover_tls() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _portal_credentials_path() -> Optional[str]:
+    """Return a portal-issued credential bundle path, if configured."""
+    for env_name in (
+        "DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE",
+        "DEVICE_CONNECT_CREDENTIALS_FILE",
+    ):
+        value = os.getenv(env_name)
+        if value:
+            return value
+    return None
+
+
+def _as_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [v for v in value if isinstance(v, str) and v]
+    return []
+
+
+def load_portal_credentials_file(path: str | Path) -> Dict[str, Any]:
+    """Load a portal-issued credential bundle.
+
+    The portal remains the authority for identity and policy, but may include
+    scoped local Zenoh route material for same-LAN unicast access. The returned
+    shape separates the portal route from the optional local fast path so the
+    connection layer can prefer local access and still fall back to the portal.
+    """
+    with open(path, "r") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"expected JSON object in credentials file: {path}")
+
+    tenant = data.get("tenant") or data.get("zone")
+
+    nats_config = data.get("nats") or {}
+    portal: Optional[Dict[str, Any]] = None
+    if isinstance(nats_config, dict):
+        nats_auth = {}
+        if nats_config.get("jwt"):
+            nats_auth["jwt"] = nats_config["jwt"]
+        if nats_config.get("nkey_seed"):
+            nats_auth["nkey_seed"] = nats_config["nkey_seed"]
+
+        nats_urls = _as_list(nats_config.get("urls")) or _as_list(nats_config.get("url"))
+        if nats_urls or nats_auth:
+            portal = {
+                "backend": "nats",
+                "servers": nats_urls,
+                "credentials": nats_auth or None,
+                "tls": nats_config.get("tls") or None,
+            }
+
+    zenoh_config = data.get("zenoh") or {}
+    if not isinstance(zenoh_config, dict):
+        zenoh_config = {}
+    local_config = data.get("local") or data.get("local_zenoh") or {}
+    if not isinstance(local_config, dict):
+        local_config = {}
+
+    local_routes = (
+        _as_list(data.get("local_routes"))
+        or _as_list(local_config.get("routes"))
+        or _as_list(local_config.get("urls"))
+        or _as_list(zenoh_config.get("local_routes"))
+    )
+    local_tls = local_config.get("tls") or zenoh_config.get("tls") or None
+    local: Optional[Dict[str, Any]] = None
+    if local_routes:
+        local = {
+            "backend": "zenoh",
+            "servers": local_routes,
+            "credentials": local_config.get("credentials") or None,
+            "tls": local_tls,
+            "device_id": local_config.get("device_id") or data.get("device_id"),
+            "expires_at": local_config.get("expires_at") or data.get("expires_at"),
+        }
+
+    return {"tenant": tenant, "portal": portal, "local": local}
+
+
+def normalize_local_zenoh_dict(data: Any) -> Optional[Dict[str, Any]]:
+    """Normalize a ``local_zenoh`` / ``local`` block into a Zenoh route config."""
+    if not isinstance(data, dict):
+        return None
+    routes = (
+        _as_list(data.get("routes"))
+        or _as_list(data.get("urls"))
+        or _as_list(data.get("local_routes"))
+    )
+    if not routes:
+        return None
+    return {
+        "backend": "zenoh",
+        "servers": routes,
+        "credentials": data.get("credentials"),
+        "tls": data.get("tls"),
+    }
+
+
+def collect_local_route_candidates_from_devices(
+    devices: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Collect unique LAN Zenoh route configs advertised in registry device records."""
+    seen: set[tuple[str, ...]] = set()
+    candidates: List[Dict[str, Any]] = []
+    for raw in devices:
+        if not isinstance(raw, dict):
+            continue
+        status = raw.get("status") or {}
+        for source in (status.get("local_zenoh"), raw.get("local_zenoh")):
+            cfg = normalize_local_zenoh_dict(source)
+            if not cfg:
+                continue
+            key = tuple(cfg["servers"])
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(cfg)
+    return candidates
+
+
+def _resolve_portal_credentials() -> Optional[Dict[str, Any]]:
+    path = _portal_credentials_path()
+    if not path:
+        return None
+    return load_portal_credentials_file(path)
+
+
 # ── Device payload helper ──────────────────────────────────────────
 
 
@@ -152,6 +290,7 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
         # when neither source provided any label -- discover() treats that
         # as "no label-based match," not "matches everything."
         "labels": merged_labels,
+        "local_zenoh": status.get("local_zenoh"),
     }
 
 
@@ -206,15 +345,70 @@ class DeviceConnection:
         tls_config: Optional[Dict[str, Any]] = None,
         request_timeout: float = 30.0,
     ):
+        portal = _resolve_portal_credentials()
+        if zone == "default" and portal and portal.get("tenant"):
+            zone = portal["tenant"]
         self.zone = zone
         self._request_timeout = request_timeout
 
-        # Resolve config: explicit params -> env vars (via MessagingConfig) -> auto-discovery
-        config = MessagingConfig(
-            servers=[nats_url] if nats_url else None,
-            credentials=credentials,
-            tls_config=tls_config,
+        env_has_urls = any(
+            os.getenv(name)
+            for name in ("ZENOH_CONNECT", "MESSAGING_URLS", "NATS_URL", "NATS_URLS")
         )
+        portal_cfg = (portal or {}).get("portal") or {}
+        local_cfg = (portal or {}).get("local") or {}
+        prefer_local = _env_flag("DEVICE_CONNECT_PREFER_LOCAL", True)
+        can_use_portal_bundle = portal is not None and not nats_url and not env_has_urls
+
+        config_backend: Optional[str] = None
+        config_servers: Optional[List[str]] = [nats_url] if nats_url else None
+        config_credentials = credentials
+        config_tls = tls_config
+        self._using_local_route = False
+        self._fallback_config: Optional[Dict[str, Any]] = None
+        self._registry_local_discovery = False
+        self._stored_portal_cfg: Optional[Dict[str, Any]] = None
+
+        discover_local_from_registry = _env_flag(
+            "DEVICE_CONNECT_DISCOVER_LOCAL_FROM_REGISTRY", True,
+        )
+
+        if can_use_portal_bundle and prefer_local and local_cfg.get("servers"):
+            config_backend = "zenoh"
+            config_servers = local_cfg.get("servers")
+            config_credentials = local_cfg.get("credentials")
+            config_tls = local_cfg.get("tls")
+            self._using_local_route = True
+            if portal_cfg.get("servers"):
+                self._fallback_config = portal_cfg
+        elif (
+            can_use_portal_bundle
+            and prefer_local
+            and discover_local_from_registry
+            and portal_cfg.get("servers")
+        ):
+            self._registry_local_discovery = True
+            self._stored_portal_cfg = dict(portal_cfg)
+            self._fallback_config = dict(portal_cfg)
+            config_backend = portal_cfg.get("backend")
+            config_servers = portal_cfg.get("servers")
+            config_credentials = credentials or portal_cfg.get("credentials")
+            config_tls = tls_config or portal_cfg.get("tls")
+        elif can_use_portal_bundle and portal_cfg.get("servers"):
+            config_backend = portal_cfg.get("backend")
+            config_servers = portal_cfg.get("servers")
+            config_credentials = credentials or portal_cfg.get("credentials")
+            config_tls = tls_config or portal_cfg.get("tls")
+
+        # Resolve config: explicit params -> env vars (via MessagingConfig) -> auto-discovery
+        config_kwargs = {
+            "servers": config_servers,
+            "credentials": config_credentials,
+            "tls_config": config_tls,
+        }
+        if config_backend:
+            config_kwargs["backend"] = config_backend
+        config = MessagingConfig(**config_kwargs)
 
         self._backend = config.backend  # "nats", "zenoh", or "mqtt" (auto-detected)
         self._servers = config.servers
@@ -229,7 +423,14 @@ class DeviceConnection:
 
         # If no explicit server URL was given but TLS was discovered,
         # default to tls:// instead of nats://
-        if not nats_url and not os.getenv("NATS_URL") and not os.getenv("NATS_URLS") and not os.getenv("MESSAGING_URLS") and not os.getenv("ZENOH_CONNECT"):
+        if (
+            not self._using_local_route
+            and not nats_url
+            and not os.getenv("NATS_URL")
+            and not os.getenv("NATS_URLS")
+            and not os.getenv("MESSAGING_URLS")
+            and not os.getenv("ZENOH_CONNECT")
+        ):
             if self._tls_config:
                 self._servers = ["tls://localhost:4222"]
 
@@ -248,14 +449,20 @@ class DeviceConnection:
         )
         self._d2d_mode = (
             os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() in ("d2d", "p2p")
-            or (self._backend == "zenoh" and no_explicit_urls)
+            or self._using_local_route
+            or (self._backend == "zenoh" and no_explicit_urls and not portal_cfg)
         )
         self._d2d_collector = None  # lazy-initialized PresenceCollector
 
         # In D2D mode with Zenoh and no explicit URLs, use empty servers (multicast scouting).
         # When DEVICE_CONNECT_DISCOVERY_MODE=d2d is forced alongside a router URL (ZENOH_CONNECT),
         # keep the router URL so we can still communicate with devices connected to it.
-        if self._d2d_mode and self._backend == "zenoh" and no_explicit_urls:
+        if (
+            self._d2d_mode
+            and self._backend == "zenoh"
+            and no_explicit_urls
+            and not self._using_local_route
+        ):
             self._servers = []
 
         # Dedicated event loop for sync-to-async bridging
@@ -276,7 +483,126 @@ class DeviceConnection:
         """Establish the messaging connection."""
         self._run(self._async_connect())
 
+    def _apply_local_route(
+        self,
+        local_cfg: Dict[str, Any],
+        *,
+        portal_fallback: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Configure this connection for a local Zenoh route with optional portal fallback."""
+        self._backend = local_cfg.get("backend") or "zenoh"
+        self._servers = local_cfg.get("servers") or []
+        self._credentials = local_cfg.get("credentials")
+        self._tls_config = local_cfg.get("tls")
+        self._using_local_route = True
+        self._d2d_mode = True
+        if portal_fallback and portal_fallback.get("servers"):
+            self._fallback_config = portal_fallback
+
+    def _apply_portal_route(self, portal_cfg: Dict[str, Any]) -> None:
+        """Configure this connection for the portal (remote) route only."""
+        self._backend = portal_cfg.get("backend") or "nats"
+        self._servers = portal_cfg.get("servers") or []
+        self._credentials = portal_cfg.get("credentials")
+        self._tls_config = portal_cfg.get("tls")
+        self._using_local_route = False
+        self._d2d_mode = False
+        self._fallback_config = None
+
+    async def _fetch_registry_local_route_candidates(
+        self,
+        portal_cfg: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Query the registry over the portal route for devices advertising ``local_zenoh``."""
+        client = create_client(backend=portal_cfg.get("backend") or "nats")
+        try:
+            await client.connect(
+                servers=portal_cfg.get("servers") or [],
+                credentials=portal_cfg.get("credentials"),
+                tls_config=portal_cfg.get("tls"),
+            )
+            registry = _SDKRegistryClient(
+                client,
+                tenant=self.zone,
+                timeout=self._request_timeout,
+                cache_ttl=0,
+            )
+            devices = await registry.list_devices()
+            candidates = collect_local_route_candidates_from_devices(devices)
+            logger.info(
+                "Discovered %d registry-advertised local Zenoh route(s)",
+                len(candidates),
+            )
+            return candidates
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                logger.debug("cleanup error closing registry probe client", exc_info=True)
+
+    async def _async_connect_registry_local_discovery(self) -> None:
+        """Probe registry for ``local_zenoh``, try each route, else use portal NATS."""
+        portal = self._stored_portal_cfg or self._fallback_config or {}
+        candidates: List[Dict[str, Any]] = []
+        try:
+            candidates = await self._fetch_registry_local_route_candidates(portal)
+        except Exception as e:
+            logger.warning("Registry local-route discovery failed: %s", e)
+
+        for local_cfg in candidates:
+            self._apply_local_route(local_cfg, portal_fallback=portal)
+            try:
+                await self._async_connect_current()
+                self._registry_local_discovery = False
+                return
+            except Exception as e:
+                logger.info(
+                    "Registry-advertised local route %s failed: %s",
+                    local_cfg.get("servers"),
+                    e,
+                )
+                if self._client:
+                    try:
+                        await self._client.close()
+                    except Exception:
+                        logger.debug(
+                            "cleanup error closing failed local client",
+                            exc_info=True,
+                        )
+                    self._client = None
+
+        logger.info("No usable registry local route; connecting via portal")
+        self._apply_portal_route(portal)
+        self._registry_local_discovery = False
+        await self._async_connect_current()
+
     async def _async_connect(self) -> None:
+        if self._registry_local_discovery:
+            await self._async_connect_registry_local_discovery()
+            return
+        try:
+            await self._async_connect_current()
+        except Exception:
+            if not self._fallback_config:
+                raise
+            logger.info("Local Device Connect route failed; falling back to portal route")
+            if self._client:
+                try:
+                    await self._client.close()
+                except Exception:
+                    logger.debug("cleanup error closing failed local client", exc_info=True)
+
+            fallback = self._fallback_config
+            self._fallback_config = None
+            self._using_local_route = False
+            self._d2d_mode = False
+            self._backend = fallback.get("backend") or "nats"
+            self._servers = fallback.get("servers") or []
+            self._credentials = fallback.get("credentials")
+            self._tls_config = fallback.get("tls")
+            await self._async_connect_current()
+
+    async def _async_connect_current(self) -> None:
         self._client = create_client(backend=self._backend)
         await self._client.connect(
             servers=self._servers,
@@ -288,6 +614,7 @@ class DeviceConnection:
         # Initialize discovery provider
         if self._d2d_mode:
             from device_connect_edge.discovery import PresenceCollector, D2DRegistry
+
             self._d2d_collector = PresenceCollector(self._client, self.zone)
             await self._d2d_collector.start()
             await self._d2d_collector.wait_for_peers(timeout=3.0)

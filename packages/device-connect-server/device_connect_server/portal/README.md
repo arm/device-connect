@@ -188,6 +188,27 @@ All settings are via environment variables:
 | POST | `/api/admin/nats/reload` | Regenerate config + SIGHUP |
 | POST | `/api/admin/health/verify` | Run isolation verification |
 
+### Agent credential files and LAN Zenoh shortcuts
+
+The portal UI can download a per-tenant **agent** `.creds.json` (NATS JWT to the
+shared router, plus `tenant`). That file is what
+[`device-connect-agent-tools`](../../../device-connect-agent-tools/README.md#portal-assisted-local-zenoh-routes)
+accepts via `DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE`.
+
+Agent-tools also supports an optional **`local`** block in the same JSON shape
+(Zenoh locator + scoped TLS) for same-LAN unicast while keeping portal identity
+in `nats`. The portal does **not** populate `local` automatically yet; operators
+can merge it in when they know a site router or device endpoint (for example
+`tcp/192.168.1.42:7447`). A future portal release could attach `local` from
+provisioning or registry data when a device advertises a reachable LAN locator.
+
+Agent-tools can also **discover** `status.local_zenoh` from the registry when the
+agent bundle has portal credentials but no `local` block (see
+`DEVICE_CONNECT_DISCOVER_LOCAL_FROM_REGISTRY`). Devices publish `local_zenoh`
+when running on Zenoh with explicit router URLs (`DEVICE_CONNECT_ADVERTISE_LOCAL_ZENOH`).
+Containerized devices can set `DEVICE_CONNECT_LOCAL_ZENOH_ROUTES` so the registry
+advertises a host-published router port while the device connects via internal DNS.
+
 ### Agent API (`/api/agent/v1/*`, requires Bearer token)
 
 JSON-only namespace for coding agents and CI clients. Distinct from browser
