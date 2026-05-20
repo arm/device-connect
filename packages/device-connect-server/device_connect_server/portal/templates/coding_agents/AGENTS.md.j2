@@ -79,11 +79,15 @@ git clone https://github.com/arm/device-connect.git /tmp/device-connect
 
 **macOS Python 3.14+ (python.org build) only:** the framework Python has no
 system trust store, so the first HTTPS call fails with `SSL:
-CERTIFICATE_VERIFY_FAILED`. Point the CLI at certifi's bundle:
+CERTIFICATE_VERIFY_FAILED`. `dc-portalctl` uses `aiohttp`, which reads
+`SSL_CERT_FILE` (not the `requests`-specific `REQUESTS_CA_BUNDLE`).
+`certifi` is not a declared dependency of the `[portal]` extra — install
+it explicitly into the same venv, then point `SSL_CERT_FILE` at its
+bundle:
 
 ```bash
+~/.dc-portalctl/venv/bin/pip install --upgrade certifi
 export SSL_CERT_FILE=$(~/.dc-portalctl/venv/bin/python -c "import certifi; print(certifi.where())")
-export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
 ```
 
 ### Token scopes
@@ -554,7 +558,13 @@ GET  /api/agent/v1/devices/{id}/functions
 # Provision (devices:provision scope)
 POST /api/agent/v1/devices
      {"device_name":"cam-001","device_type":"camera","location":"warehouse1/loading-dock"}
-DELETE /api/agent/v1/devices/{id}                 # decommission
+
+# Decommission / rotate (devices:provision / devices:credentials scope)
+# ⚠ Both currently return HTTP 501 `not_implemented` on every bundled backend
+# (no backend implements remove_device / rotate_device_credentials yet).
+# See Section 3 for the workaround. Endpoints are listed for completeness:
+DELETE /api/agent/v1/devices/{id}
+POST   /api/agent/v1/devices/{id}/credentials:rotate
 
 # Invoke (devices:invoke scope)
 POST /api/agent/v1/devices/{id}/invoke
