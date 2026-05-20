@@ -164,15 +164,20 @@ dc-portalctl devices credentials {{ tenant }}-cam-001 \
     --output-file ./{{ tenant }}-cam-001.creds.json
 ```
 
-Two different lifecycle operations — don't confuse them:
-
-- **Rotate credentials (keep the device):** `dc-portalctl devices
-  revoke-credentials <id>` invalidates the current JWT but leaves the device
-  record. Pair it with `dc-portalctl devices credentials <id>
-  --output-file …` to mint a fresh creds file.
-- **Decommission (remove the device entirely):** `dc-portalctl devices
-  delete <id> --confirm` removes the device record and revokes its JWT. The
-  device process disconnects on its next NATS reconnect.
+> ⚠️ **Lifecycle limitations (as of 0.2.3).** The CLI exposes two lifecycle
+> verbs, but neither is implemented in any bundled backend yet:
+>
+> - `dc-portalctl devices revoke-credentials <id>` → `POST
+>   /devices/{id}/credentials:rotate` → HTTP **501 `not_implemented`** on
+>   NATS / Zenoh / MQTT backends (no backend implements
+>   `rotate_device_credentials`).
+> - `dc-portalctl devices delete <id> --confirm` → `DELETE
+>   /devices/{id}` → HTTP **501 `not_implemented`** (no backend
+>   implements `remove_device`).
+>
+> Until those land, to force a device offline stop the device process
+> directly; to drop the registry record, edit the backing store (etcd /
+> file / whichever backend is configured) by hand.
 
 HTTP equivalents live in [Appendix A](#appendix-a-http-api-reference).
 
@@ -189,7 +194,7 @@ A "device" in Device Connect is any Python process that subclasses
 | `@emit()` | Mark a method as an event broadcaster (body is a no-op; framework publishes) |
 | `@periodic(interval=…)` | Run a method on a timer |
 | `@on(device_type=…, event_name=…)` | Subscribe to events from other devices (D2D) |
-| `self.invoke_remote(device_id, function, **params, timeout=…)` | From inside an `@rpc()` or `@periodic` method, call another device's function. Returns the JSON-RPC response dict — check for an `error` key before reading `result`. Raises `RequestTimeoutError` (from `device_connect_edge.messaging.exceptions`) if the target is offline or "no responders". |
+| `self.invoke_remote(device_id, function, **params, timeout=…)` | From inside an `@rpc()` or `@periodic` method, call another device's function. Returns the JSON-RPC response dict — check for an `error` key before reading `result`. Raises backend-specific exceptions on transport failure (NATS: `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh: usually `RequestTimeoutError` after retries exhaust, `PublishError` on query-error replies — both from `device_connect_edge.messaging.exceptions`). |
 
 Minimum viable driver:
 
@@ -398,12 +403,20 @@ dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
     capture_frame --params '{}' --reason "Primary down, fail over"
 ```
 
-Default per-call timeout is ~10 s (override with `--timeout`). Offline or
-unresponsive targets surface from the portal as HTTP 502
-`{"code":"invoke_failed", "message":"..."}` (the underlying
-`RequestTimeoutError` / "no responders" string is in `message`); unknown
-device ids return HTTP 404 `{"code":"not_found"}`. HTTP equivalent:
-[Appendix A](#appendix-a-http-api-reference).
+Default per-call timeout is ~10 s (override with `--timeout`). The portal
+**always returns HTTP 200** with a success envelope; the embedded
+`response` field carries either the device's result or a JSON-RPC error
+dict `{"error": {"code": int, "message": str}}`. Codes from the NATS
+backend:
+
+- `-1` "Device {id} is not responding" — no responders (target offline,
+  wrong tenant prefix, or unknown id; the invoke path doesn't do a
+  registry existence check, so bad ids surface here, not as 404)
+- `-2` "Request timed out after {timeout}s" — target busy / unresponsive
+- `-3` "<other>" — generic transport error
+
+HTTP 502 `invoke_failed` only fires if the portal handler itself crashes
+(rare). HTTP equivalent: [Appendix A](#appendix-a-http-api-reference).
 
 ---
 
@@ -489,8 +502,8 @@ dc-portalctl devices events       <id>
 dc-portalctl devices provision    <name> --device-type X [--location Y] \
     --creds-output-file <path>
 dc-portalctl devices credentials  <id> --output-file <path>
-dc-portalctl devices revoke-credentials <id>      # rotate JWT, keep device
-dc-portalctl devices delete       <id> --confirm  # decommission entirely
+dc-portalctl devices revoke-credentials <id>      # ⚠ HTTP 501 on bundled backends (see §3)
+dc-portalctl devices delete       <id> --confirm  # ⚠ HTTP 501 on bundled backends (see §3)
 
 # Invocation
 dc-portalctl devices invoke          <id>          <fn> --params '{…}' --reason "…"
@@ -516,8 +529,9 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
 | Device retries `nkeys library required for JWT auth` forever | `nkeys` missing, or `pynacl` wheel incompatible with libc | `pip install nkeys`; on glibc < 2.34 rebuild pynacl from source (Section 5) |
 | Device registers fine but `@periodic` / `@on` never fire | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
-| `invoke_remote` raises `RequestTimeoutError` ("no responders") | Target device offline or wrong tenant-prefixed id | `dc-portalctl devices list` to confirm id; check target's logs |
-| `dc-portalctl devices invoke` returns `invoke_failed` (HTTP 502) | Same as above — server caught a `RequestTimeoutError` from the messaging layer | Check `message` field for the underlying cause; verify target is online |
+| `invoke_remote` raises `PublishError` / `RequestTimeoutError` | Target offline, wrong tenant-prefixed id, or unresponsive. Backend-dependent: NATS → `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh → typically `RequestTimeoutError` after retries | `dc-portalctl devices list` to confirm id; check target's logs |
+| `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1 / -2` | -1 = "Device not responding" (no responders); -2 = "Request timed out". The portal returns 200 with the error embedded — not 502 | Verify target with `dc-portalctl devices list`; inspect target logs |
+| `revoke-credentials` or `delete` returns HTTP 501 `not_implemented` | Backend hasn't wired `rotate_device_credentials` / `remove_device` (none do as of 0.2.3) | See Section 3 lifecycle limitations callout; stop the device process directly and/or edit the backing store |
 | Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
 | `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~10 min (matches server-side TTL) | Rerun; the URL is fresh each time |
 
