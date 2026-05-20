@@ -21,6 +21,19 @@ section that matches what the user is asking for.
 - **Namespace:** `device-connect.{{ tenant }}.>`
 - **Example device id:** `{{ example_device_id }}` (tenant-prefixed; see "Provision")
 
+### Two kinds of credentials
+
+Device Connect uses two credential types — don't conflate them:
+
+| Credential | Identifies | Lives at | Used by |
+|---|---|---|---|
+| `*.creds.json` (NATS JWT) | **One device** | `./{{ tenant }}-<device>.creds.json` (wherever you saved it) | The device process, via `NATS_CREDENTIALS_FILE` |
+| Portal token (`dcp_...`) | **You** (operator / agent) | `~/.config/dc-portalctl/token` or `DEVICE_CONNECT_PORTAL_TOKEN` | The CLI, agent-tools, HTTP API |
+
+The portal token authenticates you to mint device credentials and invoke RPCs.
+The device credentials authenticate the device's NATS connection. End-to-end
+bring-up needs both.
+
 ---
 
 ## 1. First-time setup (run this yourself)
@@ -35,7 +48,7 @@ dependencies.
 #    Idempotent — safe to re-run; upgrades the CLI in place.
 python3 -m venv ~/.dc-portalctl/venv
 ~/.dc-portalctl/venv/bin/pip install --upgrade pip
-~/.dc-portalctl/venv/bin/pip install --upgrade device-connect-server
+~/.dc-portalctl/venv/bin/pip install --upgrade 'device-connect-server[all]'
 
 # 2. Put the venv's bin on PATH for this shell.
 #    (Add this line to ~/.bashrc or ~/.zshrc to persist it across sessions.)
@@ -45,32 +58,34 @@ export PATH="$HOME/.dc-portalctl/venv/bin:$PATH"
 export DEVICE_CONNECT_PORTAL_URL={{ portal_url }}
 
 # 4. Browser-mediated login. Prints a verification URL — show it to the user
-#    and ask them to click Approve. The CLI's poll receives a fresh token and
-#    caches it at ~/.config/dc-portalctl/token; subsequent commands pick it up
-#    automatically.
+#    and ask them to click Approve. The CLI polls for ~5 minutes; if it times
+#    out, just rerun the command. On success the token is cached at
+#    ~/.config/dc-portalctl/token; subsequent commands pick it up automatically.
 dc-portalctl auth login
 
 # 5. Confirm.
 dc-portalctl auth me
 ```
 
-If `python3 -m venv` is blocked in your sandbox, try `pipx install
-device-connect-server` (which uses its own venv under the hood). If neither
-works, fall back to direct HTTP calls against `{{ portal_url }}/api/agent/v1/*`
-with a `DEVICE_CONNECT_PORTAL_TOKEN` minted at
-`{{ portal_url }}/coding-agents`.
-
-### CI / non-interactive use
-
-Skip the login flow entirely — mint a token at
-`{{ portal_url }}/coding-agents` and set:
+**If `dc-portalctl: command not found` after a clean install,** your PyPI
+release is older than this playbook — only the server-side `dc-portal` entry
+point landed. Install editable from source as a fallback:
 
 ```bash
-export DEVICE_CONNECT_PORTAL_URL={{ portal_url }}
-export DEVICE_CONNECT_PORTAL_TOKEN=dcp_xxxxx_yyyyy
+git clone https://github.com/arm/device-connect.git /tmp/device-connect
+~/.dc-portalctl/venv/bin/pip install -e '/tmp/device-connect/packages/device-connect-server[all]'
 ```
 
-### Token scopes you may see
+**macOS Python 3.14+ (python.org build) only:** the framework Python has no
+system trust store, so the first HTTPS call fails with `SSL:
+CERTIFICATE_VERIFY_FAILED`. Point the CLI at certifi's bundle:
+
+```bash
+export SSL_CERT_FILE=$(~/.dc-portalctl/venv/bin/python -c "import certifi; print(certifi.where())")
+export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
+```
+
+### Token scopes
 
 - `devices:read` — list/describe devices
 - `devices:provision` — create / decommission devices
@@ -79,9 +94,22 @@ export DEVICE_CONNECT_PORTAL_TOKEN=dcp_xxxxx_yyyyy
 - `events:read` — read event streams
 - `admin:tenants` / `admin:*` — admin only; do not request unless you are admin
 
-If you get `401 invalid_token`, the token was revoked or expired — run
-`dc-portalctl auth login` again. If you get `403`, the token doesn't have the
-scope you need; mint a new one with the right scopes at `{{ portal_url }}/coding-agents`.
+`401 invalid_token` → token revoked or expired; rerun `dc-portalctl auth
+login`. `403` → token lacks the scope; mint a new one at the portal's
+`/coding-agents` page (see Section 9).
+
+### CI / non-interactive use
+
+Skip the login flow entirely — mint a token at the portal's `/coding-agents`
+page and set:
+
+```bash
+export DEVICE_CONNECT_PORTAL_URL={{ portal_url }}
+export DEVICE_CONNECT_PORTAL_TOKEN=dcp_xxxxx_yyyyy
+```
+
+If your sandbox blocks `python3 -m venv` and `pipx`, fall back to direct HTTP
+against `${DEVICE_CONNECT_PORTAL_URL}/api/agent/v1/*` (see Appendix A).
 
 ---
 
@@ -108,16 +136,7 @@ dc-portalctl devices capabilities {{ example_device_id }}
 dc-portalctl devices functions {{ example_device_id }}
 ```
 
-Equivalent HTTP:
-
-```bash
-curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
-  {{ portal_url }}/api/agent/v1/fleet
-curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
-  "{{ portal_url }}/api/agent/v1/devices?device_type=camera"
-curl -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
-  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/capabilities
-```
+HTTP equivalents live in [Appendix A](#appendix-a-http-api-reference).
 
 ---
 
@@ -134,40 +153,34 @@ dc-portalctl devices provision cam-001 \
     --creds-output-file ./{{ tenant }}-cam-001.creds.json
 ```
 
-The `.creds.json` is a NATS JWT credential. Keep it secret — anyone with that
-file can connect as the device. To re-download:
+The `.creds.json` is the device's NATS JWT — see ["Two kinds of
+credentials"](#two-kinds-of-credentials) above for how it differs from your
+portal token. Keep it secret; anyone with the file can connect as the device.
+To re-download:
 
 ```bash
 dc-portalctl devices credentials {{ tenant }}-cam-001 \
     --output-file ./{{ tenant }}-cam-001.creds.json
 ```
 
-Equivalent HTTP (returns creds inline; needs `devices:provision` scope):
-
-```bash
-curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"device_name":"cam-001","device_type":"camera","location":"warehouse1/loading-dock"}' \
-  {{ portal_url }}/api/agent/v1/devices
-```
-
-To decommission: `DELETE /api/agent/v1/devices/{id}` or
-`dc-portalctl devices revoke-credentials …`. Decommission revokes the JWT —
-the device process will be disconnected on its next NATS reconnect.
+To decommission: `dc-portalctl devices revoke-credentials <id>`. Decommission
+revokes the JWT; the device process disconnects on its next NATS reconnect.
+HTTP equivalents live in [Appendix A](#appendix-a-http-api-reference).
 
 ---
 
 ## 4. Author a driver
 
 A "device" in Device Connect is any Python process that subclasses
-`DeviceDriver` and runs in `DeviceRuntime`. Four decorators cover everything:
+`DeviceDriver` and runs in `DeviceRuntime`. Decorators and helpers:
 
-| Decorator | Purpose |
+| Decorator / helper | Purpose |
 |---|---|
 | `@rpc()` | Expose a coroutine method as a callable function |
 | `@emit()` | Mark a method as an event broadcaster (body is a no-op; framework publishes) |
 | `@periodic(interval=…)` | Run a method on a timer |
 | `@on(device_type=…, event_name=…)` | Subscribe to events from other devices (D2D) |
+| `self.invoke_remote(device_id, function, **params, timeout=…)` | From inside an `@rpc()` or `@periodic` method, call another device's function. Returns the response dict; raises on timeout / `not_available`. |
 
 Minimum viable driver:
 
@@ -180,6 +193,10 @@ from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
 class TempSensorDriver(DeviceDriver):
     device_type = "temp_sensor"
+
+    def __init__(self):
+        super().__init__()           # required — wires up @periodic, @on, _internal_handlers
+        # Any per-instance state (hardware handles, config) goes here.
 
     @property
     def identity(self) -> DeviceIdentity:
@@ -223,15 +240,81 @@ if __name__ == "__main__":
 ```
 
 `device_id` and `tenant` are auto-detected from `NATS_CREDENTIALS_FILE`;
-don't hard-code them. For richer references see
-[`examples/dht22_sensor/device_driver.py`](https://github.com/arm/device-connect/blob/main/packages/device-connect-edge/examples/dht22_sensor/device_driver.py)
-(real GPIO hardware) and
-[`examples/number_generator/device_simulator.py`](https://github.com/arm/device-connect/blob/main/packages/device-connect-edge/examples/number_generator/device_simulator.py)
-(simulator).
+don't hard-code them.
+
+> ⚠️ **Always call `super().__init__()` if you override `__init__`.** The base
+> initializer wires up `_routines`, `_internal_handlers`, and the D2D
+> registry. Skipping it makes `@periodic`, `@emit`, and `@on` silently never
+> fire — no error, just a dead loop.
+
+### Calling another device
+
+Use `self.invoke_remote(...)` inside any driver method to RPC another device
+in the same tenant. Don't reach for `device-connect-agent-tools` — that's the
+external-agent path. The edge SDK speaks D2D over NATS directly.
+
+```python
+@rpc()
+async def trigger_capture(self) -> dict:
+    return await self.invoke_remote(
+        "{{ example_device_id }}", "capture_frame", resolution="4k", timeout=5.0,
+    )
+```
+
+### Resilience: reopen on transient failure
+
+Any external resource (serial port, GPIO chip, network socket, file handle)
+can disconnect at runtime. The "open once in `__init__`, hold forever"
+pattern leaves the driver stuck the first time the resource blinks. Open
+lazily and reopen on failure:
+
+```python
+def _write(self, payload: bytes) -> None:
+    for attempt in (0, 1):
+        try:
+            if self._port is None:
+                self._port = serial.Serial(self.PORT, 115200, timeout=1)
+            self._port.write(payload); self._port.flush()
+            return
+        except (serial.SerialException, OSError):
+            try: self._port.close()
+            except Exception: pass
+            self._port = None
+            if attempt == 1: raise
+```
+
+A transient unplug recovers on the next RPC without restarting the driver.
+
+### Liveness probing for `@periodic`
+
+`@periodic` methods are silent on success — device logs only show
+registration, not ticks. During bring-up, expose a small `get_state()` RPC
+that returns the last tick's timestamp / outcome, and probe it from outside
+(`dc-portalctl devices invoke … get_state`). State changing between calls
+confirms the loop is running. Don't add per-tick logging — it floods at the
+tick rate.
+
+### References
+
+- [`examples/dht22_sensor/device_driver.py`](https://github.com/arm/device-connect/blob/main/packages/device-connect-edge/examples/dht22_sensor/device_driver.py) — real GPIO hardware
+- [`examples/number_generator/device_simulator.py`](https://github.com/arm/device-connect/blob/main/packages/device-connect-edge/examples/number_generator/device_simulator.py) — simulator
 
 ---
 
 ## 5. Launch a device locally
+
+The edge runtime authenticates to NATS with the JWT in `NATS_CREDENTIALS_FILE`,
+which requires `nkeys` (and its `pynacl` transitive). On older Linux distros
+(Debian 11, Ubuntu 20.04, anything with glibc < 2.34) the prebuilt `pynacl`
+wheel won't load — rebuild from source the first time:
+
+```bash
+sudo apt-get install -y libsodium-dev
+python3 -m pip install --no-binary :all: --force-reinstall pynacl
+```
+
+Otherwise the device boots, connects to NATS, then loops forever logging
+`nkeys library required for JWT auth` — easy to miss.
 
 ```bash
 export NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json
@@ -249,27 +332,29 @@ dc-portalctl devices list | grep {{ tenant }}-cam-001
 
 If it doesn't appear within ~5 seconds, the most common causes are:
 
-1. NATS host unreachable from the device — confirm `nats://{{ public_host }}:4222` resolves and is open.
-2. Wrong creds file — `NATS_CREDENTIALS_FILE` must point at the device's own `.creds.json`, not another tenant's.
-3. Driver process crashed at startup — check stderr.
+1. **`nkeys` / `pynacl` missing or broken** — see the rebuild snippet above. The error string in the device log is the giveaway.
+2. **NATS host unreachable** — confirm `nats://{{ public_host }}:4222` resolves and is open from the device's network.
+3. **Wrong creds file** — `NATS_CREDENTIALS_FILE` must point at this device's own `.creds.json`, not another tenant's or another device's.
+4. **Driver process crashed at startup** — check stderr.
+5. **Custom `__init__` skipped `super().__init__()`** — device registers fine but `@periodic`/`@on` are dead. See Section 4.
 
 ---
 
 ## 6. Launch a device on a remote host (SSH)
 
 The device process is just a Python script that needs the creds file plus
-network access to NATS. Workflow:
+network access to NATS. Quick start with tmux (survives the SSH disconnect):
 
 ```bash
-# 1. Provision (locally) and copy the creds file to the host that will run the device.
+# 1. Provision (locally) and copy the creds file + script to the edge host.
 dc-portalctl devices provision cam-001 --device-type camera \
     --creds-output-file ./{{ tenant }}-cam-001.creds.json
 scp ./{{ tenant }}-cam-001.creds.json my_device.py user@edge-host:~/dc/
 
 # 2. Install device-connect-edge on the host (one-time per host).
-ssh user@edge-host "python3 -m pip install --user device-connect-edge"
+ssh user@edge-host "python3 -m pip install --user device-connect-edge nkeys"
 
-# 3. Run it (pinned to a tmux session so it survives the SSH disconnect).
+# 3. Run it in a detached tmux session.
 ssh user@edge-host "tmux new -d -s dc-cam-001 \
     'cd ~/dc && \
      NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json \
@@ -280,36 +365,8 @@ ssh user@edge-host "tmux new -d -s dc-cam-001 \
 dc-portalctl devices list | grep {{ tenant }}-cam-001
 ```
 
-For longer-lived deployments, prefer a systemd-user unit so the service auto-restarts:
-
-```ini
-# ~/.config/systemd/user/dc-cam-001.service
-[Service]
-WorkingDirectory=%h/dc
-Environment=NATS_CREDENTIALS_FILE=%h/dc/{{ tenant }}-cam-001.creds.json
-Environment=NATS_URL=nats://{{ public_host }}:4222
-ExecStart=/usr/bin/python3 %h/dc/my_device.py
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-```
-
-```bash
-ssh user@edge-host "systemctl --user daemon-reload && \
-                    systemctl --user enable --now dc-cam-001"
-
-# Tail logs
-ssh user@edge-host "journalctl --user -u dc-cam-001 -f"
-```
-
-To pull recent logs back without leaving a shell open:
-
-```bash
-ssh user@edge-host "journalctl --user -u dc-cam-001 --since '10 min ago'" \
-    > /tmp/dc-cam-001.log
-```
+For long-lived deployments, use a systemd-user unit so the service
+auto-restarts — see [Appendix B](#appendix-b-systemd-deployment).
 
 ---
 
@@ -332,17 +389,9 @@ dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
     capture_frame --params '{}' --reason "Primary down, fail over"
 ```
 
-Equivalent HTTP (`devices:invoke` scope):
-
-```bash
-curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"function":"capture_frame","params":{"resolution":"4k"},"reason":"Daily inspection"}' \
-  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/invoke
-```
-
 Default per-call timeout is ~5 s. If the device is offline the call returns
-quickly with `not_available`; if it hangs the call returns `timeout`.
+quickly with `not_available`; if it hangs the call returns `timeout`. HTTP
+equivalent: [Appendix A](#appendix-a-http-api-reference).
 
 ---
 
@@ -381,9 +430,9 @@ dc-portalctl devices stream {{ tenant }}-controller-001 alert \
 dc-portalctl devices invoke {{ tenant }}-sensor-001 simulate_high_temp \
     --params '{"temp_c": 45}' --reason "Integration test: assert controller reacts"
 
-# Assert: alerts.ndjson should contain a record with reason ~ "temp"
+# Assert: alerts.ndjson should contain an "alert" event with reason ~ "temp"
 wait
-grep -q '"action":"watering' alerts.ndjson && echo PASS || echo FAIL
+grep -q '"reason":"high_temp"' alerts.ndjson && echo PASS || echo FAIL
 ```
 
 The same pattern works from Python — call `invoke_device` then iterate the
@@ -395,7 +444,8 @@ NDJSON/SSE stream until the `_meta` close line.
 
 Visit **{{ portal_url }}/coding-agents** to:
 
-- Mint a new token with the scopes you need (one-time secret display)
+- Mint a new token with the scopes you need (see Section 1 for the scope
+  list — one-time secret display)
 - See your active tokens (label, scopes, created date)
 - Revoke any token immediately (any agent or job using it gets `401`
   on its next call)
@@ -439,3 +489,95 @@ dc-portalctl devices stream <id> <event> --duration N [--count K] [--format ndjs
 
 Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 `1` other.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `dc-portalctl: command not found` after a clean install | PyPI release of `device-connect-server` is missing the CLI | Install editable from source — see Section 1 |
+| `SSL: CERTIFICATE_VERIFY_FAILED` on first CLI call | No system trust store (python.org Python 3.14+ on macOS) | Export `SSL_CERT_FILE` to certifi's bundle — see Section 1 |
+| Connect attempts to `:443` time out / hang | Used `http://` URL; server is HTTPS-only | Use `{{ portal_url }}` |
+| `HTTP 401 invalid_token` on a previously-working setup | Cached token expired or was revoked | Re-run `dc-portalctl auth login` |
+| `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
+| Device retries `nkeys library required for JWT auth` forever | `nkeys` missing, or `pynacl` wheel incompatible with libc | `pip install nkeys`; on glibc < 2.34 rebuild pynacl from source (Section 5) |
+| Device registers fine but `@periodic` / `@on` never fire | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
+| `invoke_remote` returns `not_available` | Target device offline or wrong tenant-prefixed id | `dc-portalctl devices list` to confirm id; check target's logs |
+| Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
+| `dc-portalctl auth login` times out before user clicks Approve | Default poll window is ~5 min | Rerun; the URL is fresh each time |
+
+---
+
+## Appendix A: HTTP API reference
+
+The CLI is the recommended path; this exists for sandboxes that block venvs or
+for automation that prefers raw HTTP. All endpoints expect
+`Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN`. Replace
+`{{ portal_url }}` with your tenant's portal URL.
+
+```bash
+# Discover
+GET  /api/agent/v1/fleet
+GET  /api/agent/v1/devices?device_type=camera&location=warehouse1
+GET  /api/agent/v1/devices/{id}/capabilities
+GET  /api/agent/v1/devices/{id}/functions
+
+# Provision (devices:provision scope)
+POST /api/agent/v1/devices
+     {"device_name":"cam-001","device_type":"camera","location":"warehouse1/loading-dock"}
+DELETE /api/agent/v1/devices/{id}                 # decommission
+
+# Invoke (devices:invoke scope)
+POST /api/agent/v1/devices/{id}/invoke
+     {"function":"capture_frame","params":{...},"reason":"..."}
+
+# Stream events (events:read scope) — must specify duration|count|follow
+GET  /api/agent/v1/devices/{id}/events/{event_name}?duration=30&count=5&format=ndjson
+```
+
+Worked example:
+
+```bash
+curl -X POST \
+    -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"function":"capture_frame","params":{"resolution":"4k"},"reason":"Daily inspection"}' \
+    {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/invoke
+```
+
+---
+
+## Appendix B: systemd deployment
+
+For longer-lived deployments, prefer a systemd-user unit so the service
+auto-restarts on crash and on reboot.
+
+```ini
+# ~/.config/systemd/user/dc-cam-001.service
+[Service]
+WorkingDirectory=%h/dc
+Environment=NATS_CREDENTIALS_FILE=%h/dc/{{ tenant }}-cam-001.creds.json
+Environment=NATS_URL=nats://{{ public_host }}:4222
+ExecStart=/usr/bin/python3 %h/dc/my_device.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+ssh user@edge-host "systemctl --user daemon-reload && \
+                    systemctl --user enable --now dc-cam-001"
+
+# Tail logs
+ssh user@edge-host "journalctl --user -u dc-cam-001 -f"
+
+# Pull recent logs back without leaving a shell open
+ssh user@edge-host "journalctl --user -u dc-cam-001 --since '10 min ago'" \
+    > /tmp/dc-cam-001.log
+```
+
+To survive reboot when the user isn't logged in, also enable lingering on the
+edge host: `sudo loginctl enable-linger $USER`.
