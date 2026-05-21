@@ -104,6 +104,13 @@ class TestSubscribe:
             assert subj.endswith(".event.object_detected")
         sub.close()
 
+    def test_top_level_event_selector_subscribes_by_event_name_wildcard(self, fake_conn):
+        sub = tools_mod.subscribe("event(object_detected)")
+        assert fake_conn.subscribed_subjects == [
+            "device-connect.default.*.event.object_detected"
+        ]
+        sub.close()
+
     def test_event_selector_zero_matches_returns_idle(self, fake_conn):
         sub = tools_mod.subscribe("event(no_such_event)")
         assert fake_conn.subscribed_subjects == []

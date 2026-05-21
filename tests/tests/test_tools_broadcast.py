@@ -330,6 +330,91 @@ async def test_subscribe_event_selector_live_stream(device_spawner, messaging_ur
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_subscribe_top_level_event_selector_includes_late_joiners(
+    device_spawner, messaging_url
+):
+    """Top-level event subscriptions wildcard devices for long-running agents."""
+    first_device, first_driver = await device_spawner.spawn_camera(
+        "itest-evlive-cam-1", location="lab-A",
+    )
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, subscribe
+
+    await _wait_for_devices(messaging_url, {"itest-evlive-cam-1"})
+    try:
+        with subscribe("event(object_detected)") as sub:
+            await asyncio.sleep(SETTLE_TIME)
+            second_device, second_driver = await device_spawner.spawn_camera(
+                "itest-evlive-cam-2", location="lab-A",
+            )
+            await _wait_for_devices(
+                messaging_url, {"itest-evlive-cam-1", "itest-evlive-cam-2"}
+            )
+
+            await first_driver.trigger_event(
+                "object_detected", {"label": "first", "confidence": 0.9}
+            )
+            await second_driver.trigger_event(
+                "object_detected", {"label": "late", "confidence": 0.91}
+            )
+            msgs = await asyncio.to_thread(
+                list, sub.iter(timeout=2.0, poll_interval=0.05),
+            )
+            labels = {
+                (m.get("params") or {}).get("label") or m.get("label")
+                for m in msgs
+            }
+            assert {"first", "late"} <= labels, msgs
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_subscribe_device_event_selector_is_snapshot(
+    device_spawner, messaging_url
+):
+    """Device-anchored event subscriptions keep the initial resolved device set."""
+    first_device, first_driver = await device_spawner.spawn_camera(
+        "itest-evsnap-cam-1", location="lab-A",
+    )
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, subscribe
+
+    await _wait_for_devices(messaging_url, {"itest-evsnap-cam-1"})
+    try:
+        with subscribe("device(itest-evsnap-*).event(object_detected)") as sub:
+            await asyncio.sleep(SETTLE_TIME)
+            second_device, second_driver = await device_spawner.spawn_camera(
+                "itest-evsnap-cam-2", location="lab-A",
+            )
+            await _wait_for_devices(
+                messaging_url, {"itest-evsnap-cam-1", "itest-evsnap-cam-2"}
+            )
+
+            await first_driver.trigger_event(
+                "object_detected", {"label": "first", "confidence": 0.9}
+            )
+            await second_driver.trigger_event(
+                "object_detected", {"label": "late", "confidence": 0.91}
+            )
+            msgs = await asyncio.to_thread(
+                list, sub.iter(timeout=2.0, poll_interval=0.05),
+            )
+            labels = {
+                (m.get("params") or {}).get("label") or m.get("label")
+                for m in msgs
+            }
+            assert "first" in labels, msgs
+            assert "late" not in labels, msgs
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_subscribe_correlation_form(device_spawner, messaging_url):
     """subscribe('correlation:<id>') captures replies as they arrive."""
     await device_spawner.spawn_camera("itest-bcs-cam-1", location="lab-A")
@@ -358,7 +443,7 @@ async def test_subscribe_correlation_form(device_spawner, messaging_url):
         await asyncio.to_thread(disconnect)
 
 
-# -- PR 29 review #1: safety:critical advisory WARN ------------------
+# -- Safety-critical advisory warning regression coverage -------------
 
 
 @pytest.mark.asyncio

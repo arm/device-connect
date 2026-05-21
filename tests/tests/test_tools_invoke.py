@@ -11,7 +11,9 @@ end-to-end.
 """
 
 import asyncio
+import os
 import time
+import uuid
 
 import pytest
 
@@ -19,13 +21,13 @@ SETTLE_TIME = 0.3
 DISCOVERY_TIMEOUT = 5.0
 
 
-async def _wait_for_devices(messaging_url, expected_ids):
+async def _wait_for_devices(messaging_url, expected_ids, timeout=DISCOVERY_TIMEOUT):
     """Connect and poll until all expected ``device_ids`` are visible."""
     from device_connect_agent_tools import connect
     from device_connect_agent_tools.connection import get_connection
 
     await asyncio.to_thread(connect, nats_url=messaging_url)
-    deadline = time.monotonic() + DISCOVERY_TIMEOUT
+    deadline = time.monotonic() + timeout
     while True:
         conn = get_connection()
         devices = await asyncio.to_thread(conn.list_devices)
@@ -61,6 +63,98 @@ async def test_invoke_sensor_reading(device_spawner, messaging_url):
         assert result["device_id"] == "itest-inv-read-sensor"
         assert result["function"] == "get_reading"
         assert "temperature" in result["result"]
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.timeout(180)
+@pytest.mark.parametrize("messaging_backend", ["nats"], indirect=True)
+async def test_scalable_fleet_discovery_and_invoke_many(
+    messaging_backend, messaging_url, clear_registry, device_spawner
+):
+    """Discover and invoke hundreds of Docker-backed simulated devices."""
+    if messaging_backend != "nats":
+        pytest.skip("scale test uses registry-backed NATS discovery")
+
+    fleet_size = int(os.getenv("DC_SCALE_FLEET_SIZE", "200"))
+    prefix = f"itest-scale-{uuid.uuid4().hex[:8]}"
+    location = f"{prefix}-room"
+    expected_ids = {f"{prefix}-{i:04d}" for i in range(fleet_size)}
+
+    await device_spawner.spawn_sensor_fleet(
+        prefix,
+        fleet_size,
+        location=location,
+        initial_temp=21.0,
+        registration_timeout=30.0,
+    )
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import (
+        disconnect,
+        discover,
+        discover_labels,
+        invoke_many,
+    )
+
+    devices = await _wait_for_devices(
+        messaging_url, expected_ids, timeout=45.0,
+    )
+    visible_ids = {d.get("device_id") for d in devices}
+    assert expected_ids <= visible_ids
+
+    try:
+        labels = await asyncio.to_thread(discover_labels, "device.location")
+        assert labels["axis"] == "device"
+        assert labels["key"] == "location"
+        assert labels["values"][location] == fleet_size
+
+        page_size = 50 if fleet_size >= 100 else max(1, fleet_size // 2)
+
+        first_page = await asyncio.to_thread(
+            discover, f"device(location:{location})", 0, page_size,
+        )
+        assert first_page["scope"] == "device_only"
+        assert first_page["matched"] == fleet_size
+        assert first_page["returned"] == page_size
+        assert first_page["next_offset"] == page_size
+
+        second_page = await asyncio.to_thread(
+            discover,
+            f"device(location:{location})",
+            first_page["next_offset"],
+            page_size,
+        )
+        first_ids = {row["device_id"] for row in first_page["results"]}
+        second_ids = {row["device_id"] for row in second_page["results"]}
+        assert first_ids
+        assert second_ids
+        assert first_ids.isdisjoint(second_ids)
+
+        functions = await asyncio.to_thread(
+            discover, f"device(location:{location}).function(get_reading)", 0, 25,
+        )
+        assert functions["scope"] == "device_function"
+        assert functions["matched"] == fleet_size
+        assert functions["returned"] == min(25, fleet_size)
+
+        result = await asyncio.to_thread(
+            invoke_many,
+            f"device(location:{location}).function(get_reading)",
+            {"unit": "celsius"},
+            10.0,
+            64,
+            "Scale integration test fan-out",
+        )
+        assert result["candidates"] == fleet_size
+        assert result["matched"] == fleet_size
+        assert result["succeeded"] == fleet_size
+        assert result["failed"] == 0
+        assert {row["device_id"] for row in result["results"]} == expected_ids
+        assert all(row["result"]["unit"] == "celsius" for row in result["results"])
     finally:
         await asyncio.to_thread(disconnect)
 

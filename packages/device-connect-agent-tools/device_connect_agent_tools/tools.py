@@ -1064,12 +1064,61 @@ def _correlation_subjects(conn: Any, correlation_id: str) -> list[str]:
     ]
 
 
+def _event_names_for_filter(selector: str) -> tuple[list[str] | None, dict[str, Any] | None]:
+    """Resolve top-level ``event(...)`` to event names for live wildcard subs."""
+    try:
+        sel = parse_selector(selector)
+    except SelectorParseError as e:
+        return None, _empty_envelope(error=_error("selector_parse_error", str(e)))
+    if sel.scope != Scope.EVENT_ONLY:
+        return None, _empty_envelope(
+            scope=sel.scope.value,
+            error=_error(
+                "invalid_subscribe_scope",
+                "top-level live event subscriptions require event(...) scope; "
+                f"got scope={sel.scope.value!r}",
+            ),
+        )
+
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
+        if "error" in page:
+            return None, page
+        rows.extend(page["results"])
+        if page["next_offset"] is None:
+            break
+        offset = page["next_offset"]
+
+    names = sorted({
+        row.get("name") for row in rows
+        if row.get("name")
+    })
+    return names, None
+
+
 def _event_subjects_for_selector(selector: str) -> tuple[list[str] | None, dict[str, Any] | None]:
     """Resolve an event-scoped selector to per-device subjects.
 
     Returns ``(subjects, None)`` on success or ``(None, error_envelope)``
     if the selector failed to parse or used a non-event scope.
     """
+    try:
+        sel = parse_selector(selector)
+    except SelectorParseError as e:
+        return None, _empty_envelope(error=_error("selector_parse_error", str(e)))
+
+    if sel.scope == Scope.EVENT_ONLY:
+        names, error = _event_names_for_filter(selector)
+        if error is not None:
+            return None, error
+        conn = get_connection()
+        return [
+            f"device-connect.{conn.zone}.*.event.{name}"
+            for name in (names or [])
+        ], None
+
     rows: list[dict] = []
     offset = 0
     while True:
@@ -1113,8 +1162,11 @@ def subscribe(selector: str) -> Subscription:
     Args:
         selector: One of:
             - ``"correlation:<id>"`` for broadcast replies of a prior call.
-            - An event-scoped selector (``event(<name>)`` or
-              ``device(...).event(<name>)``) for live event streams.
+            - ``event(...)`` for live event streams. Matching event names are
+              resolved once, then subscribed with a device wildcard so devices
+              that join later and emit those event names are included.
+            - ``device(...).event(...)`` for a snapshot event stream over the
+              devices resolved when the subscription is created.
 
     Returns:
         A :class:`Subscription` handle. Iterate with ``sub.iter(timeout)``

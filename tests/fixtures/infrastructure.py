@@ -219,33 +219,46 @@ async def wait_for_all_services(
     logger.info("All infrastructure services healthy")
 
 
-async def clear_device_registry(etcd_host: str = "localhost", etcd_port: int = 2379) -> int:
+async def clear_device_registry(
+    etcd_host: str = "localhost",
+    etcd_port: int = 2379,
+    tenant: str = "default",
+) -> int:
     """Clear all devices from the registry via etcd HTTP API."""
     import base64
     import aiohttp
 
     base_url = f"http://{etcd_host}:{etcd_port}"
-    prefix = "/device-connect/devices/"
-    key_start = base64.b64encode(prefix.encode()).decode()
-    prefix_end = prefix[:-1] + chr(ord(prefix[-1]) + 1)
-    key_end = base64.b64encode(prefix_end.encode()).decode()
+    prefixes = [
+        f"/device-connect/{tenant}/devices/",
+        # Historical pre-tenant path; clear it too for compatibility with
+        # older local infrastructure or tests that left stale entries behind.
+        "/device-connect/devices/",
+    ]
 
+    cleared = 0
     async with aiohttp.ClientSession() as session:
-        async with session.post(
-            f"{base_url}/v3/kv/range",
-            json={"key": key_start, "range_end": key_end, "count_only": True},
-            timeout=aiohttp.ClientTimeout(total=10),
-        ) as resp:
-            if resp.status != 200:
-                return 0
-            data = await resp.json()
-            count = int(data.get("count", 0))
+        for prefix in prefixes:
+            key_start = base64.b64encode(prefix.encode()).decode()
+            prefix_end = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+            key_end = base64.b64encode(prefix_end.encode()).decode()
 
-        if count > 0:
-            await session.post(
-                f"{base_url}/v3/kv/deleterange",
-                json={"key": key_start, "range_end": key_end},
+            async with session.post(
+                f"{base_url}/v3/kv/range",
+                json={"key": key_start, "range_end": key_end, "count_only": True},
                 timeout=aiohttp.ClientTimeout(total=10),
-            )
-            logger.info(f"Cleared {count} devices from registry")
-        return count
+            ) as resp:
+                if resp.status != 200:
+                    continue
+                data = await resp.json()
+                count = int(data.get("count", 0))
+
+            if count > 0:
+                await session.post(
+                    f"{base_url}/v3/kv/deleterange",
+                    json={"key": key_start, "range_end": key_end},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                )
+                cleared += count
+                logger.info("Cleared %d devices from registry prefix %s", count, prefix)
+        return cleared

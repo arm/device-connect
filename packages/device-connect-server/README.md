@@ -267,7 +267,10 @@ Each tenant gets a distributable credential bundle (zip) in `security_infra/tena
 devctl list                                # list registered devices
 devctl list --compact                      # compact output
 devctl register --id myDevice --keepalive  # register a test device
-devctl discover --timeout 5               # find uncommissioned devices (mDNS)
+devctl mdns-scan --timeout 5              # find uncommissioned devices (mDNS)
+devctl scan --timeout 5                   # alias for mdns-scan
+devctl discover "device(category:camera)" # discover registered devices by selector
+devctl discover-labels                    # list selector label keys and values
 devctl commission cam-001 --pin 1234-5678  # commission a device
 devctl interactive                         # REPL for device operations
 
@@ -280,6 +283,14 @@ statectl watch experiments/ --prefix       # watch for changes
 statectl locks                             # list held locks
 statectl stats                             # key counts by namespace
 ```
+
+### CLI migration note
+
+This release renames the local-network mDNS scan from
+`devctl discover --timeout ...` to `devctl mdns-scan --timeout ...`;
+`devctl scan --timeout ...` is the short alias. The `discover` verb now belongs
+to selector discovery over the registered fleet, for example
+`devctl discover "device(category:camera)"`.
 
 ## Device Commissioning Flow
 

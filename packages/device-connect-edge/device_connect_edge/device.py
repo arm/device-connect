@@ -62,6 +62,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -1317,13 +1318,59 @@ class DeviceRuntime:
                 "status": status_dict,
                 "bindings": bindings or {},
             }
-            return bool(predicate.evaluate(context))
+            return self._evaluate_where_with_timeout(
+                predicate, context, correlation_id,
+            )
         except Exception as e:
             self._logger.warning(
                 "Broadcast %s: where predicate failed (skipping): %s",
                 correlation_id, e,
             )
             return False
+
+
+    def _evaluate_where_with_timeout(
+        self,
+        predicate: Any,
+        context: Dict[str, Any],
+        correlation_id: str,
+        timeout_s: float = 0.05,
+    ) -> bool:
+        """Evaluate a predicate with a short wall-clock deadline."""
+        result: Dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                result["value"] = bool(predicate.evaluate(context))
+            except Exception as e:
+                result["error"] = e
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        thread.join(timeout_s)
+        if thread.is_alive():
+            self._logger.warning(
+                "Broadcast %s: where predicate timed out after %.3fs (skipping)",
+                correlation_id, timeout_s,
+            )
+            return False
+        if "error" in result:
+            raise result["error"]
+        return bool(result.get("value", False))
+
+
+    def _warn_if_predicate_extra_missing(self) -> None:
+        """Log once at startup when edge-side CEL predicates are unavailable."""
+        try:
+            from device_connect_edge.predicate import compile_where
+            compile_where("true")
+        except Exception as e:
+            self._logger.warning(
+                "Edge-side where predicates are unavailable on this device: %s. "
+                "Install the predicate extra on every edge that should evaluate "
+                "broadcast where clauses: pip install 'device-connect-edge[predicate]'",
+                e,
+            )
 
 
     async def _event_dispatch_loop(self) -> None:
@@ -1551,6 +1598,8 @@ class DeviceRuntime:
 
             # Set up DeviceDriver capabilities (router, registry, subscriptions)
             await self._setup_agentic_driver()
+
+            self._warn_if_predicate_extra_missing()
 
             # Start device routines (@periodic decorated methods)
             await self._driver._start_routines()

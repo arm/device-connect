@@ -139,7 +139,7 @@ is whether the caller waits for replies and how they arrive.
 | `invoke(selector, params)` | exactly one (device, function) tuple | sync, single result |
 | `invoke_many(selector, params, timeout=)` | any number of (device, function) tuples | sync, aggregated |
 | `broadcast(selector, params, where=, bindings=, fire_at=, on_late=)` | any number of (device, function) tuples | async; correlation-tagged replies stream as events |
-| `subscribe(selector)` | events, or `"correlation:<id>"` for broadcast replies | live stream (`Subscription` handle) |
+| `subscribe(selector)` | events, or `"correlation:<id>"` for broadcast replies | stream (`Subscription` handle) |
 | `await_replies(correlation_id, timeout=, until=)` | replies for one broadcast | sync helper that subscribes, collects, returns |
 
 `invoke_many` runs every target's call in parallel and returns when each
@@ -151,6 +151,15 @@ failures do not abort siblings; the response carries both `results` and
 `correlation_id` immediately and replies stream back on a per-device
 subject keyed by that id. Subscribe with `subscribe("correlation:<id>")`
 or block with `await_replies(correlation_id, timeout=...)`.
+
+`subscribe("event(...)")` is fleet-live by event name: it resolves the
+matching event names once, then subscribes with a device wildcard so
+late-joining devices that emit those event names are included. In
+contrast, `subscribe("device(...).event(...)")` is device-set snapshot:
+it resolves the matching devices at subscription time and subscribes to
+those concrete device/event subjects. Use top-level `event(...)` for
+long-running fleet monitors and the device-anchored form when you want a
+predictable fixed target set.
 
 ### Edge-side `where` predicate
 
@@ -178,11 +187,16 @@ predicate evaluator is an optional install:
 
 ```
 pip install device-connect-agent-tools[predicate]
+pip install device-connect-edge[predicate]
 ```
 
 Without the extra, calling `broadcast(..., where=...)` returns an
-`invalid_predicate` error immediately at the dispatcher; calls without a
-`where` work unchanged.
+`invalid_predicate` error immediately at the dispatcher. Edges that do
+not have the predicate extra log a startup warning and fail closed for
+`where` broadcasts, skipping execution rather than running an
+unevaluated predicate. Predicate evaluation is also wall-clock bounded
+at the edge; timeouts are logged with the broadcast correlation id and
+fail closed. Calls without a `where` work unchanged.
 
 ### Synchronized fan-out (`fire_at` + `on_late`)
 
@@ -211,8 +225,9 @@ broadcast would produce.
 
 The three response shapes below — one for `discover`, two for
 `discover_labels` — are the source of truth for callers. Fields not
-listed are reserved for forward-compatible extensions; do not rely on
-field order.
+listed are reserved for forward-compatible, protocol-specific, or
+vendor-specific extensions. Treat those extension fields as opaque unless
+they are documented by Device Connect; do not rely on field order.
 
 ### `discover`
 
@@ -479,13 +494,28 @@ with subscribe("device(location:lab-A/*).event(modality:motion)") as sub:
         handle(event)
 ```
 
+Use `subscribe("event(modality:motion)")` instead for a long-running
+fleet-wide monitor that should also receive matching events from devices
+that join after the subscription starts.
+
 ## CLI
 
 The same selector syntax drives the operator CLIs. Every CLI command
 maps to the matching Python tool call.
 
+### CLI migration note
+
+This release splits local mDNS scanning from selector discovery. Use
+`devctl mdns-scan --timeout 5` or the shorter `devctl scan --timeout 5`
+to find uncommissioned devices on the local network. `devctl discover`
+now owns selector-driven discovery over the registered fleet.
+
 ```
-# Discovery (devctl)
+# Local mDNS scan (devctl)
+devctl mdns-scan [--timeout T]
+devctl scan [--timeout T]
+
+# Selector discovery (devctl)
 devctl discover "<selector>" [--offset N] [--limit M]
 devctl discover-labels [--key K] [--offset N] [--limit M]
 
