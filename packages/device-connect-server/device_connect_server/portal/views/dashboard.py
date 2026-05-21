@@ -18,6 +18,7 @@ from ..services.backend import get_backend
 def setup_routes(app: web.Application):
     app.router.add_get("/dashboard", dashboard_page)
     app.router.add_get("/api/devices/live", live_devices_fragment)
+    app.router.add_get("/api/devices/{device_id}/live-detail", live_device_detail_fragment)
     app.router.add_post("/api/devices/{device_id}/invoke", invoke_device_rpc)
     app.router.add_get("/api/devices/{device_id}/events/{event_name}/stream", event_stream)
 
@@ -47,19 +48,56 @@ async def dashboard_page(request: web.Request):
 
 
 async def live_devices_fragment(request: web.Request):
-    """Return the live devices table as an HTML fragment for htmx polling."""
+    """Return the live devices table as an HTML fragment for htmx polling.
+
+    Only summary rows are rendered here; the per-device detail markup is
+    lazy-loaded from ``/api/devices/{device_id}/live-detail`` when a row
+    is expanded. At fleet scale the detail blocks dominate response size,
+    so deferring them keeps each poll cheap regardless of fleet size.
+    """
     tenant = _resolve_tenant(request)
 
+    # etcd get_prefix + JSON-decode scales with fleet size; run it off
+    # the event loop so other portal requests aren't blocked on the poll.
     devices = []
     try:
-        devices = registry_client.list_live_devices(tenant)
+        devices = await asyncio.to_thread(
+            registry_client.list_live_devices, tenant,
+        )
     except Exception:
         pass
 
     return aiohttp_jinja2.render_template("devices/_live_table.html", request, {
         "devices": devices,
+        "tenant": tenant,
         "user": request.get("user", {}),
     })
+
+
+async def live_device_detail_fragment(request: web.Request):
+    """Return the per-device detail fragment (functions, events, raw JSON).
+
+    Loaded lazily when a row is expanded — keeps the main polling
+    response O(summary) rather than O(summary + every-device-detail).
+    """
+    tenant = _resolve_tenant(request)
+    device_id = request.match_info["device_id"]
+
+    raw = await asyncio.to_thread(registry_client.get_device, tenant, device_id)
+    if not raw:
+        return web.Response(
+            text='<p class="text-xs text-red-500">Device not found.</p>',
+            content_type="text/html",
+        )
+
+    device = {
+        "device_id": raw.get("device_id", device_id),
+        "capabilities": raw.get("capabilities") or {},
+        "_raw": raw,
+    }
+    return aiohttp_jinja2.render_template(
+        "devices/_live_detail.html", request, {"device": device},
+    )
 
 
 def _resolve_tenant(request: web.Request) -> str:

@@ -47,7 +47,7 @@
   </div>
   <div id="live-devices"
        hx-get="/api/devices/live?tenant={{ tenant }}"
-       hx-trigger="load, every 3s"
+       hx-trigger="load, every 10s"
        hx-swap="innerHTML">
     <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
   </div>
