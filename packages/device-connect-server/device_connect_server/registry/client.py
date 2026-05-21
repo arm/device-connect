@@ -33,13 +33,13 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from device_connect_edge.messaging import MessagingClient
+from device_connect_edge.messaging.config import MessagingConfig
+
 # Per-page chunk size when ``list_devices`` transparently iterates the
 # fleet. Matches the edge client default; see device_connect_edge's
 # registry_client._DEFAULT_LIST_PAGE_SIZE for the rationale.
 _DEFAULT_LIST_PAGE_SIZE = int(os.getenv("DEVICE_CONNECT_LIST_PAGE_SIZE", "100"))
-
-from device_connect_edge.messaging import MessagingClient
-from device_connect_edge.messaging.config import MessagingConfig
 
 
 class RegistryClient:
