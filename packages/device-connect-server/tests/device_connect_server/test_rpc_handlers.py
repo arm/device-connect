@@ -121,6 +121,7 @@ def mock_registry():
     with patch("device_connect_server.registry.service.main.registry") as mock_reg:
         mock_reg.register = MagicMock()
         mock_reg.list_devices = MagicMock(return_value=[])
+        mock_reg.list_devices_page = MagicMock(return_value=([], None, 0))
         mock_reg.get_device = MagicMock(return_value=None)
         mock_reg.refresh = MagicMock()
         mock_reg.update_status = MagicMock()
@@ -297,42 +298,53 @@ class TestListDevicesHandler:
 
     @pytest.mark.asyncio
     async def test_list_devices_success(self, messaging, mock_registry):
-        mock_registry.list_devices.return_value = [SAMPLE_DEVICE]
+        mock_registry.list_devices_page.return_value = ([SAMPLE_DEVICE], None, 1)
         handler = _make_list_handler(TENANT, messaging)
         data = _rpc_request("discovery/listDevices", {})
         await handler(data, "reply-sub")
 
-        mock_registry.list_devices.assert_called_once_with(
-            TENANT, device_type=None, location=None,
-        )
+        # Handler always paginates server-side; the limit is the
+        # _LIST_DEVICES_MAX_LIMIT cap when the caller doesn't pass one.
+        mock_registry.list_devices_page.assert_called_once()
+        call_kwargs = mock_registry.list_devices_page.call_args.kwargs
+        assert call_kwargs["device_type"] is None
+        assert call_kwargs["location"] is None
+        assert call_kwargs["offset"] == 0
+        assert call_kwargs["limit"] >= 1
         response = json.loads(messaging.publish.call_args[0][1])
         assert response["result"]["devices"] == [SAMPLE_DEVICE]
+        assert response["result"]["next_offset"] is None
+        assert response["result"]["total_matched"] == 1
 
     @pytest.mark.asyncio
     async def test_list_devices_with_filters(self, messaging, mock_registry):
-        mock_registry.list_devices.return_value = [SAMPLE_DEVICE]
+        mock_registry.list_devices_page.return_value = ([SAMPLE_DEVICE], None, 1)
         handler = _make_list_handler(TENANT, messaging)
         data = _rpc_request("discovery/listDevices", {
             "device_type": "camera", "location": "lab-A",
         })
         await handler(data, "reply-sub")
 
-        mock_registry.list_devices.assert_called_once_with(
-            TENANT, device_type="camera", location="lab-A",
-        )
+        mock_registry.list_devices_page.assert_called_once()
+        call_kwargs = mock_registry.list_devices_page.call_args.kwargs
+        assert call_kwargs["device_type"] == "camera"
+        assert call_kwargs["location"] == "lab-A"
 
     @pytest.mark.asyncio
     async def test_list_devices_empty(self, messaging, mock_registry):
-        mock_registry.list_devices.return_value = []
+        mock_registry.list_devices_page.return_value = ([], None, 0)
         handler = _make_list_handler(TENANT, messaging)
         await handler(_rpc_request("discovery/listDevices", {}), "reply-sub")
 
         response = json.loads(messaging.publish.call_args[0][1])
         assert response["result"]["devices"] == []
+        assert response["result"]["total_matched"] == 0
 
     @pytest.mark.asyncio
     async def test_list_devices_with_acl(self, messaging, mock_registry):
-        mock_registry.list_devices.return_value = [SAMPLE_DEVICE, SAMPLE_DEVICE_2]
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE, SAMPLE_DEVICE_2], None, 2,
+        )
 
         acl_mgr = ACLManager()
         # Hide camera-001 from robot-001
@@ -352,7 +364,7 @@ class TestListDevicesHandler:
 
     @pytest.mark.asyncio
     async def test_list_devices_registry_error(self, messaging, mock_registry):
-        mock_registry.list_devices.side_effect = RuntimeError("etcd down")
+        mock_registry.list_devices_page.side_effect = RuntimeError("etcd down")
         handler = _make_list_handler(TENANT, messaging)
         await handler(_rpc_request("discovery/listDevices", {}), "reply-sub")
 
@@ -366,7 +378,7 @@ class TestListDevicesHandler:
         await handler(data, None)
 
         messaging.publish.assert_not_called()
-        mock_registry.list_devices.assert_not_called()
+        mock_registry.list_devices_page.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
