@@ -45,8 +45,19 @@ def _enlarge_etcd_pool(client: Any, pool_size: int) -> None:
     We mount the adapter onto the already-constructed ``client.session``
     instead of passing ``session=`` to ``etcd3gw.client(...)`` so the
     fix works against etcd3gw 2.5.x (no ``session`` kwarg) and 2.6+.
+
+    If the etcd3gw client stops exposing ``session`` (e.g. a future
+    refactor wraps it), log a warning so the silently-degraded pool
+    doesn't reintroduce the registration-storm bottleneck without any
+    operator-visible signal.
     """
     if not hasattr(client, "session"):
+        _logger.warning(
+            "etcd3gw client has no ``session`` attribute; HTTP pool "
+            "size remains at the urllib3 default (10). This will "
+            "bottleneck the registry under registration herds. "
+            "Inspect etcd3gw internals and update _enlarge_etcd_pool.",
+        )
         return
     adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
     client.session.mount("http://", adapter)
@@ -209,15 +220,23 @@ class DeviceRegistry:
         Slices the filtered fleet by ``offset`` and ``limit``. Existing etcd
         load behavior is unchanged — we still scan the tenant prefix — but the
         reply carries only the requested page, keeping NATS payloads bounded
-        regardless of fleet size. Stability: device order follows etcd key
-        order, which is deterministic for a steady-state fleet; concurrent
-        registrations/expirations can shift records across pages.
+        regardless of fleet size.
+
+        Stability: device order follows etcd key order, which is deterministic
+        for a steady-state fleet; concurrent registrations/expirations can
+        shift records across pages, producing transient duplicates or skips
+        in a walk that spans many round-trips. Callers that need a perfectly
+        stable snapshot must filter duplicates by ``device_id`` after the
+        walk. (Keyset pagination would avoid this; offset is used here for
+        simplicity.)
 
         Returns:
             (devices_page, next_offset, total_matched).
             ``next_offset`` is None when the page reaches the end of the
-            filtered list. ``total_matched`` is the size after filtering and
-            before pagination.
+            filtered list. ``total_matched`` is the size after the
+            ``device_type``/``location`` filters and before pagination.
+            ACL filtering, when enabled at the handler layer, runs after
+            this method returns and can further shrink the page.
         """
         all_devices = self.list_devices(
             tenant, device_type=device_type, location=location,

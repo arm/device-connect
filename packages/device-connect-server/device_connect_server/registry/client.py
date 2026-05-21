@@ -237,6 +237,14 @@ class RegistryClient:
 
         Returns ``(devices, next_offset, total_matched)``; ``next_offset``
         is ``None`` on the final page.
+
+        ACL caveat:
+            When the registry has ACLs enabled, filtering runs *after*
+            slicing. ``len(devices)`` for a page may be smaller than
+            ``limit`` even when more pages follow, and ``total_matched``
+            is the unfiltered total (before the caller's ACL applies).
+            Callers should treat ``total_matched`` as an upper bound and
+            must not infer "full page" from ``len(devices) == limit``.
         """
         return await self._list_devices_page(
             device_type=device_type,
