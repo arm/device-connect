@@ -53,6 +53,16 @@ _device_ttl: dict[str, int] = {}
 _DEFAULT_TTL = 15                # Fallback TTL when device doesn't report one
 _PULL_REGISTRATION_TIMEOUT = 5   # Timeout for requestRegistration RPC
 
+# Server-side cap for discovery/listDevices page sizes. NATS rejects any
+# single publish larger than the broker's max_payload, so the registry
+# must guarantee no reply ever exceeds it regardless of what `limit` the
+# caller asked for. Empirically a flashlight-auditorium phone record is
+# ~13KB serialized, so 200 records ~= 2.6MB, which fits comfortably under
+# the 32MB broker ceiling while keeping per-page round-trip small. Old
+# clients that omit `limit` entirely also get this cap applied so they
+# can't trigger an unpaginated fleet snapshot at scale.
+_LIST_DEVICES_MAX_LIMIT = int(os.getenv("DC_LIST_DEVICES_MAX_LIMIT", "200"))
+
 
 def _resolve_tenants() -> List[str]:
     """Resolve the list of tenants to handle.
@@ -378,54 +388,56 @@ def _make_list_handler(
             if method == "discovery/listDevices":
                 device_type = params.get("device_type")
                 location = params.get("location")
-                # Pagination: ``offset`` and ``limit`` are optional. When
-                # ``limit`` is omitted the legacy single-shot reply is
-                # returned for backward compat with older clients. New
-                # clients pass ``limit`` to keep each reply under the NATS
-                # max_payload regardless of fleet size.
-                paged = "limit" in params
-                if paged:
-                    page, next_offset, total = await asyncio.to_thread(
-                        registry.list_devices_page, tenant,
-                        device_type=device_type,
-                        location=location,
-                        offset=int(params.get("offset", 0) or 0),
-                        limit=int(params["limit"]),
-                    )
-                    if acl_manager:
-                        requester_id = params.get("requester_id", "")
-                        # ACL filtering runs after pagination — devices the
-                        # caller is not allowed to see are dropped from the
-                        # page rather than from the unsliced fleet, so the
-                        # totals reported here may be larger than what
-                        # eventually reaches the requester. That's
-                        # acceptable: ACL is opt-in and primarily a server-
-                        # side hint, not a strict cardinality contract.
-                        page = acl_manager.filter_visible_devices(
-                            requester_id, page, tenant=tenant
-                        )
-                    await messaging.publish(
-                        reply,
-                        build_rpc_response(payload.get("id"), {
-                            "devices": page,
-                            "next_offset": next_offset,
-                            "total_matched": total,
-                        })
-                    )
+                # Pagination: ``offset`` and ``limit`` are optional. The
+                # registry always paginates server-side and clamps the
+                # page size to ``_LIST_DEVICES_MAX_LIMIT`` so a single
+                # reply can never exceed the broker's max_payload, even
+                # for old clients that don't pass ``limit``. Callers see
+                # ``next_offset`` and must loop through pages — the edge
+                # ``RegistryClient.list_devices`` already does this
+                # transparently for callers that want the whole fleet.
+                requested_limit = params.get("limit")
+                if requested_limit is None:
+                    effective_limit = _LIST_DEVICES_MAX_LIMIT
                 else:
-                    devs = await asyncio.to_thread(
-                        registry.list_devices, tenant,
-                        device_type=device_type, location=location,
-                    )
-                    if acl_manager:
-                        requester_id = params.get("requester_id", "")
-                        devs = acl_manager.filter_visible_devices(
-                            requester_id, devs, tenant=tenant
+                    try:
+                        requested_limit = int(requested_limit)
+                    except (TypeError, ValueError):
+                        requested_limit = _LIST_DEVICES_MAX_LIMIT
+                    if requested_limit <= 0:
+                        effective_limit = _LIST_DEVICES_MAX_LIMIT
+                    else:
+                        effective_limit = min(
+                            requested_limit, _LIST_DEVICES_MAX_LIMIT,
                         )
-                    await messaging.publish(
-                        reply,
-                        build_rpc_response(payload.get("id"), {"devices": devs})
+                page, next_offset, total = await asyncio.to_thread(
+                    registry.list_devices_page, tenant,
+                    device_type=device_type,
+                    location=location,
+                    offset=int(params.get("offset", 0) or 0),
+                    limit=effective_limit,
+                )
+                if acl_manager:
+                    requester_id = params.get("requester_id", "")
+                    # ACL filtering runs after pagination — devices the
+                    # caller is not allowed to see are dropped from the
+                    # page rather than from the unsliced fleet, so the
+                    # totals reported here may be larger than what
+                    # eventually reaches the requester. That's
+                    # acceptable: ACL is opt-in and primarily a
+                    # server-side hint, not a strict cardinality
+                    # contract.
+                    page = acl_manager.filter_visible_devices(
+                        requester_id, page, tenant=tenant
                     )
+                await messaging.publish(
+                    reply,
+                    build_rpc_response(payload.get("id"), {
+                        "devices": page,
+                        "next_offset": next_offset,
+                        "total_matched": total,
+                    })
+                )
             elif method == "discovery/getDevice":
                 device_id = params.get("device_id")
                 if not device_id:
