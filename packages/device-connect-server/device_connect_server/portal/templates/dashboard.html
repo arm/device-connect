@@ -56,6 +56,23 @@
 <script>
 window._expandedDevices = window._expandedDevices || new Set();
 
+window._detailLoaded = window._detailLoaded || new Set();
+
+function loadDetailIfNeeded(row, deviceId) {
+  if (window._detailLoaded.has(deviceId)) return;
+  var url = row.getAttribute('data-detail-url');
+  var slot = row.querySelector('.detail-content');
+  if (!url || !slot) return;
+  window._detailLoaded.add(deviceId);
+  fetch(url, {credentials: 'same-origin'})
+    .then(function(r) { return r.text(); })
+    .then(function(html) { slot.innerHTML = html; })
+    .catch(function(err) {
+      window._detailLoaded.delete(deviceId);
+      slot.innerHTML = '<p class="text-xs text-red-500">Failed to load details: ' + err + '</p>';
+    });
+}
+
 function toggleDetail(deviceId) {
   var row = document.getElementById('detail-' + deviceId);
   var chevron = document.getElementById('chevron-' + deviceId);
@@ -63,8 +80,12 @@ function toggleDetail(deviceId) {
   var opening = row.classList.contains('hidden');
   row.classList.toggle('hidden');
   if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
-  if (opening) window._expandedDevices.add(deviceId);
-  else window._expandedDevices.delete(deviceId);
+  if (opening) {
+    window._expandedDevices.add(deviceId);
+    loadDetailIfNeeded(row, deviceId);
+  } else {
+    window._expandedDevices.delete(deviceId);
+  }
 }
 
 // Pause auto-refresh while any detail row is expanded

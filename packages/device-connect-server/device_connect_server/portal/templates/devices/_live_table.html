@@ -39,13 +39,16 @@
       <td class="px-5 py-3 text-sm text-gray-600">{{ device.location or "—" }}</td>
       <td class="px-5 py-3 text-sm text-gray-400">{{ device.last_seen or "—" }}</td>
     </tr>
-    <tr id="detail-{{ device.device_id }}" class="hidden">
+    <tr id="detail-{{ device.device_id }}" class="hidden"
+        data-detail-url="/api/devices/{{ device.device_id }}/live-detail{% if tenant %}?tenant={{ tenant }}{% endif %}">
       <td colspan="5" class="px-5 py-4 bg-gray-50">
-        {# Per-device detail is lazy-loaded on first reveal — keeps the
-           table-poll response O(summary) rather than O(N * detail). #}
-        <div hx-get="/api/devices/{{ device.device_id }}/live-detail{% if tenant %}?tenant={{ tenant }}{% endif %}"
-             hx-trigger="revealed once"
-             hx-swap="innerHTML">
+        {# Per-device detail is lazy-loaded on first expand by
+           toggleDetail() in dashboard.html. We deliberately do not use
+           ``hx-trigger=revealed``: htmx's revealed implementation polls
+           getBoundingClientRect, and display:none elements report a
+           zero-rect at (0,0) which falsely counts as "in viewport",
+           so revealed would fire for every hidden row on page load. #}
+        <div class="detail-content">
           <p class="text-xs text-gray-400 italic">Loading details&hellip;</p>
         </div>
       </td>
