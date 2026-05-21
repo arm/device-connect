@@ -26,7 +26,19 @@ _REGISTRY_CREDS = Path(config.CREDS_DIR) / "registry.creds.json"
 # concurrent-safe (each nc.request creates its own inbox subscription)
 # so a single cached client serves the whole portal.
 _invoke_client: "nats.aio.client.Client | None" = None
-_invoke_client_lock = asyncio.Lock()
+# Lock is created lazily inside _get_invoke_lock() rather than at import
+# time. asyncio.Lock() binds to whatever event loop is current when it's
+# constructed; constructing it here would break tests (and any future
+# code) that runs this module under a fresh loop.
+_invoke_client_lock: "asyncio.Lock | None" = None
+
+
+def _get_invoke_lock() -> asyncio.Lock:
+    """Return the module-level invoke lock, creating it on first use."""
+    global _invoke_client_lock
+    if _invoke_client_lock is None:
+        _invoke_client_lock = asyncio.Lock()
+    return _invoke_client_lock
 
 
 def _load_creds() -> dict:
@@ -40,11 +52,30 @@ def _load_creds() -> dict:
 async def _get_invoke_client():
     """Lazily open and cache a single NATS client for RPC invocations."""
     global _invoke_client
-    async with _invoke_client_lock:
+    async with _get_invoke_lock():
         if _invoke_client is None or _invoke_client.is_closed:
             _invoke_client = await connect()
             logger.info("invoke client connected; will be reused across requests")
         return _invoke_client
+
+
+async def _drop_invoke_client() -> None:
+    """Discard the cached client, best-effort closing whatever's there.
+
+    Called after a hard transport failure so the next invoke() reconnects
+    rather than reusing a half-dead client. The ``close()`` is wrapped in
+    a broad try/except because the connection is already known to be in
+    a bad state — we just want to release sockets if we can.
+    """
+    global _invoke_client
+    async with _get_invoke_lock():
+        stale = _invoke_client
+        _invoke_client = None
+    if stale is not None:
+        try:
+            await stale.close()
+        except Exception:
+            logger.debug("ignored error closing stale invoke client", exc_info=True)
 
 
 async def connect():
@@ -104,11 +135,10 @@ async def invoke(tenant: str, device_id: str, function: str, params: dict, timeo
         )
         return {"error": {"code": -2, "message": f"Request timed out after {timeout}s"}}
     except Exception as e:
-        # On a hard transport failure, drop the cached client so the next
-        # call reconnects rather than reusing a dead connection.
-        global _invoke_client
-        async with _invoke_client_lock:
-            _invoke_client = None
+        # On a hard transport failure, drop the cached client (and
+        # best-effort close its sockets) so the next call reconnects
+        # rather than reusing a dead connection.
+        await _drop_invoke_client()
         logger.exception(
             "invoke %s/%s.%s error in %.1fms: %s",
             tenant, device_id, function, (time.monotonic() - t0) * 1000, e,
