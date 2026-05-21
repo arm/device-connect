@@ -392,6 +392,27 @@ class TestCollectEventSubscriptions:
         subs = driver._collect_event_subscriptions()
         assert len(subs) == 2
 
+    def test_underscore_prefixed_handler_is_still_collected(self):
+        """Single-underscore @on handlers must not silently become no-ops."""
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="phone", event_name="state_changed")
+            async def _on_phone_state(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        assert len(subs) == 1
+        assert subs[0]["device_type"] == "phone"
+        assert subs[0]["event_name"] == "state_changed"
+
 
 # ── setup_subscriptions error isolation ───────────────────────────
 

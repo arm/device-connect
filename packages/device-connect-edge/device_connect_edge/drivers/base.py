@@ -1049,13 +1049,17 @@ class DeviceDriver(ABC):
     def _collect_event_subscriptions(self) -> List[Dict[str, Any]]:
         """Collect all @on decorated methods.
 
+        Scans single-underscore-prefixed methods as well as public ones so
+        drivers can keep ``@on`` handlers conventionally private without
+        them silently becoming no-ops. Dunders are still skipped.
+
         Returns:
             List of subscription definitions
         """
         subscriptions = []
 
         for attr_name in dir(self):
-            if attr_name.startswith("_"):
+            if attr_name.startswith("__"):
                 continue
 
             attr = getattr(self, attr_name, None)
@@ -1224,6 +1228,24 @@ class DeviceDriver(ABC):
             subject = f"device-connect.{tenant}.{device_pattern}.event.{event_pattern}"
 
         logger.info("[%s] Subscribing to: %s", self_id, subject)
+
+        # device_type filtering relies on the D2D peer cache to resolve the
+        # source device's type. In portal/registry mode there is no peer
+        # cache, so the cache miss path passes the event through unfiltered.
+        # Warn once at setup so subscribers don't silently see events from
+        # other device types. Strict filtering can be added in-handler.
+        if (
+            device_type
+            and not is_lifecycle
+            and getattr(self._device, "_d2d_collector", None) is None
+        ):
+            logger.warning(
+                "[%s] @on(device_type=%r) on %s: device_type filtering is "
+                "best-effort in registry/portal mode. The wildcard broker "
+                "subject delivers every device's matching event; add an "
+                "in-handler type check if you need strict filtering.",
+                self_id, device_type, subject,
+            )
 
         # Use subscribe_with_subject to get the matched subject in callback
         # This allows extracting device_id from wildcard subscriptions

@@ -1798,7 +1798,10 @@ class DeviceRuntime:
         if not isinstance(self._driver, DeviceDriver):
             return
 
-        self._logger.info("Setting up DeviceDriver D2D capabilities")
+        self._logger.info(
+            "Setting up DeviceDriver inter-device messaging "
+            "(router, registry, @on subscriptions)"
+        )
 
         # Create and set D2D router (inline — no orchestration dependency).
         router = _RemoteInvoker(
@@ -1832,7 +1835,11 @@ class DeviceRuntime:
 
         # Set up event subscriptions
         await self._driver.setup_subscriptions()
-        self._logger.info("DeviceDriver D2D setup complete")
+        registry_kind = "D2DRegistry" if self._d2d_mode else "RegistryClient"
+        self._logger.info(
+            "DeviceDriver inter-device messaging ready (registry=%s)",
+            registry_kind,
+        )
 
     async def _teardown_agentic_driver(self) -> None:
         """Teardown DeviceDriver subscriptions if applicable."""
