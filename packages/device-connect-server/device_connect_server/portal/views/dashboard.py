@@ -6,6 +6,7 @@
 
 import asyncio
 import json
+import logging
 import time
 
 import aiohttp_jinja2
@@ -13,6 +14,8 @@ from aiohttp import web
 
 from ..services import credentials, registry_client
 from ..services.backend import get_backend
+
+logger = logging.getLogger(__name__)
 
 
 def setup_routes(app: web.Application):
@@ -114,6 +117,7 @@ def _resolve_tenant(request: web.Request) -> str:
 
 async def invoke_device_rpc(request: web.Request):
     """Invoke an RPC function on a device via the active messaging backend."""
+    t0 = time.monotonic()
     tenant = _resolve_tenant(request)
     device_id = request.match_info["device_id"]
 
@@ -129,7 +133,16 @@ async def invoke_device_rpc(request: web.Request):
         return web.json_response({"error": {"message": "function is required"}}, status=400)
 
     backend = get_backend()
+    t_pre_rpc = time.monotonic()
     result = await backend.rpc_invoke(tenant, device_id, function, params)
+    t_post_rpc = time.monotonic()
+    logger.info(
+        "invoke %s/%s.%s handler=%.1fms (pre-rpc=%.1fms rpc=%.1fms)",
+        tenant, device_id, function,
+        (t_post_rpc - t0) * 1000,
+        (t_pre_rpc - t0) * 1000,
+        (t_post_rpc - t_pre_rpc) * 1000,
+    )
     return web.json_response(result)
 
 
