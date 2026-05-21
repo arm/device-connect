@@ -107,6 +107,9 @@ cat >> "${OUTPUT_CONF}" <<EOF
 # Device Connect additions
 listen: 0.0.0.0:4222
 http_port: 8222
+# Raised from the 1MB default so the registry can return fleet snapshots
+# for large deployments (~1400 devices at ~6KB/record = ~8MB).
+max_payload: 8MB
 EOF
 
 echo ""

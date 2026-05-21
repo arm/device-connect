@@ -262,6 +262,139 @@ class TestListDevices:
 
 
 # ---------------------------------------------------------------------------
+# TestListDevicesPage — pagination for large fleets
+# ---------------------------------------------------------------------------
+
+
+class TestListDevicesPage:
+    """Verify list_devices_page slices the filtered fleet and reports metadata."""
+
+    @staticmethod
+    def _mock_fleet(mock_client, n):
+        """Populate mock etcd with n devices ordered by device_id."""
+        mock_client.get_prefix.return_value = [
+            (
+                json.dumps({"device_id": f"dev-{i:04d}"}),
+                {"key": _b64(f"/device-connect/default/devices/dev-{i:04d}")},
+            )
+            for i in range(n)
+        ]
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_page_returns_slice_and_next_offset(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        self._mock_fleet(mock_client, 350)
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        page, next_offset, total = reg.list_devices_page(
+            "default", offset=0, limit=100,
+        )
+
+        assert len(page) == 100
+        assert page[0]["device_id"] == "dev-0000"
+        assert page[-1]["device_id"] == "dev-0099"
+        assert next_offset == 100
+        assert total == 350
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_page_final_sets_next_offset_none(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        self._mock_fleet(mock_client, 250)
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        page, next_offset, total = reg.list_devices_page(
+            "default", offset=200, limit=100,
+        )
+
+        assert len(page) == 50
+        assert page[0]["device_id"] == "dev-0200"
+        assert next_offset is None
+        assert total == 250
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_page_offset_past_end_returns_empty(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        self._mock_fleet(mock_client, 10)
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        page, next_offset, total = reg.list_devices_page(
+            "default", offset=50, limit=10,
+        )
+
+        assert page == []
+        assert next_offset is None
+        assert total == 10
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_page_limit_none_returns_remaining(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        self._mock_fleet(mock_client, 5)
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        page, next_offset, total = reg.list_devices_page(
+            "default", offset=0, limit=None,
+        )
+
+        assert len(page) == 5
+        assert next_offset is None
+        assert total == 5
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_page_walks_full_fleet(self, mock_etcd3gw):
+        """Looping with next_offset must reconstruct the full fleet."""
+        mock_client = _make_mock_etcd_client()
+        self._mock_fleet(mock_client, 1400)  # the actual blocker scale
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        gathered = []
+        offset = 0
+        while True:
+            page, next_offset, total = reg.list_devices_page(
+                "default", offset=offset, limit=100,
+            )
+            gathered.extend(page)
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        assert total == 1400
+        assert len(gathered) == 1400
+        # Order must be stable across pages
+        assert [d["device_id"] for d in gathered] == [
+            f"dev-{i:04d}" for i in range(1400)
+        ]
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_page_respects_filter(self, mock_etcd3gw):
+        """device_type filter applies before pagination."""
+        mock_client = _make_mock_etcd_client()
+        mock_client.get_prefix.return_value = [
+            (json.dumps({"device_id": "cam-001", "identity": {"device_type": "camera"}}),
+             {"key": _b64("/d")}),
+            (json.dumps({"device_id": "arm-001", "identity": {"device_type": "robot"}}),
+             {"key": _b64("/d")}),
+            (json.dumps({"device_id": "cam-002", "identity": {"device_type": "camera"}}),
+             {"key": _b64("/d")}),
+        ]
+        mock_etcd3gw.client.return_value = mock_client
+
+        reg = DeviceRegistry(host="localhost", port=2379)
+        page, next_offset, total = reg.list_devices_page(
+            "default", device_type="camera", offset=0, limit=10,
+        )
+
+        assert total == 2
+        assert len(page) == 2
+        assert all(d["identity"]["device_type"] == "camera" for d in page)
+        assert next_offset is None
+
+
+# ---------------------------------------------------------------------------
 # TestGetDevice (via update_status reading pattern)
 # ---------------------------------------------------------------------------
 

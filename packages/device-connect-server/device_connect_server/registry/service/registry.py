@@ -20,7 +20,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import etcd3gw
 
@@ -171,6 +171,44 @@ class DeviceRegistry:
             ]
         return devices
 
+    def list_devices_page(
+        self,
+        tenant: str,
+        *,
+        device_type: str | None = None,
+        location: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> Tuple[List[dict], int | None, int]:
+        """Return one page of registered device payloads plus pagination metadata.
+
+        Slices the filtered fleet by ``offset`` and ``limit``. Existing etcd
+        load behavior is unchanged — we still scan the tenant prefix — but the
+        reply carries only the requested page, keeping NATS payloads bounded
+        regardless of fleet size. Stability: device order follows etcd key
+        order, which is deterministic for a steady-state fleet; concurrent
+        registrations/expirations can shift records across pages.
+
+        Returns:
+            (devices_page, next_offset, total_matched).
+            ``next_offset`` is None when the page reaches the end of the
+            filtered list. ``total_matched`` is the size after filtering and
+            before pagination.
+        """
+        all_devices = self.list_devices(
+            tenant, device_type=device_type, location=location,
+        )
+        total = len(all_devices)
+        safe_offset = max(0, int(offset or 0))
+        if limit is None or limit <= 0:
+            page = all_devices[safe_offset:]
+            next_offset: int | None = None
+        else:
+            end = safe_offset + int(limit)
+            page = all_devices[safe_offset:end]
+            next_offset = end if end < total else None
+        return page, next_offset, total
+
     def get_device(self, tenant: str, device_id: str) -> dict | None:
         """Return a single device payload by direct key lookup (O(1)).
 
@@ -252,6 +290,24 @@ def list_devices(
 ) -> List[dict]:
     """Return a list of registered devices for ``tenant``, optionally filtered."""
     return _REGISTRY.list_devices(tenant, device_type=device_type, location=location)
+
+
+def list_devices_page(
+    tenant: str,
+    *,
+    device_type: str | None = None,
+    location: str | None = None,
+    offset: int = 0,
+    limit: int | None = None,
+) -> Tuple[List[dict], int | None, int]:
+    """Module-level wrapper for :meth:`DeviceRegistry.list_devices_page`."""
+    return _REGISTRY.list_devices_page(
+        tenant,
+        device_type=device_type,
+        location=location,
+        offset=offset,
+        limit=limit,
+    )
 
 
 def get_device(tenant: str, device_id: str) -> dict | None:

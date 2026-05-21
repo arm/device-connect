@@ -29,8 +29,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# Per-page chunk size when ``list_devices`` transparently iterates the
+# fleet. Matches the edge client default; see device_connect_edge's
+# registry_client._DEFAULT_LIST_PAGE_SIZE for the rationale.
+_DEFAULT_LIST_PAGE_SIZE = int(os.getenv("DEVICE_CONNECT_LIST_PAGE_SIZE", "100"))
 
 from device_connect_edge.messaging import MessagingClient
 from device_connect_edge.messaging.config import MessagingConfig
@@ -195,9 +201,64 @@ class RegistryClient:
             # Get only cameras
             cameras = await registry.list_devices(device_type="camera")
         """
-        subject = f"device-connect.{self._tenant}.discovery"
+        # Page through the registry so the reply never exceeds NATS's
+        # max_payload limit at fleet scale. Older servers that ignore
+        # ``limit`` still work — they return everything in one reply with
+        # ``next_offset`` absent and the loop exits immediately.
+        devices: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            page, next_offset, _total = await self._list_devices_page(
+                device_type=device_type,
+                location=location,
+                capabilities=capabilities,
+                offset=offset,
+                limit=_DEFAULT_LIST_PAGE_SIZE,
+                timeout=timeout,
+            )
+            devices.extend(page)
+            if next_offset is None:
+                break
+            offset = next_offset
+        self._logger.debug("Listed %d devices", len(devices))
+        return devices
 
-        params: Dict[str, Any] = {}
+    async def list_devices_page(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = _DEFAULT_LIST_PAGE_SIZE,
+        device_type: Optional[str] = None,
+        location: Optional[str] = None,
+        capabilities: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
+        """Fetch one page of devices with pagination metadata.
+
+        Returns ``(devices, next_offset, total_matched)``; ``next_offset``
+        is ``None`` on the final page.
+        """
+        return await self._list_devices_page(
+            device_type=device_type,
+            location=location,
+            capabilities=capabilities,
+            offset=offset,
+            limit=limit,
+            timeout=timeout,
+        )
+
+    async def _list_devices_page(
+        self,
+        *,
+        device_type: Optional[str],
+        location: Optional[str],
+        capabilities: Optional[List[str]],
+        offset: int,
+        limit: int,
+        timeout: Optional[float],
+    ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
+        subject = f"device-connect.{self._tenant}.discovery"
+        params: Dict[str, Any] = {"offset": int(offset), "limit": int(limit)}
         if device_type:
             params["device_type"] = device_type
         if location:
@@ -206,15 +267,12 @@ class RegistryClient:
             params["capabilities"] = capabilities
 
         result = await self._request(
-            subject,
-            "discovery/listDevices",
-            params if params else None,
-            timeout,
+            subject, "discovery/listDevices", params, timeout,
         )
-
         devices = result.get("devices", [])
-        self._logger.debug("Listed %d devices", len(devices))
-        return devices
+        next_offset = result.get("next_offset")
+        total = result.get("total_matched", len(devices))
+        return devices, next_offset, total
 
     async def get_device(
         self,

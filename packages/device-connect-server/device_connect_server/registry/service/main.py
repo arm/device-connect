@@ -378,19 +378,54 @@ def _make_list_handler(
             if method == "discovery/listDevices":
                 device_type = params.get("device_type")
                 location = params.get("location")
-                devs = await asyncio.to_thread(
-                    registry.list_devices, tenant,
-                    device_type=device_type, location=location,
-                )
-                if acl_manager:
-                    requester_id = params.get("requester_id", "")
-                    devs = acl_manager.filter_visible_devices(
-                        requester_id, devs, tenant=tenant
+                # Pagination: ``offset`` and ``limit`` are optional. When
+                # ``limit`` is omitted the legacy single-shot reply is
+                # returned for backward compat with older clients. New
+                # clients pass ``limit`` to keep each reply under the NATS
+                # max_payload regardless of fleet size.
+                paged = "limit" in params
+                if paged:
+                    page, next_offset, total = await asyncio.to_thread(
+                        registry.list_devices_page, tenant,
+                        device_type=device_type,
+                        location=location,
+                        offset=int(params.get("offset", 0) or 0),
+                        limit=int(params["limit"]),
                     )
-                await messaging.publish(
-                    reply,
-                    build_rpc_response(payload.get("id"), {"devices": devs})
-                )
+                    if acl_manager:
+                        requester_id = params.get("requester_id", "")
+                        # ACL filtering runs after pagination — devices the
+                        # caller is not allowed to see are dropped from the
+                        # page rather than from the unsliced fleet, so the
+                        # totals reported here may be larger than what
+                        # eventually reaches the requester. That's
+                        # acceptable: ACL is opt-in and primarily a server-
+                        # side hint, not a strict cardinality contract.
+                        page = acl_manager.filter_visible_devices(
+                            requester_id, page, tenant=tenant
+                        )
+                    await messaging.publish(
+                        reply,
+                        build_rpc_response(payload.get("id"), {
+                            "devices": page,
+                            "next_offset": next_offset,
+                            "total_matched": total,
+                        })
+                    )
+                else:
+                    devs = await asyncio.to_thread(
+                        registry.list_devices, tenant,
+                        device_type=device_type, location=location,
+                    )
+                    if acl_manager:
+                        requester_id = params.get("requester_id", "")
+                        devs = acl_manager.filter_visible_devices(
+                            requester_id, devs, tenant=tenant
+                        )
+                    await messaging.publish(
+                        reply,
+                        build_rpc_response(payload.get("id"), {"devices": devs})
+                    )
             elif method == "discovery/getDevice":
                 device_id = params.get("device_id")
                 if not device_id:
