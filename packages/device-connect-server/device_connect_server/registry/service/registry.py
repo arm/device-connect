@@ -23,11 +23,30 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 import etcd3gw
+import requests
+from requests.adapters import HTTPAdapter
 
 _logger = logging.getLogger(__name__)
 
 ETCD_HOST = os.getenv("ETCD_HOST", "localhost")
 ETCD_PORT = int(os.getenv("ETCD_PORT", "2379"))
+
+# Size of the urllib3 connection pool the etcd3gw client uses. The
+# default (10) caps concurrent HTTP-to-etcd round-trips and bottlenecks
+# the registry under a registration herd — every lease+put is two
+# sequential HTTP calls, so 1400 phones at startup queue thousands of
+# requests behind 10 sockets. 64 keeps the registry processor-bound on
+# realistic hardware while staying well under etcd's connection ceiling.
+_ETCD_POOL_SIZE = int(os.getenv("DC_ETCD_POOL_SIZE", "64"))
+
+
+def _build_etcd_session(pool_size: int) -> requests.Session:
+    """requests.Session with an oversized HTTP connection pool for etcd."""
+    session = requests.Session()
+    adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 def _kv_key(kv: dict) -> str:
@@ -88,7 +107,11 @@ class DeviceRegistry:
     leases: Dict[str, Any] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:  # pragma: no cover - thin wrapper
-        self.client = etcd3gw.client(host=self.host, port=self.port)
+        self.client = etcd3gw.client(
+            host=self.host,
+            port=self.port,
+            session=_build_etcd_session(_ETCD_POOL_SIZE),
+        )
 
     def _key(self, tenant: str, device_id: str) -> str:
         return f"/device-connect/{tenant}/devices/{device_id}"

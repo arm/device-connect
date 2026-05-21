@@ -61,6 +61,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -88,6 +89,28 @@ from device_connect_edge.telemetry.propagation import extract_from_meta
 from device_connect_edge.telemetry.tracer import SpanKind
 
 logger = logging.getLogger(__name__)
+
+
+def _env_float(name: str, default: float) -> float:
+    """Best-effort float env-var parser; falls back to default on garbage."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# Registration knobs. At fleet scale a 2s request timeout combined with N
+# phones starting in lockstep produces congestion collapse on the
+# registry: every queued-but-late reply triggers a retry that re-enters
+# the queue. A larger timeout lets the registry catch up before any
+# retry fires, and an up-front jitter spreads the initial herd so the
+# registry never sees a synchronized burst in the first place. Both are
+# env-tunable (and the jitter can be disabled by setting it to 0).
+_REGISTER_REQUEST_TIMEOUT = _env_float("DEVICE_CONNECT_REGISTER_TIMEOUT", 15.0)
+_REGISTER_STARTUP_JITTER = _env_float("DEVICE_CONNECT_REGISTER_JITTER", 5.0)
 
 
 
@@ -974,6 +997,19 @@ class DeviceRuntime:
                 self._logger.debug("Registration completed by another task, skipping")
                 return
 
+            # Spread the herd. With 1000+ phones spinning up in lockstep
+            # the registry sees a single synchronized burst that times
+            # out most callers and amplifies into a retry storm. A small
+            # randomized delay before the first request decorrelates the
+            # arrivals; subsequent retries already have exponential
+            # backoff so we only jitter once per _register call.
+            if _REGISTER_STARTUP_JITTER > 0:
+                jitter = random.uniform(0, _REGISTER_STARTUP_JITTER)
+                self._logger.debug(
+                    "Pre-registration jitter: sleeping %.2fs before first request", jitter,
+                )
+                await asyncio.sleep(jitter)
+
             delay = 1 # initial retry delay in seconds
             while True:
                 req_id = f"{self.device_id}-{int(time.time()*1000)}"
@@ -983,7 +1019,7 @@ class DeviceRuntime:
                     response_data = await self.messaging.request(
                         f"device-connect.{self.tenant}.registry",
                         json.dumps({"jsonrpc": "2.0", "id": req_id, "method": "registerDevice", "params": params}).encode(),
-                        timeout=2,
+                        timeout=_REGISTER_REQUEST_TIMEOUT,
                     )
                     self._handle_registration_reply(response_data)
                     # Note: device/online event is published by the registry service
