@@ -11,6 +11,7 @@ with imperative span helpers (not decorator-based).
 from __future__ import annotations
 
 import uuid
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Any, Dict, Optional
 
 try:
@@ -43,7 +44,10 @@ except ImportError:
 
 
 _TRACER_NAME = "device_connect"
-_TRACER_VERSION = "0.2.2"
+try:
+    _TRACER_VERSION = _pkg_version("device-connect-edge")
+except PackageNotFoundError:
+    _TRACER_VERSION = "0.0.0"
 
 
 def get_tracer() -> Any:

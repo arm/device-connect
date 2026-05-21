@@ -10,6 +10,7 @@ with lazy instrument creation.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from typing import Any, Optional
 
 try:
@@ -21,7 +22,10 @@ except ImportError:
 
 
 _METER_NAME = "device_connect"
-_METER_VERSION = "0.2.2"
+try:
+    _METER_VERSION = _pkg_version("device-connect-edge")
+except PackageNotFoundError:
+    _METER_VERSION = "0.0.0"
 
 # Singleton instance
 _metrics_instance: Optional["MetricsClient"] = None
