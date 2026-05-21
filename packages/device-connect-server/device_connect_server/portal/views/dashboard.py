@@ -70,9 +70,24 @@ async def live_devices_fragment(request: web.Request):
     except Exception:
         pass
 
+    # Header card counts are refreshed by piggybacking on this poll via
+    # hx-swap-oob in the template. Without that, dashboard_page renders
+    # them once at first load and they freeze — at fleet scale the user
+    # then sees "1401 online" long after the swarm has shut down.
+    online_count = sum(1 for d in devices if d.get("status") == "available")
+    try:
+        creds_count = len(
+            await asyncio.to_thread(credentials.list_credentials, tenant=tenant),
+        )
+    except Exception:
+        creds_count = 0
+
     return aiohttp_jinja2.render_template("devices/_live_table.html", request, {
         "devices": devices,
         "tenant": tenant,
+        "online_count": online_count,
+        "registered_count": len(devices),
+        "creds_count": creds_count,
         "user": request.get("user", {}),
     })
 

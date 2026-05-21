@@ -66,3 +66,10 @@
   <p class="text-xs text-gray-400 mt-1">Devices will appear here as they connect to the network</p>
 </div>
 {% endif %}
+
+{# Out-of-band card refresh: each htmx swap of #live-devices also
+   updates the header counters in place, so they don't freeze at the
+   value captured during the initial dashboard render. #}
+<span id="online-count" hx-swap-oob="innerHTML">{{ online_count }}</span>
+<span id="registered-count" hx-swap-oob="innerHTML">{{ registered_count }}</span>
+<span id="creds-count" hx-swap-oob="innerHTML">{{ creds_count }}</span>
