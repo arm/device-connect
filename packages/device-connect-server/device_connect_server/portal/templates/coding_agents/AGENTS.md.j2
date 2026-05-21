@@ -201,7 +201,7 @@ A "device" in Device Connect is any Python process that subclasses
 | `@emit()` | Mark a method as an event broadcaster (body is a no-op; framework publishes) |
 | `@periodic(interval=…)` | Run a method on a timer |
 | `@on(device_type=…, event_name=…)` | Subscribe to events from other devices (D2D) |
-| `self.invoke_remote(device_id, function, **params, timeout=…)` | From inside an `@rpc()` or `@periodic` method, call another device's function. Returns the JSON-RPC response dict — check for an `error` key before reading `result`. Raises backend-specific exceptions on transport failure (NATS: `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh: usually `RequestTimeoutError` after retries exhaust, `PublishError` on query-error replies — both from `device_connect_edge.messaging.exceptions`). |
+| `self.invoke_remote(device_id, function_name, timeout=None, **params)` | From inside an `@rpc()` or `@periodic` method, call another device's function. (Signature matches `DeviceDriver.invoke_remote` — `timeout` is a named kwarg *before* `**params`; the inverse order is a SyntaxError.) Returns the JSON-RPC response dict — check for an `error` key before reading `result`. Raises backend-specific exceptions on transport failure (NATS: `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh: usually `RequestTimeoutError` after retries exhaust, `PublishError` on query-error replies — both from `device_connect_edge.messaging.exceptions`). |
 
 Minimum viable driver:
 
@@ -375,17 +375,21 @@ dc-portalctl devices provision cam-001 --device-type camera \
     --creds-output-file ./{{ tenant }}-cam-001.creds.json
 scp ./{{ tenant }}-cam-001.creds.json my_device.py user@edge-host:~/dc/
 
-# 2. Install device-connect-edge on the host (one-time per host).
-#    `nkeys` is already pulled in as a required dependency of
-#    device-connect-edge; no need to list it separately.
-ssh user@edge-host "python3 -m pip install --user --upgrade device-connect-edge"
+# 2. One-time per host: create a dedicated venv and install device-connect-edge.
+#    Using a venv (rather than `pip install --user`) pins the interpreter
+#    so the systemd unit in Appendix B can call it directly — `/usr/bin/python3`
+#    on Homebrew/pyenv hosts won't see `--user` site-packages.
+#    `nkeys` is pulled in as a required dep; no need to list it separately.
+ssh user@edge-host "python3 -m venv ~/.dc-edge && \
+                    ~/.dc-edge/bin/pip install --upgrade pip && \
+                    ~/.dc-edge/bin/pip install --upgrade device-connect-edge"
 
-# 3. Run it in a detached tmux session.
+# 3. Run it in a detached tmux session, using the venv's interpreter.
 ssh user@edge-host "tmux new -d -s dc-cam-001 \
     'cd ~/dc && \
      NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json \
      NATS_URL=nats://{{ public_host }}:4222 \
-     python3 my_device.py 2>&1 | tee dc-cam-001.log'"
+     ~/.dc-edge/bin/python my_device.py 2>&1 | tee dc-cam-001.log'"
 
 # 4. Verify from the portal side.
 dc-portalctl devices list | grep {{ tenant }}-cam-001
@@ -415,8 +419,15 @@ dc-portalctl devices invoke-fallback {{ tenant }}-cam-001,{{ tenant }}-cam-002 \
     capture_frame --params '{}' --reason "Primary down, fail over"
 ```
 
-Default per-call timeout is ~10 s (override with `--timeout`). Two
-failure classes — they surface differently:
+Default per-call timeout depends on how you call:
+- `dc-portalctl devices invoke` → **10 s** (CLI arg `--timeout default=10.0`).
+- Bare HTTP without a `timeout` field in the body → **5 s** (server-side
+  `_clamp_timeout(default=5.0)` in `agent_api.py`; hard cap 60 s).
+
+If you're hand-rolling HTTP requests against the API and want the CLI's
+behavior, send `"timeout": 10` in the request body (see Appendix A).
+
+Two failure classes — they surface differently:
 
 **Device-level failures (target offline, unresponsive, or returns its own
 error)** → HTTP **200** with a success envelope; the embedded `response`
@@ -600,7 +611,7 @@ Worked example:
 curl -X POST \
     -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"function":"capture_frame","params":{"resolution":"4k"},"reason":"Daily inspection"}' \
+    -d '{"function":"capture_frame","params":{"resolution":"4k"},"reason":"Daily inspection","timeout":10}' \
     {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/invoke
 ```
 
@@ -611,13 +622,20 @@ curl -X POST \
 For longer-lived deployments, prefer a systemd-user unit so the service
 auto-restarts on crash and on reboot.
 
+The `ExecStart` here points at the venv interpreter from Section 6
+(`~/.dc-edge/bin/python`), not `/usr/bin/python3`. On hosts where the
+default `python3` resolves to Homebrew, pyenv, or anything other than
+`/usr/bin/python3`, hard-coding `/usr/bin/python3` runs an interpreter
+that doesn't see the install — the unit fails with `ModuleNotFoundError:
+No module named 'device_connect_edge'`. Pinning to the venv avoids that.
+
 ```ini
 # ~/.config/systemd/user/dc-cam-001.service
 [Service]
 WorkingDirectory=%h/dc
 Environment=NATS_CREDENTIALS_FILE=%h/dc/{{ tenant }}-cam-001.creds.json
 Environment=NATS_URL=nats://{{ public_host }}:4222
-ExecStart=/usr/bin/python3 %h/dc/my_device.py
+ExecStart=%h/.dc-edge/bin/python %h/dc/my_device.py
 Restart=on-failure
 RestartSec=5
 
