@@ -104,6 +104,7 @@ async def live_device_detail_fragment(request: web.Request):
     raw = await asyncio.to_thread(registry_client.get_device, tenant, device_id)
     if not raw:
         return web.Response(
+            status=404,
             text='<p class="text-xs text-red-500">Device not found.</p>',
             content_type="text/html",
         )

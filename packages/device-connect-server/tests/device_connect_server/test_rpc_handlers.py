@@ -453,6 +453,35 @@ class TestListDevicesHandler:
         mock_registry.list_devices_page.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_list_devices_zero_limit_returns_error(self, messaging, mock_registry):
+        """``limit=0`` is rejected rather than silently mapped to the cap."""
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": 0}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "positive" in response["error"]["message"]
+        mock_registry.list_devices_page.assert_not_called()
+        mock_registry.list_devices.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_devices_negative_limit_returns_error(self, messaging, mock_registry):
+        """Negative ``limit`` is rejected for the same reason as zero."""
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": -3}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "positive" in response["error"]["message"]
+        mock_registry.list_devices_page.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_list_devices_registry_error(self, messaging, mock_registry):
         mock_registry.list_devices.side_effect = RuntimeError("etcd down")
         handler = _make_list_handler(TENANT, messaging)

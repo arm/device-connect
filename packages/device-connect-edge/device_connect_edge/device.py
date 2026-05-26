@@ -108,10 +108,14 @@ def _env_float(name: str, default: float) -> float:
 # the queue. A larger timeout lets the registry catch up before any
 # retry fires, and an up-front jitter spreads the initial herd so the
 # registry never sees a synchronized burst in the first place. Both are
-# env-tunable (and the jitter can be disabled by setting it to 0).
+# env-tunable (jitter can be disabled by setting it to 0). The 2s jitter
+# default is a compromise: it decorrelates ~1000 devices into ~500/sec
+# (much better than lockstep) while staying tolerable for single-device
+# development. Operators at fleet scale should bump this via
+# DEVICE_CONNECT_REGISTER_JITTER=10 (or higher) to spread the herd
+# further.
 _REGISTER_REQUEST_TIMEOUT = _env_float("DEVICE_CONNECT_REGISTER_TIMEOUT", 15.0)
-_REGISTER_STARTUP_JITTER = _env_float("DEVICE_CONNECT_REGISTER_JITTER", 5.0)
-
+_REGISTER_STARTUP_JITTER = _env_float("DEVICE_CONNECT_REGISTER_JITTER", 2.0)
 
 
 def build_rpc_response(id_: str, result: Any) -> bytes:

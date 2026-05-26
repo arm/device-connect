@@ -59,7 +59,8 @@ _PULL_REGISTRATION_TIMEOUT = 5   # Timeout for requestRegistration RPC
 # the page size to bound the reply size regardless of what `limit` the
 # caller asked for. Empirically a flashlight-auditorium phone record is
 # ~13KB serialized, so 200 records ~= 2.6MB, which fits comfortably under
-# the 32MB broker ceiling while keeping per-page round-trip small.
+# the 8MB max_payload set in security_infra/setup_deployment.sh while
+# keeping per-page round-trip small.
 #
 # Old clients that omit `limit` entirely fall through to the legacy
 # unpaginated reply path — they keep working at small fleet scale and
@@ -448,12 +449,23 @@ def _make_list_handler(
                             ),
                         )
                         return
+                    # Reject ``limit <= 0`` rather than silently mapping
+                    # it to the server cap. Mapping was surprising
+                    # ("limit=0" usually means "no rows" elsewhere) and
+                    # masked client bugs that passed unintentional zero
+                    # / negative values.
                     if requested_limit_int <= 0:
-                        effective_limit = _LIST_DEVICES_MAX_LIMIT
-                    else:
-                        effective_limit = min(
-                            requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
+                        await messaging.publish(
+                            reply,
+                            build_rpc_error(
+                                payload.get("id"), -32602,
+                                f"limit must be positive, got {requested_limit_int}",
+                            ),
                         )
+                        return
+                    effective_limit = min(
+                        requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
+                    )
                     page, next_offset, total = await asyncio.to_thread(
                         registry.list_devices_page, tenant,
                         device_type=device_type,

@@ -26,6 +26,25 @@ _REGISTRY_CREDS = Path(config.CREDS_DIR) / "registry.creds.json"
 # concurrent-safe (each nc.request creates its own inbox subscription)
 # so a single cached client serves the whole portal.
 _invoke_client: "nats.aio.client.Client | None" = None
+
+# Exception types that mean "the cached NATS client is no longer usable"
+# — i.e. the next request must reconnect. We deliberately do NOT include
+# every nats.errors.Error subclass: BadSubjectError, MaxPayloadError,
+# AuthorizationError etc. are caller / payload bugs that don't kill the
+# connection, so dropping the client on them would churn the socket on
+# every malformed request. Native OSError / ConnectionError covers
+# socket-level failures the NATS client may not have wrapped yet.
+_TRANSPORT_FATAL_ERRORS: tuple = (
+    nats.errors.ConnectionClosedError,
+    nats.errors.ConnectionDrainingError,
+    nats.errors.ConnectionReconnectingError,
+    nats.errors.StaleConnectionError,
+    nats.errors.NoServersError,
+    nats.errors.OutboundBufferLimitError,
+    nats.errors.SecureConnFailedError,
+    ConnectionError,
+    OSError,
+)
 # Lock is created lazily inside _get_invoke_lock() rather than at import
 # time. asyncio.Lock() binds to whatever event loop is current when it's
 # constructed; constructing it here would break tests (and any future
@@ -135,10 +154,11 @@ async def invoke(tenant: str, device_id: str, function: str, params: dict, timeo
         )
         return {"error": {"code": -2, "message": f"Request timed out after {timeout}s"}}
     except Exception as e:
-        # On a hard transport failure, drop the cached client (and
-        # best-effort close its sockets) so the next call reconnects
-        # rather than reusing a dead connection.
-        await _drop_invoke_client()
+        # Only drop the cached client on transport-level failures so a
+        # payload / programmer bug (BadSubject, MaxPayload, KeyError in
+        # our own code, ...) doesn't churn the connection on every call.
+        if isinstance(e, _TRANSPORT_FATAL_ERRORS):
+            await _drop_invoke_client()
         logger.exception(
             "invoke %s/%s.%s error in %.1fms: %s",
             tenant, device_id, function, (time.monotonic() - t0) * 1000, e,
