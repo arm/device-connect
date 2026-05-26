@@ -219,6 +219,16 @@ class RegistryClient:
             devices.extend(page)
             if next_offset is None:
                 break
+            # Defense-in-depth: bail out if the server returns a
+            # non-advancing cursor. The current registry can't produce
+            # this, but it would otherwise be an unbounded loop.
+            if next_offset <= offset:
+                self._logger.warning(
+                    "Registry returned non-advancing next_offset=%s "
+                    "(current offset=%s); stopping page walk",
+                    next_offset, offset,
+                )
+                break
             offset = next_offset
         self._logger.debug("Listed %d devices", len(devices))
         return devices

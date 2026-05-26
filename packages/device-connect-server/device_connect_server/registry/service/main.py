@@ -478,8 +478,9 @@ def _make_list_handler(
                         registry.list_devices, tenant,
                         device_type=device_type, location=location,
                     )
-                    next_offset = None
-                    total = len(page)
+                    # next_offset / total are unused on the legacy reply
+                    # path (see the ``if paged`` branch below); the
+                    # legacy shape is just ``{"devices": page}``.
 
                 if acl_manager:
                     requester_id = params.get("requester_id", "")

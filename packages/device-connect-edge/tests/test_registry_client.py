@@ -217,3 +217,62 @@ class TestListDevicesPagination:
         assert payload["params"]["location"] == "lab-A"
         assert payload["params"]["offset"] == 0
         assert payload["params"]["limit"] == 100
+
+    @pytest.mark.asyncio
+    async def test_list_devices_handles_empty_page_with_next_offset(self):
+        """ACL filtering can yield an empty page mid-walk with next_offset
+        still pointing forward; the loop must advance, not stall."""
+        client, messaging = _make_client()
+        responses = [
+            # Page 0: ACL filtered everything out, but more pages follow.
+            json.dumps({
+                "jsonrpc": "2.0",
+                "id": "rpc-test",
+                "result": {"devices": [], "next_offset": 100, "total_matched": 200},
+            }).encode(),
+            # Page 1: some visible devices, final page.
+            json.dumps({
+                "jsonrpc": "2.0",
+                "id": "rpc-test",
+                "result": {
+                    "devices": [{"device_id": "visible-1"}],
+                    "next_offset": None,
+                    "total_matched": 200,
+                },
+            }).encode(),
+        ]
+        messaging.request = AsyncMock(side_effect=responses)
+
+        devices = await client.list_devices()
+
+        assert [d["device_id"] for d in devices] == ["visible-1"]
+        assert messaging.request.call_count == 2
+        # Second request must use next_offset from the first reply.
+        second_payload = json.loads(messaging.request.call_args_list[1].args[1])
+        assert second_payload["params"]["offset"] == 100
+
+    @pytest.mark.asyncio
+    async def test_list_devices_breaks_on_non_advancing_next_offset(self, caplog):
+        """A buggy server returning next_offset <= current offset must not
+        spin the client forever — the page loop bails with a warning."""
+        client, messaging = _make_client()
+        # Server bug: keeps returning the same offset.
+        repeating = json.dumps({
+            "jsonrpc": "2.0",
+            "id": "rpc-test",
+            "result": {
+                "devices": [{"device_id": "a"}],
+                "next_offset": 0,
+                "total_matched": 100,
+            },
+        }).encode()
+        messaging.request = AsyncMock(return_value=repeating)
+
+        with caplog.at_level("WARNING"):
+            devices = await client.list_devices()
+
+        assert len(devices) == 1
+        assert messaging.request.call_count == 1
+        assert any(
+            "non-advancing next_offset" in rec.message for rec in caplog.records
+        )

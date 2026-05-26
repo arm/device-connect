@@ -621,3 +621,57 @@ class TestCmdSubscriptionRequestRegistration:
         assert "identity" in result
         assert "status" in result
         assert "ts" in result["status"]
+
+
+# ── Registration startup jitter ───────────────────────────────────
+
+class TestRegisterStartupJitter:
+    """The pre-registration jitter exists to decorrelate ~1000 phones
+    that boot in lockstep. ``DEVICE_CONNECT_REGISTER_JITTER=0`` is the
+    documented escape hatch for single-device dev (no sleep, no random
+    call); the tests pin both branches of that gate."""
+
+    def _make_runtime(self):
+        rt = DeviceRuntime(
+            driver=StubDriver(),
+            device_id="cam-jit-1",
+            messaging_urls=["nats://localhost:4222"],
+        )
+        rt.messaging = AsyncMock()
+        # _handle_registration_reply expects a valid reply; short-circuit.
+        rt._handle_registration_reply = lambda _data: None
+        rt.messaging.request = AsyncMock(
+            return_value=json.dumps({
+                "jsonrpc": "2.0", "id": "x",
+                "result": {"registration_id": "r1", "device_ttl": 30},
+            }).encode(),
+        )
+        return rt
+
+    @pytest.mark.asyncio
+    async def test_jitter_zero_skips_sleep_and_random(self):
+        rt = self._make_runtime()
+        with patch("device_connect_edge.device._REGISTER_STARTUP_JITTER", 0), \
+             patch("device_connect_edge.device.random.uniform") as mock_uniform, \
+             patch("device_connect_edge.device.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await rt._register(force=True)
+
+        # JITTER=0 must not call random.uniform at all (this is the
+        # contract for single-device dev / deterministic tests).
+        mock_uniform.assert_not_called()
+        # asyncio.sleep is only called from the retry path; since the
+        # registry replied OK on the first try, sleep must not fire.
+        mock_sleep.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_jitter_positive_sleeps_once_before_first_request(self):
+        rt = self._make_runtime()
+        with patch("device_connect_edge.device._REGISTER_STARTUP_JITTER", 4.0), \
+             patch("device_connect_edge.device.random.uniform", return_value=1.23) as mock_uniform, \
+             patch("device_connect_edge.device.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await rt._register(force=True)
+
+        mock_uniform.assert_called_once_with(0, 4.0)
+        # Exactly one sleep (the jitter) — registry reply succeeded on
+        # the first try so the retry-backoff sleep doesn't fire.
+        mock_sleep.assert_awaited_once_with(1.23)

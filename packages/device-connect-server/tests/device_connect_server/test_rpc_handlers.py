@@ -482,6 +482,36 @@ class TestListDevicesHandler:
         mock_registry.list_devices_page.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_list_devices_limit_above_cap_is_clamped(self, messaging, mock_registry):
+        """A client asking for more than ``_LIST_DEVICES_MAX_LIMIT`` is
+        silently clamped server-side; the wire response uses
+        ``next_offset`` to signal the page break so the client paginates
+        naturally rather than truncating."""
+        from device_connect_server.registry.service.main import (
+            _LIST_DEVICES_MAX_LIMIT,
+        )
+        # Registry returns exactly one page-worth (the cap); next_offset
+        # signals there is more behind it.
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE], _LIST_DEVICES_MAX_LIMIT, 5000,
+        )
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": 10000, "offset": 0}),
+            "reply-sub",
+        )
+
+        # Handler must clamp ``limit`` before calling the registry.
+        call_kwargs = mock_registry.list_devices_page.call_args.kwargs
+        assert call_kwargs["limit"] == _LIST_DEVICES_MAX_LIMIT
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        # Client sees a forward-pointing next_offset, not a 500 or a
+        # silent truncation.
+        assert response["result"]["next_offset"] == _LIST_DEVICES_MAX_LIMIT
+        assert response["result"]["total_matched"] == 5000
+
+    @pytest.mark.asyncio
     async def test_list_devices_registry_error(self, messaging, mock_registry):
         mock_registry.list_devices.side_effect = RuntimeError("etcd down")
         handler = _make_list_handler(TENANT, messaging)

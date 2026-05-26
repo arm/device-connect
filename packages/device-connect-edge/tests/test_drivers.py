@@ -413,6 +413,61 @@ class TestCollectEventSubscriptions:
         assert subs[0]["device_type"] == "phone"
         assert subs[0]["event_name"] == "state_changed"
 
+    @pytest.mark.asyncio
+    async def test_portal_mode_device_type_filter_warns_at_setup(self, caplog):
+        """In portal/registry mode there is no D2D peer cache to resolve
+        a source device's type, so ``@on(device_type=...)`` filtering
+        silently passes events from other device types through. The
+        driver must emit a single setup-time WARNING so the subscriber
+        sees the gotcha once, not on every event."""
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="camera", event_name="motion")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+
+        mock_messaging = AsyncMock()
+        mock_messaging.subscribe_with_subject = AsyncMock(return_value=MagicMock())
+
+        class FakeRouter:
+            def __init__(self):
+                self._messaging = mock_messaging
+                self._tenant = "default"
+
+        # Portal/registry mode: _device is set, but _d2d_collector is None.
+        # Use a plain object — MagicMock would auto-generate
+        # ``_is_event_subscription`` truthy values and leak phantom
+        # subscriptions into _collect_event_subscriptions.
+        class FakeDevice:
+            _d2d_collector = None
+        driver._device = FakeDevice()
+        driver._device_id = "watcher-1"
+        driver._router = FakeRouter()
+
+        with caplog.at_level("WARNING", logger="device_connect_edge.drivers.base"):
+            await driver.setup_subscriptions()
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        matching = [
+            r for r in warnings
+            if "device_type filtering is" in r.message
+            and "best-effort" in r.message
+        ]
+        assert len(matching) == 1, (
+            f"expected exactly one portal-mode warning, got "
+            f"{[r.message for r in warnings]}"
+        )
+
 
 # ── setup_subscriptions error isolation ───────────────────────────
 

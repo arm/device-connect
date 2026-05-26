@@ -25,6 +25,7 @@ sys.modules.setdefault("etcd3gw", _mock_etcd3gw)
 
 from device_connect_server.registry.service.registry import (  # noqa: E402
     DeviceRegistry,
+    _enlarge_etcd_pool,
     _kv_key,
     register,
     refresh,
@@ -692,3 +693,43 @@ class TestKvKeyHelper:
     def test_returns_empty_when_key_missing(self):
         result = _kv_key({})
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# TestEnlargeEtcdPool
+# ---------------------------------------------------------------------------
+
+
+class TestEnlargeEtcdPool:
+    """The fix mounts an oversized urllib3 HTTPAdapter onto the etcd3gw
+    client's underlying ``requests.Session`` so the registry doesn't
+    bottleneck on the default 10-socket pool under a registration herd.
+    The fallback path (etcd3gw stops exposing ``client.session``) must
+    warn loudly rather than silently regress to the old pool size."""
+
+    def test_mounts_adapter_on_existing_session(self):
+        session = MagicMock()
+        client = MagicMock()
+        client.session = session
+
+        _enlarge_etcd_pool(client, pool_size=64)
+
+        # Both http:// and https:// must be mounted so we don't leave a
+        # surviving small-pool adapter on either scheme.
+        scheme_args = [call.args[0] for call in session.mount.call_args_list]
+        assert "http://" in scheme_args
+        assert "https://" in scheme_args
+
+    def test_logs_warning_when_session_missing(self, caplog):
+        # ``spec=[]`` makes ``hasattr(client, "session")`` return False
+        # without raising — simulating a future etcd3gw refactor that
+        # renames or hides the session attribute.
+        client = MagicMock(spec=[])
+
+        with caplog.at_level("WARNING", logger="device_connect_server.registry.service.registry"):
+            _enlarge_etcd_pool(client, pool_size=64)
+
+        assert any(
+            "session" in rec.message and "urllib3 default" in rec.message
+            for rec in caplog.records
+        ), f"expected pool-fallback warning, got: {[r.message for r in caplog.records]}"
