@@ -13,7 +13,6 @@ opening a fresh connection per invoke():
   the cached connection
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import nats.errors
