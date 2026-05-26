@@ -195,7 +195,11 @@ async def mock_orchestrator(infrastructure, messaging_backend, messaging_url):
 
 @pytest_asyncio.fixture
 async def clear_registry(infrastructure):
-    """Clear all devices from registry before test."""
+    """Clear all devices from registry before and after a registry-isolated test."""
     count = await clear_device_registry()
     logger.info(f"Registry cleared: {count} devices removed")
-    yield count
+    try:
+        yield count
+    finally:
+        count = await clear_device_registry()
+        logger.info(f"Registry cleared after test: {count} devices removed")
