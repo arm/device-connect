@@ -11,15 +11,15 @@
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Credentials Created</div>
-    <div class="text-3xl font-bold text-gray-900 mt-1">{{ creds_count }}</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1"><span id="creds-count">{{ creds_count }}</span></div>
   </div>
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Devices Online</div>
-    <div class="text-3xl font-bold text-green-600 mt-1">{{ online_count }}</div>
+    <div class="text-3xl font-bold text-green-600 mt-1"><span id="online-count">{{ online_count }}</span></div>
   </div>
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Devices Registered</div>
-    <div class="text-3xl font-bold text-gray-900 mt-1">{{ registered_count }}</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1"><span id="registered-count">{{ registered_count }}</span></div>
   </div>
 </div>
 
@@ -63,6 +63,31 @@
 var _tenantParam = '?tenant={{ viewing_as }}';
 window._expandedDevices = window._expandedDevices || new Set();
 
+function loadDetailIfNeeded(row, deviceId) {
+  var url = row.getAttribute('data-detail-url');
+  var slot = row.querySelector('.detail-content');
+  if (!url || !slot) return;
+  // Gate on a DOM attribute attached to the slot itself, so that when
+  // the live-devices poll re-renders this row the "loaded" mark is
+  // naturally cleared along with the placeholder.
+  if (slot.dataset.loaded === 'true' || slot.dataset.loading === 'true') return;
+  slot.dataset.loading = 'true';
+  fetch(url, {credentials: 'same-origin'})
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    })
+    .then(function(html) {
+      slot.innerHTML = html;
+      slot.dataset.loaded = 'true';
+      delete slot.dataset.loading;
+    })
+    .catch(function(err) {
+      delete slot.dataset.loading;
+      slot.innerHTML = '<p class="text-xs text-red-500">Failed to load details: ' + err + '</p>';
+    });
+}
+
 function toggleDetail(deviceId) {
   var row = document.getElementById('detail-' + deviceId);
   var chevron = document.getElementById('chevron-' + deviceId);
@@ -70,14 +95,31 @@ function toggleDetail(deviceId) {
   var opening = row.classList.contains('hidden');
   row.classList.toggle('hidden');
   if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
-  if (opening) window._expandedDevices.add(deviceId);
-  else window._expandedDevices.delete(deviceId);
+  if (opening) {
+    window._expandedDevices.add(deviceId);
+    loadDetailIfNeeded(row, deviceId);
+  } else {
+    window._expandedDevices.delete(deviceId);
+  }
 }
 
-document.getElementById('live-devices').addEventListener('htmx:beforeRequest', function(evt) {
-  if (window._expandedDevices.size > 0) {
-    evt.preventDefault();
-  }
+// Re-apply expanded state after each poll swap. We deliberately do NOT
+// pause the poll while rows are expanded: pausing freezes the
+// hx-swap-oob counters that ride on this fragment, leaving the header
+// (#online-count / #registered-count) stuck at its first-render value
+// the whole time the operator is inspecting any device.
+document.getElementById('live-devices').addEventListener('htmx:afterSwap', function() {
+  window._expandedDevices.forEach(function(deviceId) {
+    var row = document.getElementById('detail-' + deviceId);
+    if (!row) {
+      window._expandedDevices.delete(deviceId);
+      return;
+    }
+    row.classList.remove('hidden');
+    var chevron = document.getElementById('chevron-' + deviceId);
+    if (chevron) chevron.style.transform = 'rotate(90deg)';
+    loadDetailIfNeeded(row, deviceId);
+  });
 });
 
 // --- RPC Invoke ---

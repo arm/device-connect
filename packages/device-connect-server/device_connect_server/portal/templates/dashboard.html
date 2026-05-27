@@ -98,11 +98,25 @@ function toggleDetail(deviceId) {
   }
 }
 
-// Pause auto-refresh while any detail row is expanded
-document.getElementById('live-devices').addEventListener('htmx:beforeRequest', function(evt) {
-  if (window._expandedDevices.size > 0) {
-    evt.preventDefault();
-  }
+// Re-apply expanded state after each poll swap. We deliberately do NOT
+// pause the poll while rows are expanded: pausing freezes the
+// hx-swap-oob counters that ride on this fragment, leaving the header
+// (#online-count / #registered-count) stuck at its first-render value
+// the whole time the operator is inspecting any device.
+document.getElementById('live-devices').addEventListener('htmx:afterSwap', function() {
+  window._expandedDevices.forEach(function(deviceId) {
+    var row = document.getElementById('detail-' + deviceId);
+    if (!row) {
+      // Device dropped out of the live list (went offline / deregistered)
+      // — drop it from the expanded set so we don't keep probing it.
+      window._expandedDevices.delete(deviceId);
+      return;
+    }
+    row.classList.remove('hidden');
+    var chevron = document.getElementById('chevron-' + deviceId);
+    if (chevron) chevron.style.transform = 'rotate(90deg)';
+    loadDetailIfNeeded(row, deviceId);
+  });
 });
 
 // --- RPC Invoke ---
