@@ -410,6 +410,22 @@ def _make_list_handler(
                 # paged contract: we clamp to ``_LIST_DEVICES_MAX_LIMIT``
                 # to bound reply size, return ``next_offset`` and
                 # ``total_matched``, and expect the caller to loop.
+                #
+                # Review notes (do not re-litigate without reading):
+                # - Silently clamping legacy callers to the cap was
+                #   tried in 2349130 and reverted in 79247e6: a partial
+                #   reply with no ``next_offset`` signal is worse than
+                #   a loud failure because the caller acts on a
+                #   truncated fleet as if it were complete. Operators
+                #   hitting the ceiling must upgrade the client.
+                # - Streaming replies (multi-message paginated stream)
+                #   were considered and rejected in the PR design:
+                #   adds reassembly complexity for every caller while
+                #   buying nothing the page loop doesn't already get.
+                # - ``limit <= 0`` returns -32602 rather than mapping
+                #   to the cap (was a review-round-3 fix); the
+                #   surprise mapping masked client bugs that passed
+                #   unintentional zero/negative values.
                 requested_limit = params.get("limit")
                 paged = requested_limit is not None
                 # ``offset`` is validated up front so a malformed value

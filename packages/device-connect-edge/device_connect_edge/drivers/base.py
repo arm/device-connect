@@ -1055,14 +1055,41 @@ class DeviceDriver(ABC):
 
         Returns:
             List of subscription definitions
+
+        Review notes (do not re-litigate without reading):
+        - Skipping all ``_``-prefixed attrs (the original behavior)
+          silently dropped ``@on async def _on_foo`` handlers — Python
+          convention puts callbacks behind ``_`` and drivers expected
+          that to work. Fixed in 0673652.
+        - The ``_is_event_subscription`` marker check below is the
+          authoritative filter; the name prefix is *only* used to skip
+          dunders so we don't resolve descriptors like ``__class__``.
         """
         subscriptions = []
 
+        # We iterate ``dir(self)`` rather than ``__dict__`` so handlers
+        # inherited from a base class are still picked up. The trade-off
+        # is that ``getattr`` here will invoke ``@property`` descriptors,
+        # which may have side effects on driver subclasses (the @on
+        # decorator only marks methods, but properties live in the same
+        # namespace). We swallow exceptions from the resolve step so a
+        # broken / lazy property never breaks subscription setup for an
+        # unrelated handler. ``inspect.getattr_static`` would avoid this
+        # entirely but also bypasses descriptors we *do* want resolved
+        # (classmethod / staticmethod) -- so dynamic ``getattr`` plus a
+        # narrow try/except is the right balance here.
         for attr_name in dir(self):
             if attr_name.startswith("__"):
                 continue
 
-            attr = getattr(self, attr_name, None)
+            try:
+                attr = getattr(self, attr_name, None)
+            except Exception:
+                # A property raised. Not a subscription candidate (the
+                # @on decorator marks methods, not descriptors) so skip
+                # silently rather than failing the whole driver.
+                continue
+
             if attr is None or not callable(attr):
                 continue
 

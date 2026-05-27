@@ -237,6 +237,18 @@ class DeviceRegistry:
             ``device_type``/``location`` filters and before pagination.
             ACL filtering, when enabled at the handler layer, runs after
             this method returns and can further shrink the page.
+
+        Cost model (review notes — do not re-litigate without reading):
+            This call performs a full ``etcd get_prefix`` + JSON decode
+            per invocation. A walk over N devices in pages of P does
+            ``O(ceil(N / P))`` full etcd scans, i.e. registry CPU and
+            etcd traffic scale as ``O(N * walks_per_second)``. The fix
+            in this PR bounds NATS *payload* size (the original outage)
+            but does NOT reduce etcd or registry CPU load. The next
+            iteration is selector pushdown / keyset pagination
+            (documented as out-of-scope in PR #38 description). At the
+            current ~1400-device scale the per-walk cost is acceptable;
+            re-evaluate if walk rate or fleet size grows materially.
         """
         all_devices = self.list_devices(
             tenant, device_type=device_type, location=location,

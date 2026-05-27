@@ -34,10 +34,21 @@ _invoke_client: "nats.aio.client.Client | None" = None
 # connection, so dropping the client on them would churn the socket on
 # every malformed request. Native OSError / ConnectionError covers
 # socket-level failures the NATS client may not have wrapped yet.
+#
+# Review notes (do not re-litigate without reading these):
+# - ``ConnectionReconnectingError`` is intentionally absent: it means the
+#   client is *already* reconnecting itself. Dropping + close()-ing in
+#   that state preempts the nats-py reconnect machinery, forces a fresh
+#   handshake on every queued request, and amplifies broker flaps. Let
+#   the existing client recover; the next ``nc.request`` either succeeds
+#   post-reconnect or raises something more terminal that *is* in this
+#   set. Past review round suggested adding it -- don't.
+# - ``ProtocolError`` and ``NoRespondersError`` are payload-level signals
+#   over a healthy socket; covered by their own branches / left to the
+#   default handler without dropping the client. See ``test_nats_rpc``.
 _TRANSPORT_FATAL_ERRORS: tuple = (
     nats.errors.ConnectionClosedError,
     nats.errors.ConnectionDrainingError,
-    nats.errors.ConnectionReconnectingError,
     nats.errors.StaleConnectionError,
     nats.errors.NoServersError,
     nats.errors.OutboundBufferLimitError,
@@ -95,6 +106,18 @@ async def _drop_invoke_client() -> None:
             await stale.close()
         except Exception:
             logger.debug("ignored error closing stale invoke client", exc_info=True)
+
+
+async def close_invoke_client() -> None:
+    """Close the cached invoke client at app shutdown.
+
+    Wire this into ``aiohttp.web.Application.on_cleanup``: without it the
+    long-lived socket leaks on graceful shutdown (the cached client is
+    module-level state, not tied to the app's lifecycle). Idempotent —
+    calling twice is a no-op because ``_drop_invoke_client`` nils the
+    global first.
+    """
+    await _drop_invoke_client()
 
 
 async def connect():

@@ -206,3 +206,59 @@ class TestInvokeClientKeptOnNonTransportError:
         assert ok["result"]["ok"] is True
         assert connect_mock.await_count == 1
         nc.close.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_connection_reconnecting_keeps_cached_client(self):
+        """ConnectionReconnectingError means the client is *already*
+        reconnecting itself. Dropping the cached client in that state
+        would preempt nats-py's own reconnect machinery and amplify
+        broker flaps. The cached client must survive."""
+        nc = MagicMock()
+        nc.is_closed = False
+        good_reply = MagicMock()
+        good_reply.data = b'{"jsonrpc":"2.0","id":"2","result":{"ok":true}}'
+        nc.request = AsyncMock(
+            side_effect=[nats.errors.ConnectionReconnectingError(), good_reply],
+        )
+        nc.close = AsyncMock()
+
+        with patch.object(
+            nats_rpc, "connect", AsyncMock(return_value=nc),
+        ) as connect_mock:
+            reconnecting = await nats_rpc.invoke("t", "dev-1", "fn", {})
+            ok = await nats_rpc.invoke("t", "dev-1", "fn", {})
+
+        assert reconnecting["error"]["code"] == -3
+        assert ok["result"]["ok"] is True
+        # Single connect, no drop. The same cached client is reused
+        # once nats-py finishes its own internal reconnect.
+        assert connect_mock.await_count == 1
+        nc.close.assert_not_called()
+
+
+class TestCloseInvokeClient:
+    """``close_invoke_client`` is wired into ``aiohttp on_cleanup`` so the
+    long-lived socket is released at graceful shutdown rather than
+    leaking until interpreter exit."""
+
+    @pytest.mark.asyncio
+    async def test_close_invoke_client_closes_cached(self):
+        nc = _make_fake_nc(
+            request_reply=b'{"jsonrpc":"2.0","id":"1","result":{}}',
+        )
+        with patch.object(nats_rpc, "connect", AsyncMock(return_value=nc)):
+            await nats_rpc.invoke("t", "dev-1", "fn", {})
+            assert nats_rpc._invoke_client is nc
+            await nats_rpc.close_invoke_client()
+
+        nc.close.assert_awaited_once()
+        assert nats_rpc._invoke_client is None
+
+    @pytest.mark.asyncio
+    async def test_close_invoke_client_idempotent(self):
+        """Calling close twice (or before any invoke) must be a no-op."""
+        # No client cached yet — must not raise.
+        await nats_rpc.close_invoke_client()
+        assert nats_rpc._invoke_client is None
+        # And a second call is still safe.
+        await nats_rpc.close_invoke_client()

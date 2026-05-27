@@ -413,6 +413,38 @@ class TestCollectEventSubscriptions:
         assert subs[0]["device_type"] == "phone"
         assert subs[0]["event_name"] == "state_changed"
 
+    def test_collector_survives_raising_property(self):
+        """A driver subclass with a @property that raises must not break
+        subscription collection. ``dir()`` surfaces every attribute on
+        the class, and ``getattr`` will invoke descriptors — a buggy or
+        lazy-init property would otherwise crash setup_subscriptions for
+        unrelated handlers."""
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @property
+            def _not_ready_yet(self):
+                # Simulates a property that depends on connect() having
+                # run, or a hardware probe that fails until init.
+                raise RuntimeError("not ready")
+
+            @on(device_type="phone", event_name="state_changed")
+            async def on_phone_state(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        # Property side-effect was tolerated; the real handler still
+        # registered.
+        assert len(subs) == 1
+        assert subs[0]["event_name"] == "state_changed"
+
     @pytest.mark.asyncio
     async def test_portal_mode_device_type_filter_warns_at_setup(self, caplog):
         """In portal/registry mode there is no D2D peer cache to resolve

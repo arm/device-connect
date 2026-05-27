@@ -192,6 +192,10 @@ def create_app() -> web.Application:
 
     # Seed admin on startup
     app.on_startup.append(_on_startup)
+    # Close the cached NATS invoke client on shutdown. Without this the
+    # socket leaks at graceful exit because the client is module-level
+    # state in nats_rpc, not tied to the aiohttp Application lifecycle.
+    app.on_cleanup.append(_on_cleanup)
 
     return app
 
@@ -203,3 +207,12 @@ async def _on_startup(app: web.Application):
         ensure_admin()
     except Exception as e:
         logger.warning("Could not seed admin account (etcd may not be ready): %s", e)
+
+
+async def _on_cleanup(app: web.Application):
+    """Release long-lived resources held at module scope."""
+    try:
+        from .services.nats_rpc import close_invoke_client
+        await close_invoke_client()
+    except Exception as e:
+        logger.warning("Error closing cached NATS invoke client: %s", e)

@@ -1872,6 +1872,25 @@ class DeviceRuntime:
         Uses ``_subscription_lock`` to prevent concurrent invocations
         from rapid reconnects.
         """
+        # Review notes (do not re-litigate without reading these):
+        #
+        # 1. ``asyncio.Lock`` does NOT have ``acquire_nowait()``. That
+        #    was a latent bug in the original implementation — the
+        #    method only exists on ``threading.Lock``. At fleet scale
+        #    during a reconnect storm it raised ``AttributeError`` on
+        #    every reconnect and silently killed @on resubscription.
+        #    See commit 1716f8d.
+        #
+        # 2. The ``locked() then await acquire()`` pattern below looks
+        #    like a TOCTOU race but is safe under single-loop asyncio:
+        #    ``Lock.locked()`` is synchronous and ``Lock.acquire()``
+        #    has a fast path that returns without yielding when the
+        #    lock is free. Two concurrent callers cannot both observe
+        #    ``locked() is False`` between the check and the take
+        #    because there is no event-loop yield in that window.
+        #    If you switch to a multi-loop primitive (anyio, trio,
+        #    threading) this assumption breaks — use ``wait_for(...,
+        #    timeout=0)`` over ``acquire()`` instead.
         if self._subscription_lock.locked():
             self._logger.debug("Subscription re-establishment already in progress, skipping")
             return
