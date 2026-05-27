@@ -1872,10 +1872,11 @@ class DeviceRuntime:
         Uses ``_subscription_lock`` to prevent concurrent invocations
         from rapid reconnects.
         """
-        if not self._subscription_lock.acquire_nowait():
+        if self._subscription_lock.locked():
             self._logger.debug("Subscription re-establishment already in progress, skipping")
             return
 
+        await self._subscription_lock.acquire()
         try:
             delay = 1
             while True:
