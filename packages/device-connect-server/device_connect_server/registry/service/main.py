@@ -71,6 +71,14 @@ _PULL_REGISTRATION_TIMEOUT = 5   # Timeout for requestRegistration RPC
 # upgrade clients to a version that passes `limit`.
 _LIST_DEVICES_MAX_LIMIT = int(os.getenv("DC_LIST_DEVICES_MAX_LIMIT", "200"))
 
+# Track which over-cap ``limit`` values we've already warned about so a
+# misconfigured client doesn't spam the log on every page. Deduped by the
+# requested value, not by caller — the warning is operator-facing
+# ("someone is tuning a knob that no longer matches the server cap"),
+# not per-request observability. Bounded by the number of distinct
+# limits a caller can ask for; in practice 1-2 values.
+_WARNED_LIMIT_CLAMPS: set[int] = set()
+
 
 def _resolve_tenants() -> List[str]:
     """Resolve the list of tenants to handle.
@@ -482,6 +490,29 @@ def _make_list_handler(
                     effective_limit = min(
                         requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
                     )
+                    # Surface silent clamps. The wire contract handles
+                    # the over-cap request correctly via ``next_offset``
+                    # — the caller just paginates more aggressively than
+                    # it asked for — but without a log line operators
+                    # tuning ``DEVICE_CONNECT_LIST_PAGE_SIZE`` above the
+                    # server cap have no signal that their knob is being
+                    # ignored. Deduped per process per requested value
+                    # so a steady-state misconfigured client logs once,
+                    # not once per page.
+                    if (
+                        effective_limit < requested_limit_int
+                        and requested_limit_int not in _WARNED_LIMIT_CLAMPS
+                    ):
+                        _WARNED_LIMIT_CLAMPS.add(requested_limit_int)
+                        logger.warning(
+                            "discovery/listDevices: caller requested limit=%d, "
+                            "clamped to server cap _LIST_DEVICES_MAX_LIMIT=%d. "
+                            "Caller will paginate more aggressively than "
+                            "expected. Raise DC_LIST_DEVICES_MAX_LIMIT (and "
+                            "NATS max_payload) if the smaller page is "
+                            "unintended.",
+                            requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
+                        )
                     page, next_offset, total = await asyncio.to_thread(
                         registry.list_devices_page, tenant,
                         device_type=device_type,

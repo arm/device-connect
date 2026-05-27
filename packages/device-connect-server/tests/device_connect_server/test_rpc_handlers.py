@@ -512,6 +512,102 @@ class TestListDevicesHandler:
         assert response["result"]["total_matched"] == 5000
 
     @pytest.mark.asyncio
+    async def test_list_devices_clamp_warns_once_per_requested_limit(
+        self, messaging, mock_registry, caplog,
+    ):
+        """An over-cap ``limit`` logs a warning on first sight but stays
+        quiet on repeated requests with the same value, so a misconfigured
+        client doesn't spam the log on every page."""
+        from device_connect_server.registry.service import main as registry_main
+
+        # Reset the dedup set so this test is independent of prior tests.
+        registry_main._WARNED_LIMIT_CLAMPS.clear()
+
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE], registry_main._LIST_DEVICES_MAX_LIMIT, 5000,
+        )
+        handler = _make_list_handler(TENANT, messaging)
+
+        with caplog.at_level("WARNING", logger="device_registry_service"):
+            # First over-cap request: must warn.
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 10000}),
+                "reply-sub",
+            )
+            warnings_after_first = [
+                r for r in caplog.records
+                if r.levelname == "WARNING" and "clamped to server cap" in r.message
+            ]
+            assert len(warnings_after_first) == 1, (
+                f"expected one clamp warning, got "
+                f"{[r.message for r in caplog.records]}"
+            )
+            assert "10000" in warnings_after_first[0].message
+
+            # Second request with same limit: must NOT warn again.
+            caplog.clear()
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 10000}),
+                "reply-sub",
+            )
+            warnings_after_second = [
+                r for r in caplog.records if "clamped to server cap" in r.message
+            ]
+            assert warnings_after_second == [], (
+                "repeated over-cap requests with the same limit must not "
+                "re-warn"
+            )
+
+            # Different over-cap limit: warns again (new value).
+            caplog.clear()
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 5000}),
+                "reply-sub",
+            )
+            warnings_after_new = [
+                r for r in caplog.records if "clamped to server cap" in r.message
+            ]
+            assert len(warnings_after_new) == 1
+            assert "5000" in warnings_after_new[0].message
+
+    @pytest.mark.asyncio
+    async def test_list_devices_at_or_under_cap_does_not_warn(
+        self, messaging, mock_registry, caplog,
+    ):
+        """A limit at or below the cap is the intended path — no clamp,
+        no warning. Pins that the warning is gated strictly on
+        ``effective < requested``."""
+        from device_connect_server.registry.service import main as registry_main
+
+        registry_main._WARNED_LIMIT_CLAMPS.clear()
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE], None, 1,
+        )
+        handler = _make_list_handler(TENANT, messaging)
+
+        with caplog.at_level("WARNING", logger="device_registry_service"):
+            # Exactly at cap.
+            await handler(
+                _rpc_request("discovery/listDevices", {
+                    "limit": registry_main._LIST_DEVICES_MAX_LIMIT,
+                }),
+                "reply-sub",
+            )
+            # Well under cap.
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 10}),
+                "reply-sub",
+            )
+
+        clamp_warnings = [
+            r for r in caplog.records if "clamped to server cap" in r.message
+        ]
+        assert clamp_warnings == [], (
+            f"under-cap requests must not warn; got: "
+            f"{[r.message for r in clamp_warnings]}"
+        )
+
+    @pytest.mark.asyncio
     async def test_list_devices_registry_error(self, messaging, mock_registry):
         mock_registry.list_devices.side_effect = RuntimeError("etcd down")
         handler = _make_list_handler(TENANT, messaging)
