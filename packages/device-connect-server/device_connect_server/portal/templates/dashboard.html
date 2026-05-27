@@ -59,7 +59,32 @@
    closeEventLog(). #}
 <div id="event-drawers" class="mt-6 space-y-4"></div>
 
+{# Debug log — TEMPORARY. Renders inline so you can see what's
+   happening without opening the browser console. Remove once the
+   row-collapse bug is understood. #}
+<div id="dbg-log" class="mt-6 bg-gray-900 text-green-300 font-mono text-xs p-3 rounded-lg max-h-64 overflow-y-auto">
+  <div class="text-gray-500">[dbg] script not yet loaded</div>
+</div>
+
 <script>
+function _dbg(msg) {
+  var log = document.getElementById('dbg-log');
+  if (!log) return;
+  var line = document.createElement('div');
+  var t = new Date();
+  var hh = String(t.getHours()).padStart(2, '0');
+  var mm = String(t.getMinutes()).padStart(2, '0');
+  var ss = String(t.getSeconds()).padStart(2, '0');
+  var ms = String(t.getMilliseconds()).padStart(3, '0');
+  line.textContent = '[' + hh + ':' + mm + ':' + ss + '.' + ms + '] ' + msg;
+  log.appendChild(line);
+  while (log.children.length > 80) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+  try { console.log('[dash-dbg]', msg); } catch (e) {}
+}
+
+_dbg('script loaded');
+
 window._expandedDevices = window._expandedDevices || new Set();
 
 function loadDetailIfNeeded(row, deviceId) {
@@ -92,7 +117,7 @@ function loadDetailIfNeeded(row, deviceId) {
 function toggleDetail(deviceId) {
   var row = document.getElementById('detail-' + deviceId);
   var chevron = document.getElementById('chevron-' + deviceId);
-  if (!row) return;
+  if (!row) { _dbg('toggleDetail(' + deviceId + '): no row'); return; }
   var opening = row.classList.contains('hidden');
   row.classList.toggle('hidden');
   if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
@@ -102,6 +127,8 @@ function toggleDetail(deviceId) {
   } else {
     window._expandedDevices.delete(deviceId);
   }
+  _dbg('toggleDetail(' + deviceId + ') opening=' + opening +
+       ' _expandedDevices=[' + Array.from(window._expandedDevices).join(',') + ']');
 }
 
 // Keep rows expanded across the 10s poll swap. We deliberately do NOT
@@ -117,13 +144,15 @@ function toggleDetail(deviceId) {
 // regardless of who triggered it — no dependence on htmx event timing
 // or OOB-swap interleaving.
 var liveDevices = document.getElementById('live-devices');
+_dbg('liveDevices=' + (liveDevices ? 'FOUND' : 'NULL'));
 
-function applyExpansionState() {
+function applyExpansionState(source) {
+  _dbg('applyExpansionState(' + source + ') _expandedDevices=[' +
+       Array.from(window._expandedDevices).join(',') + ']');
   window._expandedDevices.forEach(function(deviceId) {
     var row = document.getElementById('detail-' + deviceId);
     if (!row) {
-      // Device dropped out of the table (went offline / deregistered).
-      // Close any active stream and remove its drawer.
+      _dbg('  ' + deviceId + ': row=NULL (device gone) — pruning');
       window._expandedDevices.delete(deviceId);
       if (window._eventSources && window._eventSources[deviceId]) {
         try { window._eventSources[deviceId].close(); } catch (e) {}
@@ -135,21 +164,38 @@ function applyExpansionState() {
       }
       return;
     }
-    if (row.classList.contains('hidden')) {
+    var wasHidden = row.classList.contains('hidden');
+    _dbg('  ' + deviceId + ': row=FOUND hidden=' + wasHidden);
+    if (wasHidden) {
       row.classList.remove('hidden');
       var chevron = document.getElementById('chevron-' + deviceId);
       if (chevron) chevron.style.transform = 'rotate(90deg)';
-      // dataset.loaded is gone on the fresh slot, so loadDetailIfNeeded
-      // re-fetches the detail body. The event-log drawer lives in
-      // #event-drawers and is untouched by this swap.
       loadDetailIfNeeded(row, deviceId);
     }
   });
 }
 
-new MutationObserver(applyExpansionState).observe(liveDevices, {
-  childList: true,
-});
+if (liveDevices) {
+  var mo = new MutationObserver(function(records) {
+    _dbg('MutationObserver fired records=' + records.length);
+    applyExpansionState('mutation');
+  });
+  mo.observe(liveDevices, { childList: true });
+  _dbg('MutationObserver attached to #live-devices');
+
+  // Also bind to htmx events on both #live-devices and body so we can
+  // see which (if any) actually fire. Body-level catches bubbling.
+  ['htmx:beforeRequest', 'htmx:beforeSwap', 'htmx:afterSwap', 'htmx:afterSettle'].forEach(function(ev) {
+    liveDevices.addEventListener(ev, function(e) {
+      _dbg('liveDevices got ' + ev + ' target=' + (e.target && e.target.id));
+    });
+    document.body.addEventListener(ev, function(e) {
+      _dbg('body got ' + ev + ' target=' + (e.target && e.target.id));
+    });
+  });
+} else {
+  _dbg('FATAL: liveDevices is null, observer not attached');
+}
 
 // --- RPC Invoke ---
 window._invokeState = {};
