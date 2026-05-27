@@ -73,13 +73,26 @@ async def auth_middleware(request: web.Request, handler):
     session = await _get_session(request)
     if not session.get("username"):
         # Preserve the requested URL so post-login redirect lands the user
-        # back on (e.g.) the CLI approval page.
-        next_url = path
-        if request.query_string:
-            next_url = f"{path}?{request.query_string}"
-        from urllib.parse import quote
-        login_url = "/login?next=" + quote(next_url, safe="") if path != "/login" else "/login"
-        if request.headers.get("HX-Request"):
+        # back on (e.g.) the CLI approval page — but only for top-level
+        # HTML navigations. Background htmx polls and JSON fetches under
+        # /api/ return HTML fragments or JSON, not full pages, so using
+        # them as the post-login destination dumps the user onto a
+        # chrome-less fragment. The dashboard's 10s poll on
+        # /api/devices/live was the original repro: portal restart ->
+        # session lost -> next poll redirected to /login with the poll
+        # URL as ``next`` -> after login the user landed on the raw
+        # fragment instead of the dashboard.
+        is_htmx = request.headers.get("HX-Request") == "true"
+        is_api = path.startswith("/api/")
+        if is_htmx or is_api:
+            login_url = "/login"
+        else:
+            next_url = path
+            if request.query_string:
+                next_url = f"{path}?{request.query_string}"
+            from urllib.parse import quote
+            login_url = "/login?next=" + quote(next_url, safe="") if path != "/login" else "/login"
+        if is_htmx:
             resp = web.Response(status=200)
             resp.headers["HX-Redirect"] = login_url
             return resp

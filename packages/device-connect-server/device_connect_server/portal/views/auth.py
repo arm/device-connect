@@ -33,12 +33,25 @@ async def root_page(request: web.Request):
 
 
 def _safe_next(value: str | None) -> str | None:
-    """Accept only relative paths so an attacker can't bounce login to an external site."""
+    """Accept only relative paths to a full-page route.
+
+    Rejects:
+    - external/protocol-relative URLs (open-redirect protection)
+    - CRLF (header-injection protection)
+    - ``/api/`` and ``/static/`` paths — these return JSON / HTML
+      fragments / static assets, not full pages, so they make terrible
+      post-login destinations (the user lands on a chrome-less blob).
+      ``auth_middleware`` already avoids capturing these as ``next``
+      for the dashboard's 10s htmx poll, but a stale link with
+      ``?next=/api/...`` could still arrive here.
+    """
     if not value:
         return None
     if not value.startswith("/") or value.startswith("//"):
         return None
     if "\n" in value or "\r" in value:
+        return None
+    if value.startswith("/api/") or value.startswith("/static/"):
         return None
     return value
 
