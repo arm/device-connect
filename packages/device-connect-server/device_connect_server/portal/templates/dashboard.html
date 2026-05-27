@@ -53,6 +53,12 @@
   </div>
 </div>
 
+{# Stable container for live SSE event-log drawers. Lives OUTSIDE
+   #live-devices so the 10s poll swap can never touch it. Drawers
+   are created dynamically by openEventLog() and removed by
+   closeEventLog(). #}
+<div id="event-drawers" class="mt-6 space-y-4"></div>
+
 <script>
 window._expandedDevices = window._expandedDevices || new Set();
 
@@ -248,16 +254,39 @@ function submitInvoke(deviceId) {
 window._eventSources = {};
 
 function openEventLog(deviceId, eventName) {
-  // Close existing stream for this device
+  // Close existing stream for this device (also removes any prior drawer).
   closeEventLog(deviceId);
 
-  var panel = document.getElementById('eventlog-' + deviceId);
-  var nameEl = document.getElementById('eventlog-name-' + deviceId);
-  var entries = document.getElementById('eventlog-entries-' + deviceId);
+  // Build the drawer in the page-shell container, NOT inside the row's
+  // detail slot — the detail slot is wiped by the live-devices poll
+  // swap, which was killing both the panel visibility and the
+  // EventSource's onmessage closure binding.
+  var drawers = document.getElementById('event-drawers');
+  var drawer = document.createElement('div');
+  drawer.id = 'eventlog-' + deviceId;
+  drawer.className = 'bg-white rounded-xl border border-green-200 p-4 shadow-sm';
+  drawer.innerHTML =
+    '<div class="flex items-center justify-between mb-3">' +
+      '<h4 class="text-xs font-semibold text-green-700 uppercase tracking-wider flex items-center">' +
+        '<span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>' +
+        'Event log: ' +
+        '<code class="text-sm normal-case ml-1 text-green-800">' +
+          deviceId + ' / ' + eventName +
+        '</code>' +
+      '</h4>' +
+      '<button data-close-eventlog="' + deviceId + '"' +
+              ' class="text-gray-400 hover:text-gray-600 text-xs">&times; Close</button>' +
+    '</div>' +
+    '<div id="eventlog-entries-' + deviceId + '"' +
+        ' class="space-y-1 max-h-64 overflow-y-auto text-xs">' +
+      '<p class="text-gray-400 italic">Listening for events...</p>' +
+    '</div>';
+  drawers.appendChild(drawer);
+  drawer.querySelector('[data-close-eventlog]').addEventListener('click', function() {
+    closeEventLog(deviceId);
+  });
 
-  nameEl.textContent = eventName;
-  entries.innerHTML = '<p class="text-gray-400 italic">Listening for events...</p>';
-  panel.classList.remove('hidden');
+  var entries = document.getElementById('eventlog-entries-' + deviceId);
 
   var es = new EventSource('/api/devices/' + deviceId + '/events/' + eventName + '/stream');
   window._eventSources[deviceId] = es;
@@ -311,8 +340,10 @@ function closeEventLog(deviceId) {
     es.close();
     delete window._eventSources[deviceId];
   }
-  var panel = document.getElementById('eventlog-' + deviceId);
-  if (panel) panel.classList.add('hidden');
+  var drawer = document.getElementById('eventlog-' + deviceId);
+  if (drawer && drawer.parentElement) {
+    drawer.parentElement.removeChild(drawer);
+  }
 }
 </script>
 {% endblock %}
