@@ -103,22 +103,60 @@ function toggleDetail(deviceId) {
   }
 }
 
-// Re-apply expanded state after each poll swap. We deliberately do NOT
-// pause the poll while rows are expanded: pausing freezes the
-// hx-swap-oob counters that ride on this fragment, leaving the header
-// (#online-count / #registered-count) stuck at its first-render value
-// the whole time the operator is inspecting any device.
-document.getElementById('live-devices').addEventListener('htmx:afterSwap', function() {
+// Preserve detail-content DOM across the poll swap. See dashboard.html
+// for the full rationale: re-fetching detail wipes live state inside
+// the slot (open event-log SSE panel + accumulated entries, open
+// invoke panel), so we detach the slot's children before the swap and
+// re-attach the *same DOM nodes* afterwards. That keeps
+// EventSource.onmessage closures pointing at in-document elements
+// instead of detached ones.
+var liveDevices = document.getElementById('live-devices');
+
+liveDevices.addEventListener('htmx:beforeSwap', function() {
+  window._stashedDetails = {};
+  window._expandedDevices.forEach(function(deviceId) {
+    var row = document.getElementById('detail-' + deviceId);
+    if (!row) return;
+    var slot = row.querySelector('.detail-content');
+    if (!slot || slot.dataset.loaded !== 'true') return;
+    var children = [];
+    while (slot.firstChild) {
+      children.push(slot.removeChild(slot.firstChild));
+    }
+    window._stashedDetails[deviceId] = children;
+  });
+});
+
+liveDevices.addEventListener('htmx:afterSwap', function() {
+  var stash = window._stashedDetails || {};
+  window._stashedDetails = null;
+
   window._expandedDevices.forEach(function(deviceId) {
     var row = document.getElementById('detail-' + deviceId);
     if (!row) {
+      if (window._eventSources && window._eventSources[deviceId]) {
+        try { window._eventSources[deviceId].close(); } catch (e) {}
+        delete window._eventSources[deviceId];
+      }
+      delete stash[deviceId];
       window._expandedDevices.delete(deviceId);
       return;
     }
     row.classList.remove('hidden');
     var chevron = document.getElementById('chevron-' + deviceId);
     if (chevron) chevron.style.transform = 'rotate(90deg)';
-    loadDetailIfNeeded(row, deviceId);
+
+    var stashed = stash[deviceId];
+    if (stashed && stashed.length) {
+      var slot = row.querySelector('.detail-content');
+      if (slot) {
+        slot.innerHTML = '';
+        stashed.forEach(function(node) { slot.appendChild(node); });
+        slot.dataset.loaded = 'true';
+      }
+    } else {
+      loadDetailIfNeeded(row, deviceId);
+    }
   });
 });
 

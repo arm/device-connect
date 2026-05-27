@@ -98,24 +98,70 @@ function toggleDetail(deviceId) {
   }
 }
 
-// Re-apply expanded state after each poll swap. We deliberately do NOT
-// pause the poll while rows are expanded: pausing freezes the
+// Preserve detail-content DOM across the poll swap. We deliberately do
+// NOT pause the poll while rows are expanded: pausing freezes the
 // hx-swap-oob counters that ride on this fragment, leaving the header
 // (#online-count / #registered-count) stuck at its first-render value
 // the whole time the operator is inspecting any device.
-document.getElementById('live-devices').addEventListener('htmx:afterSwap', function() {
+//
+// But re-fetching detail HTML on every poll wipes live UI state that
+// lives inside the slot — an open event-log SSE panel, the entries it
+// has accumulated, an open invoke panel. To keep those alive we detach
+// the slot's children before the swap and re-attach the *same DOM
+// nodes* afterwards, so EventSource.onmessage closures keep pointing
+// at live, in-document elements instead of detached ones.
+var liveDevices = document.getElementById('live-devices');
+
+liveDevices.addEventListener('htmx:beforeSwap', function() {
+  window._stashedDetails = {};
+  window._expandedDevices.forEach(function(deviceId) {
+    var row = document.getElementById('detail-' + deviceId);
+    if (!row) return;
+    var slot = row.querySelector('.detail-content');
+    if (!slot || slot.dataset.loaded !== 'true') return;
+    var children = [];
+    while (slot.firstChild) {
+      children.push(slot.removeChild(slot.firstChild));
+    }
+    window._stashedDetails[deviceId] = children;
+  });
+});
+
+liveDevices.addEventListener('htmx:afterSwap', function() {
+  var stash = window._stashedDetails || {};
+  window._stashedDetails = null;
+
   window._expandedDevices.forEach(function(deviceId) {
     var row = document.getElementById('detail-' + deviceId);
     if (!row) {
-      // Device dropped out of the live list (went offline / deregistered)
-      // — drop it from the expanded set so we don't keep probing it.
+      // Device dropped out of the live list (went offline / deregistered).
+      // Close any active stream and forget all state — including the
+      // stashed nodes, which are now orphans we'd otherwise leak.
+      if (window._eventSources && window._eventSources[deviceId]) {
+        try { window._eventSources[deviceId].close(); } catch (e) {}
+        delete window._eventSources[deviceId];
+      }
+      delete stash[deviceId];
       window._expandedDevices.delete(deviceId);
       return;
     }
     row.classList.remove('hidden');
     var chevron = document.getElementById('chevron-' + deviceId);
     if (chevron) chevron.style.transform = 'rotate(90deg)';
-    loadDetailIfNeeded(row, deviceId);
+
+    var stashed = stash[deviceId];
+    if (stashed && stashed.length) {
+      var slot = row.querySelector('.detail-content');
+      if (slot) {
+        slot.innerHTML = '';
+        stashed.forEach(function(node) { slot.appendChild(node); });
+        slot.dataset.loaded = 'true';
+      }
+    } else {
+      // No stash for this row — either it had not finished loading yet,
+      // or it just got expanded. Fall through to the lazy fetch.
+      loadDetailIfNeeded(row, deviceId);
+    }
   });
 });
 
