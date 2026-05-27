@@ -106,61 +106,37 @@ function toggleDetail(deviceId) {
   }
 }
 
-// Preserve detail-content DOM across the poll swap. See dashboard.html
-// for the full rationale: re-fetching detail wipes live state inside
-// the slot (open event-log SSE panel + accumulated entries, open
-// invoke panel), so we detach the slot's children before the swap and
-// re-attach the *same DOM nodes* afterwards. That keeps
-// EventSource.onmessage closures pointing at in-document elements
-// instead of detached ones.
+// Keep rows expanded across the poll swap. Uses MutationObserver
+// rather than htmx:afterSwap — the latter wasn't reliably firing on
+// this target in practice. See dashboard.html for full rationale.
 var liveDevices = document.getElementById('live-devices');
 
-liveDevices.addEventListener('htmx:beforeSwap', function() {
-  window._stashedDetails = {};
-  window._expandedDevices.forEach(function(deviceId) {
-    var row = document.getElementById('detail-' + deviceId);
-    if (!row) return;
-    var slot = row.querySelector('.detail-content');
-    if (!slot || slot.dataset.loaded !== 'true') return;
-    var children = [];
-    while (slot.firstChild) {
-      children.push(slot.removeChild(slot.firstChild));
-    }
-    window._stashedDetails[deviceId] = children;
-  });
-});
-
-liveDevices.addEventListener('htmx:afterSwap', function() {
-  var stash = window._stashedDetails || {};
-  window._stashedDetails = null;
-
+function applyExpansionState() {
   window._expandedDevices.forEach(function(deviceId) {
     var row = document.getElementById('detail-' + deviceId);
     if (!row) {
+      window._expandedDevices.delete(deviceId);
       if (window._eventSources && window._eventSources[deviceId]) {
         try { window._eventSources[deviceId].close(); } catch (e) {}
         delete window._eventSources[deviceId];
+        var drawer = document.getElementById('eventlog-' + deviceId);
+        if (drawer && drawer.parentElement) {
+          drawer.parentElement.removeChild(drawer);
+        }
       }
-      delete stash[deviceId];
-      window._expandedDevices.delete(deviceId);
       return;
     }
-    row.classList.remove('hidden');
-    var chevron = document.getElementById('chevron-' + deviceId);
-    if (chevron) chevron.style.transform = 'rotate(90deg)';
-
-    var stashed = stash[deviceId];
-    if (stashed && stashed.length) {
-      var slot = row.querySelector('.detail-content');
-      if (slot) {
-        slot.innerHTML = '';
-        stashed.forEach(function(node) { slot.appendChild(node); });
-        slot.dataset.loaded = 'true';
-      }
-    } else {
+    if (row.classList.contains('hidden')) {
+      row.classList.remove('hidden');
+      var chevron = document.getElementById('chevron-' + deviceId);
+      if (chevron) chevron.style.transform = 'rotate(90deg)';
       loadDetailIfNeeded(row, deviceId);
     }
   });
+}
+
+new MutationObserver(applyExpansionState).observe(liveDevices, {
+  childList: true,
 });
 
 // --- RPC Invoke ---
