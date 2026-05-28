@@ -187,27 +187,43 @@ function applyExpansionState(source) {
     // stale duplicate row, or the new row being rendered un-hidden
     // for some reason), leaving the slot empty and the chevron not
     // rotated. Always: un-hide, rotate, force-reload detail.
-    // ---- "Is our row the painted row?" diagnostic ----
-    // Counts and ancestry tell us whether we have a stale/detached
-    // tree (which would explain why display=table-row in JS doesn't
-    // show in the page).
+    // ---- Position-in-tbody diagnostic ----
+    // The previous round proved the marker IS painted with correct
+    // styles, but at a viewport position ABOVE the visible summary
+    // row. So the row is in the table but at the wrong position —
+    // most likely htmx is re-using/moving the user-un-hid old row
+    // and putting it before the summary on the new tbody. This
+    // diagnostic checks DOM-order and rendered-order.
+    var tbody = row.parentElement;
+    var siblings = tbody ? Array.from(tbody.children) : [];
+    var rowIndex = siblings.indexOf(row);
+    var prev = row.previousElementSibling;
+    var next = row.nextElementSibling;
     var allRows = document.querySelectorAll('[id="detail-' + deviceId + '"]');
-    var liveContains = liveDevices.contains(row);
-    var liveTables = liveDevices.querySelectorAll('table').length;
-    var docTables = document.querySelectorAll('table').length;
-    var ancestry = [];
-    var p = row;
-    while (p && p !== document.documentElement && ancestry.length < 8) {
-      ancestry.push(p.tagName + (p.id ? '#' + p.id : ''));
-      p = p.parentElement;
-    }
-    _dbg('  ' + deviceId + ': PRE-MOD' +
-         ' allRows=' + allRows.length +
-         ' liveDevices.contains(row)=' + liveContains +
-         ' tables-in-live=' + liveTables +
-         ' tables-in-doc=' + docTables +
-         ' offsetHeight=' + row.offsetHeight +
-         ' ancestry=' + ancestry.join('<'));
+
+    // Find the matching summary row (sibling .cursor-pointer tr that
+    // onclick toggles this device). Compare its rect.top to ours.
+    var summaryRow = null;
+    siblings.forEach(function(tr) {
+      if (tr === row) return;
+      var oc = tr.getAttribute('onclick') || '';
+      if (oc.indexOf("'" + deviceId + "'") >= 0) summaryRow = tr;
+    });
+    var summaryRect = summaryRow ? summaryRow.getBoundingClientRect() : null;
+    var rowRect = row.getBoundingClientRect();
+    var summaryIndex = summaryRow ? siblings.indexOf(summaryRow) : -1;
+
+    _dbg('  ' + deviceId + ': POSITION' +
+         ' rowIndex=' + rowIndex +
+         ' summaryIndex=' + summaryIndex +
+         ' siblings=' + siblings.length +
+         ' prev=' + (prev ? prev.tagName + (prev.id ? '#' + prev.id : '') : 'null') +
+         ' next=' + (next ? next.tagName + (next.id ? '#' + next.id : '') : 'null'));
+    _dbg('  ' + deviceId + ': RECTS' +
+         ' row.top=' + Math.round(rowRect.top) +
+         ' summary.top=' + (summaryRect ? Math.round(summaryRect.top) : 'no-summary') +
+         ' order=' + (summaryRect ? (rowRect.top < summaryRect.top ? 'DETAIL-FIRST(BUG)' : 'SUMMARY-FIRST(OK)') : '?'));
+    _dbg('  ' + deviceId + ': allRows=' + allRows.length + ' offsetH=' + row.offsetHeight);
 
     row.classList.remove('hidden');
     row.style.display = 'table-row';
