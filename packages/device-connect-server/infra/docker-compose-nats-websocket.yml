@@ -1,0 +1,30 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Override: expose the NATS WebSocket listener to the host for browser-based
+# devices. Combine with the main multi-tenant compose file:
+#
+#   docker compose -f infra/docker-compose-multitenant-nats.yml \
+#                  -f infra/docker-compose-nats-websocket.yml up -d
+#
+# Prerequisite: the generated NATS config must include a `websocket {}` block.
+# Pass --enable-websocket to security_infra/setup_deployment.sh.
+#
+# IMPORTANT:
+#   The port is bound to 127.0.0.1 by default. The listener inside the
+#   container is plain WS (unless --websocket-tls-cert/--websocket-tls-key
+#   were passed to setup). A reverse proxy (Caddy, nginx, etc.) MUST do
+#   TLS termination on the host before the port is exposed to the network --
+#   without TLS, NATS JWTs travel in cleartext.
+#
+#   To deliberately expose the WS listener on a different interface,
+#   override DC_NATS_WS_BIND, e.g.:
+#     DC_NATS_WS_BIND=127.0.0.1:8443 docker compose -f ... up -d   # default
+#     DC_NATS_WS_BIND=10.0.0.5:8443  docker compose -f ... up -d   # LAN only
+#   Never set it to 0.0.0.0 without TLS termination.
+
+services:
+  nats:
+    ports:
+      - "${DC_NATS_WS_BIND:-127.0.0.1:8443}:${DC_NATS_WS_PORT:-8443}"

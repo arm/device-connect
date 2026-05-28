@@ -22,32 +22,81 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NATS_HOST=""
 NATS_PORT="4222"
+ENABLE_WEBSOCKET=0
+WS_PORT="8443"
+WS_ALLOWED_ORIGINS=""
+WS_TLS_CERT=""
+WS_TLS_KEY=""
 
 usage() {
-  echo "Usage: $0 --nats-host HOST [--nats-port PORT]"
-  echo ""
-  echo "One-time bootstrap for multi-tenant NATS JWT infrastructure."
-  echo "Creates the NATS operator/account and privileged credentials"
-  echo "(registry, facilitator)."
-  echo ""
-  echo "Options:"
-  echo "  --nats-host HOST   Public hostname or IP of the NATS server (required)"
-  echo "  --nats-port PORT   NATS port (default: 4222)"
-  echo "  -h, --help         Show this help"
-  echo ""
-  echo "After running this, use manage_tenants.sh to create tenants."
+  cat <<'USAGE'
+Usage: setup_deployment.sh --nats-host HOST [options]
+
+One-time bootstrap for multi-tenant NATS JWT infrastructure. Creates the
+NATS operator/account and privileged credentials (registry, facilitator).
+
+Required:
+  --nats-host HOST                Public hostname or IP of the NATS server.
+
+Optional:
+  --nats-port PORT                NATS TCP port (default: 4222).
+
+Browser-based devices (WebSocket):
+  --enable-websocket              Add a `websocket {}` block to the generated
+                                  NATS config so browser-based devices can
+                                  connect over WS (nats.ws / @nats-io/nats-core).
+                                  OFF by default; existing deployments are
+                                  unaffected.
+  --websocket-port PORT           WS listen port inside the container (default: 8443).
+  --websocket-allowed-origins LIST
+                                  Comma-separated list of allowed Origin headers.
+                                  Defaults to empty, which keeps nats-server's
+                                  same_origin=true behavior. Set this only when
+                                  a reverse proxy rewrites Host headers (e.g.
+                                  the page is at https://app.example.com and
+                                  the WS endpoint is wss://app.example.com/nats
+                                  proxied to a local NATS).
+  --websocket-tls-cert FILE       Native TLS cert (path inside the NATS
+  --websocket-tls-key FILE        container). When both are set, NATS does
+                                  TLS termination itself; otherwise the
+                                  listener is plain WS and MUST be fronted by
+                                  TLS (Caddy / nginx) before public exposure.
+
+After running this, use manage_tenants.sh to create tenants.
+
+Security notes for --enable-websocket:
+  * The compose port for the WS listener is provided via
+    infra/docker-compose-nats-websocket.yml (loopback-bound by default).
+    Combine it with the main compose file:
+        docker compose -f infra/docker-compose-multitenant-nats.yml \
+                       -f infra/docker-compose-nats-websocket.yml up -d
+  * Do NOT change the loopback binding without putting TLS in front; without
+    TLS, NATS JWTs travel in cleartext.
+USAGE
   exit 1
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --nats-host)  NATS_HOST="$2"; shift 2 ;;
-    --nats-port)  NATS_PORT="$2"; shift 2 ;;
-    -h|--help)    usage ;;
-    *)            echo "Unknown option: $1"; usage ;;
+    --nats-host)                  NATS_HOST="$2"; shift 2 ;;
+    --nats-port)                  NATS_PORT="$2"; shift 2 ;;
+    --enable-websocket)           ENABLE_WEBSOCKET=1; shift ;;
+    --websocket-port)             WS_PORT="$2"; shift 2 ;;
+    --websocket-allowed-origins)  WS_ALLOWED_ORIGINS="$2"; shift 2 ;;
+    --websocket-tls-cert)         WS_TLS_CERT="$2"; shift 2 ;;
+    --websocket-tls-key)          WS_TLS_KEY="$2"; shift 2 ;;
+    -h|--help)                    usage ;;
+    *)                            echo "Unknown option: $1"; usage ;;
   esac
 done
+
+# TLS pair: both or neither.
+if { [ -n "$WS_TLS_CERT" ] && [ -z "$WS_TLS_KEY" ]; } || \
+   { [ -z "$WS_TLS_CERT" ] && [ -n "$WS_TLS_KEY" ]; }; then
+  echo "Error: --websocket-tls-cert and --websocket-tls-key must be used together."
+  exit 1
+fi
 
 if [ -z "$NATS_HOST" ]; then
   echo "Error: --nats-host is required"
@@ -111,6 +160,43 @@ http_port: 8222
 # for large deployments (~1400 devices at ~6KB/record = ~8MB).
 max_payload: 8MB
 EOF
+
+# Optional: WebSocket listener for browser-based devices.
+# Operator-mode JWT auth applies identically to WS and TCP clients; this
+# block adds a transport, not a new auth path.
+if [ "$ENABLE_WEBSOCKET" -eq 1 ]; then
+  {
+    echo ""
+    echo "# WebSocket listener (added by --enable-websocket)."
+    echo "# Browsers reach NATS via this listener; same JWT auth as TCP."
+    echo "websocket {"
+    echo "  port: ${WS_PORT}"
+    if [ -n "$WS_TLS_CERT" ] && [ -n "$WS_TLS_KEY" ]; then
+      echo "  tls {"
+      echo "    cert_file: \"${WS_TLS_CERT}\""
+      echo "    key_file:  \"${WS_TLS_KEY}\""
+      echo "  }"
+    else
+      echo "  # Plain WS. The compose override binds this to 127.0.0.1 only;"
+      echo "  # a reverse proxy (Caddy/nginx) MUST terminate TLS before this"
+      echo "  # port is exposed to the network."
+      echo "  no_tls: true"
+    fi
+    if [ -n "$WS_ALLOWED_ORIGINS" ]; then
+      origins_json=$(echo "$WS_ALLOWED_ORIGINS" | awk -F, '{
+        out=""; for (i=1; i<=NF; i++) {
+          gsub(/^[ \t]+|[ \t]+$/, "", $i);
+          out = out (i>1 ? ", " : "") "\"" $i "\"";
+        } print out
+      }')
+      echo "  allowed_origins: [${origins_json}]"
+    fi
+    echo "  compression: true"
+    echo "}"
+  } >> "${OUTPUT_CONF}"
+  echo ""
+  echo "==> WebSocket listener enabled on port ${WS_PORT}"
+fi
 
 echo ""
 echo "============================================"

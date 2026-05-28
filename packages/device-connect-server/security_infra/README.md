@@ -25,6 +25,7 @@ Tools for setting up NATS JWT authentication and multi-tenant isolation for Devi
     - [2. Application-level tenant namespacing](#2-application-level-tenant-namespacing)
     - [What about Zenoh?](#what-about-zenoh)
   - [Connecting Devices](#connecting-devices)
+  - [Browser-based devices (WebSocket)](#browser-based-devices-websocket)
   - [Script Reference](#script-reference)
     - [gen\_creds.sh flags](#gen_credssh-flags)
     - [Environment variables](#environment-variables)
@@ -303,6 +304,60 @@ asyncio.run(main())
 ```
 
 The device will register in the `alpha` tenant, and only devices within `alpha` will discover it.
+
+## Browser-based devices (WebSocket)
+
+Browsers can't speak NATS over raw TCP — they need WebSocket. `setup_deployment.sh` has an opt-in `--enable-websocket` flag that adds a `websocket {}` block to the generated NATS config. The same operator/account JWT auth applies to WS clients; it's a transport, not a new auth path.
+
+```bash
+./setup_deployment.sh \
+    --nats-host dc.example.com \
+    --enable-websocket \
+    --websocket-port 8443 \
+    --websocket-allowed-origins https://lights.example.com
+```
+
+Then bring NATS up with the WebSocket compose override so the port is exposed on the host:
+
+```bash
+docker compose -f infra/docker-compose-multitenant-nats.yml \
+               -f infra/docker-compose-nats-websocket.yml up -d
+```
+
+The override binds the port to `127.0.0.1:8443` by default. **Plain WS on the listener is intentional**: the assumption is that a reverse proxy (Caddy, nginx, Cloudflare Tunnel, ...) terminates TLS and proxies to loopback. Without TLS in front, NATS JWTs travel in cleartext.
+
+To skip the reverse proxy and have NATS do TLS termination natively, pass `--websocket-tls-cert` and `--websocket-tls-key` to `setup_deployment.sh`. The resulting block uses `tls { ... }` instead of `no_tls: true`, and you can safely expose the port directly (override `DC_NATS_WS_BIND=0.0.0.0:8443` in the env when running compose).
+
+### Reverse-proxy sketch (Caddy)
+
+```caddy
+app.example.com {
+    @nats path /nats /nats/*
+    reverse_proxy @nats 127.0.0.1:8443
+    reverse_proxy 127.0.0.1:8000      # your page / app
+}
+```
+
+The browser device library (`nats.ws` / `@nats-io/nats-core`) connects to `wss://app.example.com/nats` and authenticates with the JWT just like a TCP client would. From the broker's perspective every browser is an ordinary NATS client.
+
+### Subject scoping for browser credentials
+
+Browser JWTs are easier to exfiltrate than server-side ones — anyone who can open dev tools sees them. For shared-credential use cases (a swarm of read-only viewers, a kiosk, audience phones), narrow the credential's pub/sub scope with `nsc` before distributing it:
+
+```bash
+# Example: an audience credential scoped to a single subject subtree.
+# Device IDs must be dot-separated (NATS wildcards match whole tokens):
+#   device-connect.<tenant>.audience.<seat>.<id>.event.<name>
+nsc edit user audience-shared --account DEVICE_CONNECT \
+    --allow-pub 'device-connect.alpha.audience.>' \
+    --allow-pub 'device-connect.alpha.registry' \
+    --allow-pub '_INBOX.>' \
+    --allow-sub 'device-connect.alpha.audience.>' \
+    --allow-sub 'device-connect.alpha.broadcast' \
+    --allow-sub '_INBOX.>'
+```
+
+A leaked credential can then only reach the audience subtree, never cameras, robots, or the orchestrator.
 
 ## Script Reference
 
