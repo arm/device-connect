@@ -188,48 +188,54 @@ function applyExpansionState(source) {
     // for some reason), leaving the slot empty and the chevron not
     // rotated. Always: un-hide, rotate, force-reload detail.
     row.classList.remove('hidden');
-    row.style.display = 'table-row';  // hard override — beat any CSS
+    row.style.display = 'table-row';
     var chevron = document.getElementById('chevron-' + deviceId);
     if (chevron) chevron.style.transform = 'rotate(90deg)';
+
+    // FIXED-POSITION BANNER: lives at the top-right of the viewport,
+    // outside #live-devices, outside any swap target. If this is
+    // visible in the screenshot, my code is definitely running and
+    // reaching the DOM mutation step.
+    var banner = document.getElementById('dbg-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'dbg-banner';
+      banner.style.cssText = 'position:fixed;top:120px;right:10px;' +
+        'background:#dc2626;color:white;padding:10px;z-index:99999;' +
+        'border-radius:8px;font-family:monospace;font-size:11px;' +
+        'max-width:320px;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+      document.body.appendChild(banner);
+    }
+    banner.innerHTML = 'apply ' + new Date().toISOString().substring(11, 23) +
+                       '<br>' + deviceId +
+                       '<br>slot.children before=' + (slot ? slot.children.length : 'no-slot');
+
     if (slot) {
-      // Drop in a bright marker so we can SEE the row painting from a
-      // screenshot, without depending on loadDetailIfNeeded landing.
-      // If this marker is visible in the page, the row is rendering
-      // correctly and the bug is in the fetch path. If not, the row
-      // is being suppressed by something we haven't found yet.
-      slot.innerHTML = '<p style="background:#fbbf24;color:#000;padding:8px;font-weight:bold;">' +
-                       'DEBUG MARKER: applyExpansionState re-applied at ' +
+      slot.innerHTML = '<p style="background:#fbbf24;color:#000;padding:8px;font-weight:bold;border:2px solid #b45309;">' +
+                       'DEBUG MARKER in slot at ' +
                        new Date().toISOString() + '</p>';
-      // Force-clear flags so the subsequent loadDetailIfNeeded would
-      // run if we let it. We deliberately do NOT call it this round —
-      // we want the marker to persist for the screenshot. Re-enable
-      // once we know whether the marker actually paints.
       delete slot.dataset.loaded;
       delete slot.dataset.loading;
     }
-    // loadDetailIfNeeded(row, deviceId);  // disabled for visual debug
+    // loadDetailIfNeeded(row, deviceId);  // still disabled
 
-    // Read back state immediately and again after the next animation
-    // frame. If the immediate read shows visible but the rAF read
-    // shows hidden, something between the two is reverting our work
-    // (htmx settle, browser style recalc on a stale stylesheet,
-    // anything else). If both reads show visible, the bug is
-    // elsewhere (e.g. slot content not loading).
     var c1 = window.getComputedStyle(row);
     _dbg('  ' + deviceId + ': APPLIED-NOW' +
          ' className=' + JSON.stringify(row.className) +
-         ' style.display=' + JSON.stringify(row.style.display) +
-         ' computed.display=' + JSON.stringify(c1.display));
+         ' display=' + JSON.stringify(c1.display) +
+         ' slot.children=' + (slot ? slot.children.length : 'no-slot') +
+         ' slot.html.preview=' + (slot ? JSON.stringify(slot.innerHTML.substring(0, 60)) : 'no-slot'));
     var capturedDeviceId = deviceId;
     var capturedRow = row;
     requestAnimationFrame(function() {
       var live = document.getElementById('detail-' + capturedDeviceId);
       var c2 = live ? window.getComputedStyle(live) : null;
+      var liveSlot = live ? live.querySelector('.detail-content') : null;
       _dbg('  ' + capturedDeviceId + ': APPLIED-rAF' +
            ' same-row=' + (live === capturedRow) +
-           ' className=' + (live ? JSON.stringify(live.className) : 'null') +
-           ' style.display=' + (live ? JSON.stringify(live.style.display) : 'null') +
-           ' computed.display=' + (c2 ? JSON.stringify(c2.display) : 'null'));
+           ' display=' + (c2 ? JSON.stringify(c2.display) : 'null') +
+           ' slot.children=' + (liveSlot ? liveSlot.children.length : 'no-slot') +
+           ' slot.html.preview=' + (liveSlot ? JSON.stringify(liveSlot.innerHTML.substring(0, 60)) : 'no-slot'));
     });
   });
 }
