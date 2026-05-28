@@ -317,12 +317,15 @@ Browsers can't speak NATS over raw TCP — they need WebSocket. `setup_deploymen
     --websocket-allowed-origins https://lights.example.com
 ```
 
-Then bring NATS up with the WebSocket compose override so the port is exposed on the host:
+Then bring NATS up with the WebSocket compose override so the port is exposed on the host. The container-side port is read from `DC_NATS_WS_PORT` (default `8443`) and **must match the `--websocket-port` you passed to `setup_deployment.sh`** — they're written to different files and would otherwise drift silently:
 
 ```bash
-docker compose -f infra/docker-compose-multitenant-nats.yml \
-               -f infra/docker-compose-nats-websocket.yml up -d
+DC_NATS_WS_PORT=8443 \
+  docker compose -f infra/docker-compose-multitenant-nats.yml \
+                 -f infra/docker-compose-nats-websocket.yml up -d
 ```
+
+`setup_deployment.sh` prints the exact one-liner (with the value you passed) at the end of its run so you can copy-paste it.
 
 The override binds the port to `127.0.0.1:8443` by default. **Plain WS on the listener is intentional**: the assumption is that a reverse proxy (Caddy, nginx, Cloudflare Tunnel, ...) terminates TLS and proxies to loopback. Without TLS in front, NATS JWTs travel in cleartext.
 

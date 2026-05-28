@@ -67,9 +67,15 @@ After running this, use manage_tenants.sh to create tenants.
 Security notes for --enable-websocket:
   * The compose port for the WS listener is provided via
     infra/docker-compose-nats-websocket.yml (loopback-bound by default).
-    Combine it with the main compose file:
-        docker compose -f infra/docker-compose-multitenant-nats.yml \
-                       -f infra/docker-compose-nats-websocket.yml up -d
+    Combine it with the main compose file. The container-side WS port is
+    read from DC_NATS_WS_PORT (default 8443) and MUST match
+    --websocket-port -- otherwise NATS listens on one port and compose
+    maps a different one, silently leaving the listener unreachable.
+        DC_NATS_WS_PORT=8443 docker compose \
+            -f infra/docker-compose-multitenant-nats.yml \
+            -f infra/docker-compose-nats-websocket.yml up -d
+    (The "WebSocket listener enabled" message at the end of this script
+    prints the exact invocation including the value you passed.)
   * Do NOT change the loopback binding without putting TLS in front; without
     TLS, NATS JWTs travel in cleartext.
 USAGE
@@ -95,6 +101,17 @@ done
 if { [ -n "$WS_TLS_CERT" ] && [ -z "$WS_TLS_KEY" ]; } || \
    { [ -z "$WS_TLS_CERT" ] && [ -n "$WS_TLS_KEY" ]; }; then
   echo "Error: --websocket-tls-cert and --websocket-tls-key must be used together."
+  exit 1
+fi
+
+# Port arguments must be numeric -- a typo like `--websocket-port 84as3`
+# would otherwise flow into the generated config and only fail later.
+if ! [[ "$NATS_PORT" =~ ^[0-9]+$ ]]; then
+  echo "Error: --nats-port must be numeric (got: ${NATS_PORT})."
+  exit 1
+fi
+if [ "$ENABLE_WEBSOCKET" -eq 1 ] && ! [[ "$WS_PORT" =~ ^[0-9]+$ ]]; then
+  echo "Error: --websocket-port must be numeric (got: ${WS_PORT})."
   exit 1
 fi
 
@@ -183,19 +200,42 @@ if [ "$ENABLE_WEBSOCKET" -eq 1 ]; then
       echo "  no_tls: true"
     fi
     if [ -n "$WS_ALLOWED_ORIGINS" ]; then
+      # Trim each token and skip empties so "a.com,,b.com" or a trailing
+      # comma doesn't produce a stray "" entry in allowed_origins.
       origins_json=$(echo "$WS_ALLOWED_ORIGINS" | awk -F, '{
-        out=""; for (i=1; i<=NF; i++) {
-          gsub(/^[ \t]+|[ \t]+$/, "", $i);
-          out = out (i>1 ? ", " : "") "\"" $i "\"";
-        } print out
+        out=""; first=1;
+        for (i=1; i<=NF; i++) {
+          tok = $i;
+          gsub(/^[ \t]+|[ \t]+$/, "", tok);
+          if (tok == "") continue;
+          out = out (first ? "" : ", ") "\"" tok "\"";
+          first = 0;
+        }
+        print out
       }')
-      echo "  allowed_origins: [${origins_json}]"
+      if [ -n "$origins_json" ]; then
+        echo "  allowed_origins: [${origins_json}]"
+      fi
     fi
     echo "  compression: true"
     echo "}"
   } >> "${OUTPUT_CONF}"
   echo ""
   echo "==> WebSocket listener enabled on port ${WS_PORT}"
+  echo ""
+  echo "    Bring up the compose stack with BOTH files and pass the WS port"
+  echo "    as DC_NATS_WS_PORT so the host->container mapping matches the"
+  echo "    listener port written into the config (they live in different"
+  echo "    files and would otherwise drift silently):"
+  echo ""
+  echo "      DC_NATS_WS_PORT=${WS_PORT} \\"
+  echo "        docker compose \\"
+  echo "          -f infra/docker-compose-multitenant-nats.yml \\"
+  echo "          -f infra/docker-compose-nats-websocket.yml up -d"
+  echo ""
+  echo "    To bind the host port somewhere other than 127.0.0.1, also set"
+  echo "    DC_NATS_WS_BIND=10.0.0.5:${WS_PORT} (LAN only, never 0.0.0.0"
+  echo "    without TLS termination in front)."
 fi
 
 echo ""
