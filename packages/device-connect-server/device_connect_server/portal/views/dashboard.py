@@ -5,6 +5,7 @@
 """User dashboard with live device polling, RPC invocation, and event streaming."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -21,9 +22,21 @@ logger = logging.getLogger(__name__)
 def setup_routes(app: web.Application):
     app.router.add_get("/dashboard", dashboard_page)
     app.router.add_get("/api/devices/live", live_devices_fragment)
+    app.router.add_get("/api/devices/live.json", live_devices_json)
     app.router.add_get("/api/devices/{device_id}/live-detail", live_device_detail_fragment)
     app.router.add_post("/api/devices/{device_id}/invoke", invoke_device_rpc)
     app.router.add_get("/api/devices/{device_id}/events/{event_name}/stream", event_stream)
+
+
+def _capabilities_hash(caps) -> str:
+    """Stable short hash of a device's capabilities for change detection.
+
+    The dashboard's JSON poll uses this to decide whether to refresh an
+    already-expanded detail panel in place. We hash the canonical
+    JSON form so reordering keys doesn't trigger spurious refreshes.
+    """
+    payload = json.dumps(caps or {}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 async def dashboard_page(request: web.Request):
@@ -89,6 +102,53 @@ async def live_devices_fragment(request: web.Request):
         "registered_count": len(devices),
         "creds_count": creds_count,
         "user": request.get("user", {}),
+    })
+
+
+async def live_devices_json(request: web.Request):
+    """JSON snapshot for the dashboard's in-place poll.
+
+    Replaces the table-wide htmx swap. The client merges these values
+    into existing rows (status pill, location, last-seen) without
+    touching DOM structure, so scroll position and expand/event-log
+    state survive. ``capabilities_hash`` lets the client decide whether
+    an already-expanded detail panel needs re-fetching.
+
+    Minimum scope: new devices appearing or existing devices
+    disappearing are only reflected after a page reload; the page
+    reload was the failure mode the JSON poll was added to avoid for
+    *values*, not for fleet membership.
+    """
+    tenant = _resolve_tenant(request)
+    devices = []
+    try:
+        devices = await asyncio.to_thread(registry_client.list_live_devices, tenant)
+    except Exception:
+        pass
+    try:
+        creds_count = len(
+            await asyncio.to_thread(credentials.list_credentials, tenant=tenant),
+        )
+    except Exception:
+        creds_count = 0
+
+    return web.json_response({
+        "devices": [
+            {
+                "device_id": d.get("device_id"),
+                "device_type": d.get("device_type"),
+                "status": d.get("status"),
+                "location": d.get("location"),
+                "last_seen": d.get("last_seen"),
+                "capabilities_hash": _capabilities_hash(d.get("capabilities")),
+            }
+            for d in devices
+        ],
+        "counts": {
+            "online": sum(1 for d in devices if d.get("status") == "available"),
+            "registered": len(devices),
+            "creds": creds_count,
+        },
     })
 
 

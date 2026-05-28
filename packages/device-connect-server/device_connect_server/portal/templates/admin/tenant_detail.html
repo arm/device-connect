@@ -51,9 +51,12 @@
       Auto-refreshing
     </span>
   </div>
+  {# Initial table render only — htmx fires `load` once and the
+     fragment lands here. From then on, /api/devices/live.json drives
+     in-place cell updates. See dashboard.html for the rationale. #}
   <div id="live-devices"
        hx-get="/api/devices/live?tenant={{ viewing_as }}"
-       hx-trigger="load, every 3s"
+       hx-trigger="load"
        hx-swap="innerHTML">
     <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
   </div>
@@ -64,15 +67,12 @@
 
 <script>
 var _tenantParam = '?tenant={{ viewing_as }}';
-window._expandedDevices = window._expandedDevices || new Set();
+window._deviceCapsHash = window._deviceCapsHash || {};
 
 function loadDetailIfNeeded(row, deviceId) {
   var url = row.getAttribute('data-detail-url');
   var slot = row.querySelector('.detail-content');
   if (!url || !slot) return;
-  // Gate on a DOM attribute attached to the slot itself, so that when
-  // the live-devices poll re-renders this row the "loaded" mark is
-  // naturally cleared along with the placeholder.
   if (slot.dataset.loaded === 'true' || slot.dataset.loading === 'true') return;
   slot.dataset.loading = 'true';
   fetch(url, {credentials: 'same-origin'})
@@ -98,46 +98,69 @@ function toggleDetail(deviceId) {
   var opening = row.classList.contains('hidden');
   row.classList.toggle('hidden');
   if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
-  if (opening) {
-    window._expandedDevices.add(deviceId);
-    loadDetailIfNeeded(row, deviceId);
-  } else {
-    window._expandedDevices.delete(deviceId);
+  if (opening) loadDetailIfNeeded(row, deviceId);
+}
+
+// --- In-place poll (replaces the old table-wide htmx swap). See
+//     dashboard.html for the full rationale. ---------------------
+
+function statusPillHtml(status) {
+  if (status === 'available') {
+    return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">' +
+             '<span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 pulse-dot"></span>' +
+             'online' +
+           '</span>';
   }
+  var safe = String(status == null ? 'unknown' : status)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">' +
+           '<span class="w-1.5 h-1.5 bg-gray-400 rounded-full mr-1"></span>' +
+           safe +
+         '</span>';
 }
 
-// Keep rows expanded across the poll swap. Uses MutationObserver
-// rather than htmx:afterSwap — the latter wasn't reliably firing on
-// this target in practice. See dashboard.html for full rationale.
-var liveDevices = document.getElementById('live-devices');
+function updateRowFromJson(d) {
+  var row = document.getElementById('summary-' + d.device_id);
+  if (!row) return;
+  var statusCell = row.querySelector('.cell-status');
+  if (statusCell) statusCell.innerHTML = statusPillHtml(d.status);
+  var locCell = row.querySelector('.cell-location');
+  if (locCell) locCell.textContent = d.location || '—';
+  var seenCell = row.querySelector('.cell-lastseen');
+  if (seenCell) seenCell.textContent = d.last_seen || '—';
 
-function applyExpansionState() {
-  window._expandedDevices.forEach(function(deviceId) {
-    var row = document.getElementById('detail-' + deviceId);
-    if (!row) {
-      window._expandedDevices.delete(deviceId);
-      if (window._eventSources && window._eventSources[deviceId]) {
-        try { window._eventSources[deviceId].close(); } catch (e) {}
-        delete window._eventSources[deviceId];
-        var drawer = document.getElementById('eventlog-' + deviceId);
-        if (drawer && drawer.parentElement) {
-          drawer.parentElement.removeChild(drawer);
-        }
+  var prevHash = window._deviceCapsHash[d.device_id];
+  if (prevHash && prevHash !== d.capabilities_hash) {
+    var detailRow = document.getElementById('detail-' + d.device_id);
+    if (detailRow && !detailRow.classList.contains('hidden')) {
+      var slot = detailRow.querySelector('.detail-content');
+      if (slot && slot.dataset.loaded === 'true') {
+        delete slot.dataset.loaded;
+        delete slot.dataset.loading;
+        loadDetailIfNeeded(detailRow, d.device_id);
       }
-      return;
     }
-    if (row.classList.contains('hidden')) {
-      row.classList.remove('hidden');
-      var chevron = document.getElementById('chevron-' + deviceId);
-      if (chevron) chevron.style.transform = 'rotate(90deg)';
-      loadDetailIfNeeded(row, deviceId);
-    }
-  });
+  }
+  window._deviceCapsHash[d.device_id] = d.capabilities_hash;
 }
 
-new MutationObserver(applyExpansionState).observe(liveDevices, {
-  childList: true,
-});
+function pollDevices() {
+  fetch('/api/devices/live.json' + _tenantParam, { credentials: 'same-origin' })
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      var oc = document.getElementById('online-count');
+      if (oc) oc.textContent = data.counts.online;
+      var rc = document.getElementById('registered-count');
+      if (rc) rc.textContent = data.counts.registered;
+      var cc = document.getElementById('creds-count');
+      if (cc) cc.textContent = data.counts.creds;
+      data.devices.forEach(updateRowFromJson);
+    })
+    .catch(function() { /* silent */ });
+}
+
+setInterval(pollDevices, 10000);
 
 // --- RPC Invoke ---
 window._invokeState = {};

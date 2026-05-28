@@ -11,7 +11,13 @@
   </thead>
   <tbody class="divide-y divide-gray-100">
     {% for device in devices %}
-    <tr class="hover:bg-gray-50 cursor-pointer" onclick="toggleDetail('{{ device.device_id }}')">
+    {# Row + cell hooks for the in-place JSON poll: dashboard JS finds
+       `#summary-{device_id}` and updates the `.cell-status`,
+       `.cell-location`, `.cell-lastseen` cells in place. Initial
+       server-rendered values match the JS-rendered ones. #}
+    <tr id="summary-{{ device.device_id }}"
+        class="hover:bg-gray-50 cursor-pointer"
+        onclick="toggleDetail('{{ device.device_id }}')">
       <td class="px-5 py-3">
         <div class="flex items-center gap-2">
           <svg id="chevron-{{ device.device_id }}" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -23,7 +29,7 @@
       <td class="px-5 py-3">
         <span class="text-sm text-gray-600">{{ device.device_type }}</span>
       </td>
-      <td class="px-5 py-3">
+      <td class="px-5 py-3 cell-status">
         {% if device.status == "available" %}
         <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
           <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 pulse-dot"></span>
@@ -36,8 +42,8 @@
         </span>
         {% endif %}
       </td>
-      <td class="px-5 py-3 text-sm text-gray-600">{{ device.location or "—" }}</td>
-      <td class="px-5 py-3 text-sm text-gray-400">{{ device.last_seen or "—" }}</td>
+      <td class="px-5 py-3 text-sm text-gray-600 cell-location">{{ device.location or "—" }}</td>
+      <td class="px-5 py-3 text-sm text-gray-400 cell-lastseen">{{ device.last_seen or "—" }}</td>
     </tr>
     <tr id="detail-{{ device.device_id }}" class="hidden"
         data-detail-url="/api/devices/{{ device.device_id }}/live-detail{% if tenant %}?tenant={{ tenant }}{% endif %}">
