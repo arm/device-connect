@@ -600,13 +600,16 @@ async def device_revoke(request: web.Request) -> web.Response:
     full_name = _full_device_name(tenant, device_id)
     filename = f"{full_name}.creds.json"
 
-    # Same shape as the portal handler: backend revocation is best-effort
-    # (some backends may not support remove_device), but the file deletion
-    # is the part that makes the cred "disappear" from the operator's UI.
+    # Same shape as the portal handler: a backend without remove_device
+    # is a soft success (file still deleted so the operator's UI matches
+    # intent), but a hard failure from a backend that DOES support
+    # remove_device leaves the file in place so the operator can retry.
+    # Otherwise we'd risk a ghost file pointing at a still-valid account.
     backend = get_backend()
     remove = getattr(backend, "remove_device", None)
+    backend_supported = remove is not None
     backend_error: str | None = None
-    if remove is not None:
+    if backend_supported:
         try:
             await remove(tenant, full_name)
             await backend.reload_broker()
@@ -616,11 +619,28 @@ async def device_revoke(request: web.Request) -> web.Response:
     else:
         backend_error = f"{backend.backend_name()} backend does not support remove_device"
 
+    if backend_supported and backend_error is not None:
+        # Hard backend failure: report it and keep the file. 502 tells
+        # the caller the upstream broker is the problem, not the portal.
+        return _err(status=502, code="backend_revoke_failed",
+                    message=f"Backend revocation failed for {full_name}: "
+                            f"{backend_error}. Credential file left in place; "
+                            f"retry once the backend is healthy.",
+                    trace_id=trace)
+
     deleted = credentials_svc.delete_credential(filename)
     if not deleted:
+        # File was there a moment ago (or the backend successfully
+        # removed it); name the fact that the account is already gone
+        # so the caller knows the partial-success state.
+        message = f"Credential file not found: {filename}"
+        if backend_supported and backend_error is None:
+            message += (
+                ". Backend account was already revoked; only the local "
+                "file is missing."
+            )
         return _err(status=404, code="not_found",
-                    message=f"Credential file not found: {filename}",
-                    trace_id=trace)
+                    message=message, trace_id=trace)
 
     _audit(request, "revoke", trace_id=trace, device_id=full_name)
     result = {"device_id": full_name, "revoked": True}

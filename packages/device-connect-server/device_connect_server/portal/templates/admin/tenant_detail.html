@@ -84,7 +84,11 @@ function loadDetailIfNeeded(row, deviceId) {
     })
     .catch(function(err) {
       delete slot.dataset.loading;
-      slot.innerHTML = '<p class="text-xs text-red-500">Failed to load details: ' + err + '</p>';
+      slot.innerHTML = '';
+      var p = document.createElement('p');
+      p.className = 'text-xs text-red-500';
+      p.textContent = 'Failed to load details: ' + (err && err.message ? err.message : err);
+      slot.appendChild(p);
     });
 }
 
@@ -145,6 +149,7 @@ function updateRowFromJson(d) {
   return true;
 }
 
+// See dashboard.html for the orphan-row race this guards against.
 window._pendingInserts = window._pendingInserts || {};
 
 function insertNewDeviceRow(deviceId, capsHash) {
@@ -154,6 +159,8 @@ function insertNewDeviceRow(deviceId, capsHash) {
         { credentials: 'same-origin' })
     .then(function(r) { return r.ok ? r.text() : null; })
     .then(function(html) {
+      // Cancelled by an interleaved removeDeviceRow — discard.
+      if (!window._pendingInserts[deviceId]) return;
       delete window._pendingInserts[deviceId];
       if (!html) return;
       if (document.getElementById('summary-' + deviceId)) return;
@@ -173,6 +180,8 @@ function removeDeviceRow(deviceId) {
   if (summary && summary.parentElement) summary.parentElement.removeChild(summary);
   if (detail && detail.parentElement) detail.parentElement.removeChild(detail);
   delete window._deviceCapsHash[deviceId];
+  // Cancel any in-flight insert (see dashboard.html comment).
+  delete window._pendingInserts[deviceId];
   if (typeof closeEventLog === 'function') closeEventLog(deviceId);
 }
 

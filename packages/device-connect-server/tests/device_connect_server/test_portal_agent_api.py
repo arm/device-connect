@@ -451,6 +451,174 @@ class TestInvokeTimeoutCap:
         assert seen["timeout"] == agent_api.MAX_INVOKE_TIMEOUT_S
 
 
+# ── revoke endpoint failure modes (regression) ────────────────────
+
+
+@pytest.fixture
+def provision_record():
+    return {
+        "token_id": "prov0",
+        "username": "alice",
+        "tenant": "acme",
+        "role": "user",
+        "scopes": ["devices:provision"],
+        "created_at": "2026-05-01T00:00:00+00:00",
+    }
+
+
+@pytest.fixture
+async def provision_client(provision_record):
+    app = _build_app()
+    server = TestServer(app)
+    async with server:
+        async with TestClient(server) as cli:
+            with patch.object(tokens_svc, "verify_token", return_value=provision_record):
+                yield cli
+
+
+class _RevokeBackend:
+    """Minimal stand-in for the credentials backend in revoke tests.
+
+    - ``supports_remove=False`` simulates a backend with no
+      ``remove_device`` attribute (e.g. plain MQTT). The revoke
+      handler must treat this as a soft success and still drop the
+      local file.
+    - ``raise_on_remove`` simulates a hard backend failure (the broker
+      rejected the revoke). The handler must NOT delete the local
+      file in that case, so the operator can retry once the backend
+      is healthy.
+    """
+
+    def __init__(self, *, supports_remove: bool = True,
+                 raise_on_remove: Exception | None = None):
+        self._supports = supports_remove
+        self._raise = raise_on_remove
+        self.removed: list[tuple[str, str]] = []
+        self.reloaded = 0
+        if supports_remove:
+            async def _remove(tenant: str, full_name: str) -> None:
+                if self._raise is not None:
+                    raise self._raise
+                self.removed.append((tenant, full_name))
+            self.remove_device = _remove
+
+    def backend_name(self) -> str:
+        return "test"
+
+    async def reload_broker(self) -> None:
+        self.reloaded += 1
+
+
+class TestDeviceRevoke:
+    async def test_hard_backend_failure_keeps_file(self, provision_client):
+        """If remove_device raises, the local cred file must remain in place.
+
+        The old behavior deleted the file regardless, leaving a
+        ghost-file-pointing-at-still-valid-account state with no
+        operator-visible signal. Now the handler returns 502 and the
+        delete_credential helper is never called.
+        """
+        backend = _RevokeBackend(raise_on_remove=RuntimeError("nats unreachable"))
+        deleted = []
+
+        def _delete(filename):
+            deleted.append(filename)
+            return True
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=backend,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.delete_credential",
+            side_effect=_delete,
+        ):
+            r = await provision_client.post(
+                "/api/agent/v1/devices/cam-001/revoke", headers=H(),
+            )
+            assert r.status == 502
+            body = await r.json()
+            assert body["error"]["code"] == "backend_revoke_failed"
+            # The critical assertion: file is NOT deleted on backend failure.
+            assert deleted == []
+
+    async def test_unsupported_backend_is_soft_success(self, provision_client):
+        """A backend without remove_device must still delete the file.
+
+        Older / MQTT-style backends never had a remove primitive; the
+        only thing the operator can do is drop the file so the UI
+        reflects intent.
+        """
+        backend = _RevokeBackend(supports_remove=False)
+        deleted = []
+
+        def _delete(filename):
+            deleted.append(filename)
+            return True
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=backend,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.delete_credential",
+            side_effect=_delete,
+        ):
+            r = await provision_client.post(
+                "/api/agent/v1/devices/cam-001/revoke", headers=H(),
+            )
+            assert r.status == 200
+            body = await r.json()
+            assert body["result"]["revoked"] is True
+            assert body["result"]["device_id"] == "acme-cam-001"
+            # The unsupported-backend warning must still surface so an
+            # operator who expected a real revoke knows it didn't happen.
+            assert "backend_warning" in body["result"]
+            assert deleted == ["acme-cam-001.creds.json"]
+
+    async def test_backend_succeeds_then_file_missing_explains_partial(
+        self, provision_client,
+    ):
+        """File-delete fails after backend revoke succeeded: 404 must
+        say the account is already revoked so the operator doesn't
+        think the whole operation failed."""
+        backend = _RevokeBackend()  # remove_device succeeds
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=backend,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.delete_credential",
+            return_value=False,
+        ):
+            r = await provision_client.post(
+                "/api/agent/v1/devices/cam-001/revoke", headers=H(),
+            )
+            assert r.status == 404
+            body = await r.json()
+            # Be tolerant about exact wording, but the message must
+            # name the partial-success state explicitly.
+            msg = body["error"]["message"].lower()
+            assert "already revoked" in msg or "account" in msg
+
+    async def test_happy_path(self, provision_client):
+        backend = _RevokeBackend()
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=backend,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.delete_credential",
+            return_value=True,
+        ):
+            r = await provision_client.post(
+                "/api/agent/v1/devices/cam-001/revoke", headers=H(),
+            )
+            assert r.status == 200
+            body = await r.json()
+            assert body["result"]["revoked"] is True
+            assert "backend_warning" not in body["result"]
+            assert backend.removed == [("acme", "acme-cam-001")]
+            assert backend.reloaded == 1
+
+
 # ── invoke-with-fallback duplicate device id (regression) ─────────
 
 

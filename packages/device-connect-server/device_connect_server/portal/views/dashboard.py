@@ -115,10 +115,17 @@ async def live_devices_json(request: web.Request):
     state survive. ``capabilities_hash`` lets the client decide whether
     an already-expanded detail panel needs re-fetching.
 
-    Minimum scope: new devices appearing or existing devices
-    disappearing are only reflected after a page reload; the page
-    reload was the failure mode the JSON poll was added to avoid for
-    *values*, not for fleet membership.
+    Cost: ``registry_client.list_live_devices`` paginates through the
+    full tenant fleet via the registry RPC; the registry, in turn,
+    does a full ``etcd get_prefix`` + JSON-decode per page (see
+    ``DeviceRegistry.list_devices_page``). At ~1400 devices with the
+    default 100-device page that's ~14 etcd scans per JSON-poll tick,
+    per dashboard. The pagination fix bounds NATS *payload* size but
+    NOT registry CPU; if the portal is being polled by many concurrent
+    operators, raise ``DEVICE_CONNECT_LIST_PAGE_SIZE`` (with the
+    matching ``DC_LIST_DEVICES_MAX_LIMIT`` and NATS ``max_payload``)
+    or lengthen the client poll interval. Selector pushdown / keyset
+    pagination is the documented next iteration.
     """
     tenant = _resolve_tenant(request)
     devices = []

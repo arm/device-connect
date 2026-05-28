@@ -114,6 +114,18 @@ def _env_float(name: str, default: float) -> float:
 # development. Operators at fleet scale should bump this via
 # DEVICE_CONNECT_REGISTER_JITTER=10 (or higher) to spread the herd
 # further.
+#
+# Lease-TTL interaction: the registry creates the etcd lease at the
+# moment _do_register runs, so if a slow registry takes ~timeout
+# seconds to reply, the lease can be near-expired before the heartbeat
+# loop emits its first beat (`run()` awaits _register before starting
+# the heartbeat task). With the 15s timeout default and the 15s `ttl`
+# default that race is real; it self-heals — the next heartbeat fires
+# `has_lease()=False` on the registry and triggers a requestRegistration
+# round-trip — but operators raising DEVICE_CONNECT_REGISTER_TIMEOUT
+# (or running a stressed registry where requests routinely take >ttl/3)
+# should raise `ttl` in lockstep or shorten `heartbeat_interval` so
+# the first beat lands inside the lease window.
 _REGISTER_REQUEST_TIMEOUT = _env_float("DEVICE_CONNECT_REGISTER_TIMEOUT", 15.0)
 _REGISTER_STARTUP_JITTER = _env_float("DEVICE_CONNECT_REGISTER_JITTER", 2.0)
 

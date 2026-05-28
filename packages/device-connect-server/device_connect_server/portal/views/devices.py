@@ -201,13 +201,16 @@ async def revoke_credential(request: web.Request):
         raise web.HTTPForbidden(text="Access denied: credential belongs to another tenant")
 
     # 1. Revoke the broker account so the device can no longer connect.
-    #    Best-effort: a backend without remove_device returns 501-style
-    #    behavior, but we still want the file gone in that case so the
-    #    operator's UI reflects the intent.
+    #    A backend without remove_device is a "soft success": the file
+    #    is still deleted so the operator's UI reflects intent, but a
+    #    real failure from a backend that DOES support remove_device is
+    #    not — leaving a ghost file pointing at a still-valid account
+    #    is worse than leaving an orphan file the operator can retry.
     backend = get_backend()
     remove = getattr(backend, "remove_device", None)
+    backend_supported = remove is not None
     backend_error: str | None = None
-    if remove is not None:
+    if backend_supported:
         try:
             await remove(cred_tenant, device_name)
             await backend.reload_broker()
@@ -216,25 +219,41 @@ async def revoke_credential(request: web.Request):
     else:
         backend_error = f"{backend.backend_name()} backend does not support remove_device"
 
-    # 2. Delete the local credential file so it stops appearing in the
-    #    portal's list. Done after the backend revocation so a backend
-    #    failure doesn't leave us with a "ghost" file that points at a
-    #    still-valid account.
+    # 2. Delete the local credential file. Only attempted when the
+    #    backend revocation succeeded (or the backend doesn't support
+    #    it at all); a hard backend failure leaves the file in place
+    #    so the operator can retry once the backend is healthy.
+    if backend_supported and backend_error is not None:
+        # Hard backend failure: surface it, keep the file. The
+        # 502 (rather than 500) tells the operator the upstream
+        # broker is the problem, not the portal.
+        raise web.HTTPBadGateway(
+            text=f"Backend revocation failed for {device_name}: {backend_error}. "
+                 f"Credential file left in place; retry once the backend is healthy.",
+        )
+
     deleted = credentials.delete_credential(filename)
     if not deleted:
-        # File was there a moment ago (cred_data was non-None) but
-        # we couldn't unlink it. Surface this loudly.
+        # File was there a moment ago (cred_data was non-None) but we
+        # couldn't unlink it. If the backend revoke already succeeded,
+        # the account is gone — say so explicitly rather than implying
+        # the whole operation failed.
+        suffix = (
+            " Backend account was already revoked; only the local file "
+            "remains and must be removed by hand."
+            if backend_supported and backend_error is None
+            else ""
+        )
         raise web.HTTPInternalServerError(
-            text=f"Failed to remove credential file: {filename}"
-            + (f" (backend: {backend_error})" if backend_error else ""),
+            text=f"Failed to remove credential file: {filename}.{suffix}",
         )
 
     # The device's etcd registry entry expires on its TTL after the
     # device disconnects; no explicit cleanup needed here.
 
     # Empty body — htmx's `hx-swap="delete"` removes the row from the
-    # page on a 2xx response. Surface backend errors as a non-blocking
-    # warning header so the operator at least sees it.
+    # page on a 2xx response. Surface backend warnings (e.g. unsupported
+    # backend) as a non-blocking header so the operator at least sees it.
     headers = {}
     if backend_error:
         headers["X-Revoke-Warning"] = backend_error

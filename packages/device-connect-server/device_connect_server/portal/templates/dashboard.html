@@ -82,7 +82,14 @@ function loadDetailIfNeeded(row, deviceId) {
     })
     .catch(function(err) {
       delete slot.dataset.loading;
-      slot.innerHTML = '<p class="text-xs text-red-500">Failed to load details: ' + err + '</p>';
+      // Use textContent on a child so an Error message that happens
+      // to contain HTML (or future server-side error text routed
+      // through this path) can't inject markup.
+      slot.innerHTML = '';
+      var p = document.createElement('p');
+      p.className = 'text-xs text-red-500';
+      p.textContent = 'Failed to load details: ' + (err && err.message ? err.message : err);
+      slot.appendChild(p);
     });
 }
 
@@ -160,8 +167,19 @@ function updateRowFromJson(d) {
   return true;
 }
 
-// In-flight set so a slow row-html fetch doesn't get re-issued by a
-// subsequent poll firing before the first response lands.
+// In-flight map so a slow row-html fetch doesn't get re-issued by a
+// subsequent poll firing before the first response lands. We track
+// "still wanted" too: if the device disappears from a JSON poll
+// between issuing the fetch and the response landing, we drop the
+// response on the floor instead of appending an orphan row.
+//
+// Race we're guarding against:
+//   poll N    : device X present  -> insertNewDeviceRow(X) starts fetch
+//   poll N+1  : device X absent   -> removeDeviceRow(X) is a no-op
+//                                    (no summary row in DOM yet)
+//   fetch lands: append row for X -> orphan row until next poll
+// With the "still wanted" gate, removeDeviceRow clears the pending
+// flag and the late response is discarded.
 window._pendingInserts = window._pendingInserts || {};
 
 function insertNewDeviceRow(deviceId, capsHash, tbody) {
@@ -171,11 +189,14 @@ function insertNewDeviceRow(deviceId, capsHash, tbody) {
         { credentials: 'same-origin' })
     .then(function(r) { return r.ok ? r.text() : null; })
     .then(function(html) {
+      // Was this insert cancelled by a removeDeviceRow that ran
+      // between fetch start and response landing? If so the flag is
+      // gone -- discard the response.
+      if (!window._pendingInserts[deviceId]) return;
       delete window._pendingInserts[deviceId];
       if (!html) return;
-      // Re-check: a parallel poll or the device disappearing in the
-      // ~hundreds of ms since we issued the fetch may have changed
-      // things.
+      // Re-check the DOM: a parallel poll may have already inserted
+      // the row, in which case we must not duplicate it.
       if (document.getElementById('summary-' + deviceId)) return;
       var liveTbody = document.querySelector('#live-devices tbody');
       if (!liveTbody) return;
@@ -193,6 +214,10 @@ function removeDeviceRow(deviceId) {
   if (summary && summary.parentElement) summary.parentElement.removeChild(summary);
   if (detail && detail.parentElement) detail.parentElement.removeChild(detail);
   delete window._deviceCapsHash[deviceId];
+  // Cancel any in-flight insertNewDeviceRow fetch for this id: the
+  // response landing after we've decided this device is gone would
+  // otherwise re-add an orphan row.
+  delete window._pendingInserts[deviceId];
   // Tear down any live SSE drawer for this device.
   if (typeof closeEventLog === 'function') closeEventLog(deviceId);
 }
