@@ -187,15 +187,34 @@ function applyExpansionState(source) {
     // stale duplicate row, or the new row being rendered un-hidden
     // for some reason), leaving the slot empty and the chevron not
     // rotated. Always: un-hide, rotate, force-reload detail.
+    // ---- "Is our row the painted row?" diagnostic ----
+    // Counts and ancestry tell us whether we have a stale/detached
+    // tree (which would explain why display=table-row in JS doesn't
+    // show in the page).
+    var allRows = document.querySelectorAll('[id="detail-' + deviceId + '"]');
+    var liveContains = liveDevices.contains(row);
+    var liveTables = liveDevices.querySelectorAll('table').length;
+    var docTables = document.querySelectorAll('table').length;
+    var ancestry = [];
+    var p = row;
+    while (p && p !== document.documentElement && ancestry.length < 8) {
+      ancestry.push(p.tagName + (p.id ? '#' + p.id : ''));
+      p = p.parentElement;
+    }
+    _dbg('  ' + deviceId + ': PRE-MOD' +
+         ' allRows=' + allRows.length +
+         ' liveDevices.contains(row)=' + liveContains +
+         ' tables-in-live=' + liveTables +
+         ' tables-in-doc=' + docTables +
+         ' offsetHeight=' + row.offsetHeight +
+         ' ancestry=' + ancestry.join('<'));
+
     row.classList.remove('hidden');
     row.style.display = 'table-row';
     var chevron = document.getElementById('chevron-' + deviceId);
+    _dbg('  ' + deviceId + ': chevron=' + (chevron ? 'found id=' + chevron.id + ' in-live=' + liveDevices.contains(chevron) : 'NULL'));
     if (chevron) chevron.style.transform = 'rotate(90deg)';
 
-    // FIXED-POSITION BANNER: lives at the top-right of the viewport,
-    // outside #live-devices, outside any swap target. If this is
-    // visible in the screenshot, my code is definitely running and
-    // reaching the DOM mutation step.
     var banner = document.getElementById('dbg-banner');
     if (!banner) {
       banner = document.createElement('div');
@@ -208,7 +227,10 @@ function applyExpansionState(source) {
     }
     banner.innerHTML = 'apply ' + new Date().toISOString().substring(11, 23) +
                        '<br>' + deviceId +
-                       '<br>slot.children before=' + (slot ? slot.children.length : 'no-slot');
+                       '<br>slot.children before=' + (slot ? slot.children.length : 'no-slot') +
+                       '<br>allRows=' + allRows.length +
+                       '<br>contains(row)=' + liveContains +
+                       '<br>row.offsetHeight=' + row.offsetHeight;
 
     if (slot) {
       slot.innerHTML = '<p style="background:#fbbf24;color:#000;padding:8px;font-weight:bold;border:2px solid #b45309;">' +
@@ -221,10 +243,9 @@ function applyExpansionState(source) {
 
     var c1 = window.getComputedStyle(row);
     _dbg('  ' + deviceId + ': APPLIED-NOW' +
-         ' className=' + JSON.stringify(row.className) +
          ' display=' + JSON.stringify(c1.display) +
-         ' slot.children=' + (slot ? slot.children.length : 'no-slot') +
-         ' slot.html.preview=' + (slot ? JSON.stringify(slot.innerHTML.substring(0, 60)) : 'no-slot'));
+         ' offsetHeight=' + row.offsetHeight +
+         ' slot.children=' + (slot ? slot.children.length : 'no-slot'));
     var capturedDeviceId = deviceId;
     var capturedRow = row;
     requestAnimationFrame(function() {
