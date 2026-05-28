@@ -23,6 +23,7 @@ def setup_routes(app: web.Application):
     app.router.add_get("/dashboard", dashboard_page)
     app.router.add_get("/api/devices/live", live_devices_fragment)
     app.router.add_get("/api/devices/live.json", live_devices_json)
+    app.router.add_get("/api/devices/{device_id}/row-html", device_row_html_fragment)
     app.router.add_get("/api/devices/{device_id}/live-detail", live_device_detail_fragment)
     app.router.add_post("/api/devices/{device_id}/invoke", invoke_device_rpc)
     app.router.add_get("/api/devices/{device_id}/events/{event_name}/stream", event_stream)
@@ -150,6 +151,31 @@ async def live_devices_json(request: web.Request):
             "creds": creds_count,
         },
     })
+
+
+async def device_row_html_fragment(request: web.Request):
+    """Render the summary+detail row pair for one device.
+
+    Called by the dashboard JSON poll when it sees a device_id that
+    isn't yet in the table — the JS appends the returned HTML to
+    ``<tbody>`` instead of triggering a full page reload. The same
+    Jinja partial powers the initial server-side table render, so an
+    appended row is structurally identical to one rendered at page
+    load (same id, same cell classes, same chevron, same lazy-detail
+    URL).
+    """
+    tenant = _resolve_tenant(request)
+    device_id = request.match_info["device_id"]
+
+    raw = await asyncio.to_thread(registry_client.get_device, tenant, device_id)
+    if not raw:
+        return web.Response(status=404, text="", content_type="text/html")
+
+    device = registry_client.format_live_device(raw)
+    return aiohttp_jinja2.render_template(
+        "devices/_device_row_pair.html", request,
+        {"device": device, "tenant": tenant},
+    )
 
 
 async def live_device_detail_fragment(request: web.Request):

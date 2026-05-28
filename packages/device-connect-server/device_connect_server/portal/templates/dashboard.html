@@ -135,7 +135,7 @@ function statusPillHtml(status) {
 
 function updateRowFromJson(d) {
   var row = document.getElementById('summary-' + d.device_id);
-  if (!row) return;  // unknown device — appears on next page reload
+  if (!row) return false;  // caller will fetch + insert via insertNewRow
 
   var statusCell = row.querySelector('.cell-status');
   if (statusCell) statusCell.innerHTML = statusPillHtml(d.status);
@@ -159,6 +159,60 @@ function updateRowFromJson(d) {
     }
   }
   window._deviceCapsHash[d.device_id] = d.capabilities_hash;
+  return true;
+}
+
+// In-flight set so a slow row-html fetch doesn't get re-issued by a
+// subsequent poll firing before the first response lands.
+window._pendingInserts = window._pendingInserts || {};
+
+function insertNewDeviceRow(deviceId, capsHash, tbody) {
+  if (window._pendingInserts[deviceId]) return;
+  window._pendingInserts[deviceId] = true;
+  fetch('/api/devices/' + encodeURIComponent(deviceId) + '/row-html?tenant={{ tenant }}',
+        { credentials: 'same-origin' })
+    .then(function(r) { return r.ok ? r.text() : null; })
+    .then(function(html) {
+      delete window._pendingInserts[deviceId];
+      if (!html) return;
+      // Re-check: a parallel poll or the device disappearing in the
+      // ~hundreds of ms since we issued the fetch may have changed
+      // things.
+      if (document.getElementById('summary-' + deviceId)) return;
+      var liveTbody = document.querySelector('#live-devices tbody');
+      if (!liveTbody) return;
+      var holder = document.createElement('tbody');
+      holder.innerHTML = html;
+      while (holder.firstChild) liveTbody.appendChild(holder.firstChild);
+      window._deviceCapsHash[deviceId] = capsHash;
+    })
+    .catch(function() { delete window._pendingInserts[deviceId]; });
+}
+
+function removeDeviceRow(deviceId) {
+  var summary = document.getElementById('summary-' + deviceId);
+  var detail = document.getElementById('detail-' + deviceId);
+  if (summary && summary.parentElement) summary.parentElement.removeChild(summary);
+  if (detail && detail.parentElement) detail.parentElement.removeChild(detail);
+  delete window._deviceCapsHash[deviceId];
+  // Tear down any live SSE drawer for this device.
+  if (typeof closeEventLog === 'function') closeEventLog(deviceId);
+}
+
+// One-shot full-fragment swap, used only across the empty<->non-empty
+// transition where the table itself either doesn't exist yet or has
+// to be replaced by the empty-state placeholder. Incremental updates
+// can't bridge that gap because there's no <tbody> to append to /
+// remove from.
+function reloadLiveFragment() {
+  fetch('/api/devices/live?tenant={{ tenant }}', { credentials: 'same-origin' })
+    .then(function(r) { return r.ok ? r.text() : null; })
+    .then(function(html) {
+      if (html == null) return;
+      var ld = document.getElementById('live-devices');
+      if (ld) ld.innerHTML = html;
+    })
+    .catch(function() {});
 }
 
 function pollDevices() {
@@ -172,7 +226,34 @@ function pollDevices() {
       if (rc) rc.textContent = data.counts.registered;
       var cc = document.getElementById('creds-count');
       if (cc) cc.textContent = data.counts.creds;
-      data.devices.forEach(updateRowFromJson);
+
+      var tbody = document.querySelector('#live-devices tbody');
+      var jsonHasDevices = data.devices.length > 0;
+
+      // Empty<->non-empty transitions need to swap the whole fragment
+      // (either we need the table scaffolding or the empty-state div).
+      if (jsonHasDevices !== !!tbody) {
+        reloadLiveFragment();
+        return;
+      }
+      if (!tbody) return;  // empty fleet, empty DOM — nothing to do
+
+      var seen = {};
+      data.devices.forEach(function(d) {
+        seen[d.device_id] = true;
+        if (!updateRowFromJson(d)) {
+          insertNewDeviceRow(d.device_id, d.capabilities_hash, tbody);
+        }
+      });
+
+      // Remove rows for devices that disappeared from the JSON.
+      Array.prototype.forEach.call(
+        tbody.querySelectorAll('tr[id^="summary-"]'),
+        function(row) {
+          var id = row.id.substring('summary-'.length);
+          if (!seen[id]) removeDeviceRow(id);
+        },
+      );
     })
     .catch(function() { /* transient failures are silently retried on the next tick */ });
 }

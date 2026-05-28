@@ -10,56 +10,7 @@
     </tr>
   </thead>
   <tbody class="divide-y divide-gray-100">
-    {% for device in devices %}
-    {# Row + cell hooks for the in-place JSON poll: dashboard JS finds
-       `#summary-{device_id}` and updates the `.cell-status`,
-       `.cell-location`, `.cell-lastseen` cells in place. Initial
-       server-rendered values match the JS-rendered ones. #}
-    <tr id="summary-{{ device.device_id }}"
-        class="hover:bg-gray-50 cursor-pointer"
-        onclick="toggleDetail('{{ device.device_id }}')">
-      <td class="px-5 py-3">
-        <div class="flex items-center gap-2">
-          <svg id="chevron-{{ device.device_id }}" class="w-4 h-4 text-gray-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-          </svg>
-          <span class="text-sm font-medium text-gray-900">{{ device.device_id }}</span>
-        </div>
-      </td>
-      <td class="px-5 py-3">
-        <span class="text-sm text-gray-600">{{ device.device_type }}</span>
-      </td>
-      <td class="px-5 py-3 cell-status">
-        {% if device.status == "available" %}
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-          <span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 pulse-dot"></span>
-          online
-        </span>
-        {% else %}
-        <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-          <span class="w-1.5 h-1.5 bg-gray-400 rounded-full mr-1"></span>
-          {{ device.status }}
-        </span>
-        {% endif %}
-      </td>
-      <td class="px-5 py-3 text-sm text-gray-600 cell-location">{{ device.location or "—" }}</td>
-      <td class="px-5 py-3 text-sm text-gray-400 cell-lastseen">{{ device.last_seen or "—" }}</td>
-    </tr>
-    <tr id="detail-{{ device.device_id }}" class="hidden"
-        data-detail-url="/api/devices/{{ device.device_id }}/live-detail{% if tenant %}?tenant={{ tenant }}{% endif %}">
-      <td colspan="5" class="px-5 py-4 bg-gray-50">
-        {# Per-device detail is lazy-loaded on first expand by
-           toggleDetail() in dashboard.html. We deliberately do not use
-           ``hx-trigger=revealed``: htmx's revealed implementation polls
-           getBoundingClientRect, and display:none elements report a
-           zero-rect at (0,0) which falsely counts as "in viewport",
-           so revealed would fire for every hidden row on page load. #}
-        <div class="detail-content">
-          <p class="text-xs text-gray-400 italic">Loading details&hellip;</p>
-        </div>
-      </td>
-    </tr>
-    {% endfor %}
+    {% for device in devices %}{% include "devices/_device_row_pair.html" %}{% endfor %}
   </tbody>
 </table>
 
