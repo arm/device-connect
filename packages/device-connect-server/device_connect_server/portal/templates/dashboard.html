@@ -90,25 +90,33 @@ window._expandedDevices = window._expandedDevices || new Set();
 function loadDetailIfNeeded(row, deviceId) {
   var url = row.getAttribute('data-detail-url');
   var slot = row.querySelector('.detail-content');
-  if (!url || !slot) return;
-  // Gate on a DOM attribute attached to the slot itself, so that when
-  // the live-devices poll re-renders this row the "loaded" mark is
-  // naturally cleared along with the placeholder. A side-channel Set
-  // keyed by deviceId would persist across re-renders and leave the
-  // user staring at "Loading details..." on every subsequent expand.
-  if (slot.dataset.loaded === 'true' || slot.dataset.loading === 'true') return;
+  _dbg('loadDetailIfNeeded(' + deviceId + ')' +
+       ' url=' + JSON.stringify(url) +
+       ' slot=' + (slot ? 'yes' : 'no') +
+       ' loaded=' + (slot ? slot.dataset.loaded : '-') +
+       ' loading=' + (slot ? slot.dataset.loading : '-'));
+  if (!url || !slot) { _dbg('  skip: no url/slot'); return; }
+  if (slot.dataset.loaded === 'true' || slot.dataset.loading === 'true') {
+    _dbg('  skip: already loaded/loading');
+    return;
+  }
   slot.dataset.loading = 'true';
   fetch(url, {credentials: 'same-origin'})
     .then(function(r) {
+      _dbg('  ' + deviceId + ' fetch returned status=' + r.status);
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     })
     .then(function(html) {
+      _dbg('  ' + deviceId + ' fetch html.length=' + html.length +
+           ' preview=' + JSON.stringify(html.substring(0, 80)));
       slot.innerHTML = html;
       slot.dataset.loaded = 'true';
       delete slot.dataset.loading;
+      _dbg('  ' + deviceId + ' slot.children after assign=' + slot.children.length);
     })
     .catch(function(err) {
+      _dbg('  ' + deviceId + ' fetch ERROR ' + err);
       delete slot.dataset.loading;
       slot.innerHTML = '<p class="text-xs text-red-500">Failed to load details: ' + err + '</p>';
     });
@@ -184,10 +192,22 @@ function applyExpansionState(source) {
     var chevron = document.getElementById('chevron-' + deviceId);
     if (chevron) chevron.style.transform = 'rotate(90deg)';
     if (slot) {
+      // Drop in a bright marker so we can SEE the row painting from a
+      // screenshot, without depending on loadDetailIfNeeded landing.
+      // If this marker is visible in the page, the row is rendering
+      // correctly and the bug is in the fetch path. If not, the row
+      // is being suppressed by something we haven't found yet.
+      slot.innerHTML = '<p style="background:#fbbf24;color:#000;padding:8px;font-weight:bold;">' +
+                       'DEBUG MARKER: applyExpansionState re-applied at ' +
+                       new Date().toISOString() + '</p>';
+      // Force-clear flags so the subsequent loadDetailIfNeeded would
+      // run if we let it. We deliberately do NOT call it this round —
+      // we want the marker to persist for the screenshot. Re-enable
+      // once we know whether the marker actually paints.
       delete slot.dataset.loaded;
       delete slot.dataset.loading;
     }
-    loadDetailIfNeeded(row, deviceId);
+    // loadDetailIfNeeded(row, deviceId);  // disabled for visual debug
 
     // Read back state immediately and again after the next animation
     // frame. If the immediate read shows visible but the rAF read
