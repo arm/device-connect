@@ -242,21 +242,65 @@ function applyExpansionState(source) {
     // loadDetailIfNeeded(row, deviceId);  // still disabled
 
     var c1 = window.getComputedStyle(row);
+    var slotComputed = slot ? window.getComputedStyle(slot) : null;
+    var markerEl = slot ? slot.firstElementChild : null;
+    var markerComputed = markerEl ? window.getComputedStyle(markerEl) : null;
+    var rect = row.getBoundingClientRect();
+    var markerRect = markerEl ? markerEl.getBoundingClientRect() : null;
     _dbg('  ' + deviceId + ': APPLIED-NOW' +
-         ' display=' + JSON.stringify(c1.display) +
-         ' offsetHeight=' + row.offsetHeight +
-         ' slot.children=' + (slot ? slot.children.length : 'no-slot'));
+         ' row.display=' + c1.display +
+         ' row.visibility=' + c1.visibility +
+         ' row.opacity=' + c1.opacity +
+         ' row.offsetH=' + row.offsetHeight +
+         ' row.rect=' + Math.round(rect.top) + ',' + Math.round(rect.height));
+    _dbg('  ' + deviceId + ': APPLIED-NOW slot' +
+         ' display=' + (slotComputed ? slotComputed.display : 'none') +
+         ' visibility=' + (slotComputed ? slotComputed.visibility : 'none') +
+         ' opacity=' + (slotComputed ? slotComputed.opacity : 'none') +
+         ' children=' + (slot ? slot.children.length : 'no-slot'));
+    _dbg('  ' + deviceId + ': APPLIED-NOW marker' +
+         ' display=' + (markerComputed ? markerComputed.display : 'none') +
+         ' visibility=' + (markerComputed ? markerComputed.visibility : 'none') +
+         ' opacity=' + (markerComputed ? markerComputed.opacity : 'none') +
+         ' bg=' + (markerComputed ? markerComputed.backgroundColor : 'none') +
+         ' rect=' + (markerRect ? Math.round(markerRect.top) + ',' + Math.round(markerRect.height) + ',' + Math.round(markerRect.width) : 'none'));
+
+    // Watch the slot for ANY child mutation after we write to it. If
+    // something is reverting our marker, this fires with the post-
+    // revert state. Disconnect after the first fire (and after a
+    // 2s safety timeout) so we don't accumulate observers.
+    if (slot && !slot._dbgObserved) {
+      slot._dbgObserved = true;
+      var slotObs = new MutationObserver(function(records) {
+        records.forEach(function(r) {
+          _dbg('  SLOT-MUTATION ' + deviceId +
+               ' type=' + r.type +
+               ' added=' + r.addedNodes.length +
+               ' removed=' + r.removedNodes.length +
+               ' nowChildren=' + slot.children.length +
+               ' nowPreview=' + JSON.stringify(slot.innerHTML.substring(0, 60)));
+        });
+      });
+      slotObs.observe(slot, { childList: true, subtree: true, characterData: true });
+      setTimeout(function() { slotObs.disconnect(); slot._dbgObserved = false; }, 2000);
+    }
+
     var capturedDeviceId = deviceId;
     var capturedRow = row;
+    var capturedSlot = slot;
     requestAnimationFrame(function() {
       var live = document.getElementById('detail-' + capturedDeviceId);
       var c2 = live ? window.getComputedStyle(live) : null;
       var liveSlot = live ? live.querySelector('.detail-content') : null;
+      var liveMarker = liveSlot ? liveSlot.firstElementChild : null;
+      var liveMarkerRect = liveMarker ? liveMarker.getBoundingClientRect() : null;
       _dbg('  ' + capturedDeviceId + ': APPLIED-rAF' +
            ' same-row=' + (live === capturedRow) +
-           ' display=' + (c2 ? JSON.stringify(c2.display) : 'null') +
+           ' same-slot=' + (liveSlot === capturedSlot) +
+           ' display=' + (c2 ? c2.display : 'null') +
+           ' offsetH=' + (live ? live.offsetHeight : 'null') +
            ' slot.children=' + (liveSlot ? liveSlot.children.length : 'no-slot') +
-           ' slot.html.preview=' + (liveSlot ? JSON.stringify(liveSlot.innerHTML.substring(0, 60)) : 'no-slot'));
+           ' marker.rect=' + (liveMarkerRect ? Math.round(liveMarkerRect.top) + ',' + Math.round(liveMarkerRect.height) + ',' + Math.round(liveMarkerRect.width) : 'none'));
     });
   });
 }
