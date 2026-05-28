@@ -180,15 +180,37 @@ function applyExpansionState(source) {
     // for some reason), leaving the slot empty and the chevron not
     // rotated. Always: un-hide, rotate, force-reload detail.
     row.classList.remove('hidden');
-    row.style.display = '';
+    row.style.display = 'table-row';  // hard override — beat any CSS
     var chevron = document.getElementById('chevron-' + deviceId);
     if (chevron) chevron.style.transform = 'rotate(90deg)';
     if (slot) {
-      // Clear any stale loaded flag so loadDetailIfNeeded actually fetches.
       delete slot.dataset.loaded;
       delete slot.dataset.loading;
     }
     loadDetailIfNeeded(row, deviceId);
+
+    // Read back state immediately and again after the next animation
+    // frame. If the immediate read shows visible but the rAF read
+    // shows hidden, something between the two is reverting our work
+    // (htmx settle, browser style recalc on a stale stylesheet,
+    // anything else). If both reads show visible, the bug is
+    // elsewhere (e.g. slot content not loading).
+    var c1 = window.getComputedStyle(row);
+    _dbg('  ' + deviceId + ': APPLIED-NOW' +
+         ' className=' + JSON.stringify(row.className) +
+         ' style.display=' + JSON.stringify(row.style.display) +
+         ' computed.display=' + JSON.stringify(c1.display));
+    var capturedDeviceId = deviceId;
+    var capturedRow = row;
+    requestAnimationFrame(function() {
+      var live = document.getElementById('detail-' + capturedDeviceId);
+      var c2 = live ? window.getComputedStyle(live) : null;
+      _dbg('  ' + capturedDeviceId + ': APPLIED-rAF' +
+           ' same-row=' + (live === capturedRow) +
+           ' className=' + (live ? JSON.stringify(live.className) : 'null') +
+           ' style.display=' + (live ? JSON.stringify(live.style.display) : 'null') +
+           ' computed.display=' + (c2 ? JSON.stringify(c2.display) : 'null'));
+    });
   });
 }
 
