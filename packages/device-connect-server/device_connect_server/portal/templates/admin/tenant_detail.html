@@ -62,9 +62,6 @@
   </div>
 </div>
 
-{# Stable container for live SSE event-log drawers — see dashboard.html. #}
-<div id="event-drawers" class="mt-6 space-y-4"></div>
-
 <script>
 var _tenantParam = '?tenant={{ viewing_as }}';
 window._deviceCapsHash = window._deviceCapsHash || {};
@@ -135,6 +132,9 @@ function updateRowFromJson(d) {
     if (detailRow && !detailRow.classList.contains('hidden')) {
       var slot = detailRow.querySelector('.detail-content');
       if (slot && slot.dataset.loaded === 'true') {
+        // Close any open stream before refetching: events list may
+        // have changed and the post-refetch panel will be empty.
+        if (typeof closeEventLog === 'function') closeEventLog(d.device_id);
         delete slot.dataset.loaded;
         delete slot.dataset.loading;
         loadDetailIfNeeded(detailRow, d.device_id);
@@ -305,42 +305,21 @@ function submitInvoke(deviceId) {
 }
 
 // --- Event Log (SSE) ---
+// Panel lives in the device's detail row (devices/_live_detail.html).
+// See dashboard.html for the full rationale.
 window._eventSources = {};
 
 function openEventLog(deviceId, eventName) {
-  // Close any existing stream + drawer for this device.
   closeEventLog(deviceId);
 
-  // Build the drawer in the page-shell container, NOT inside the row's
-  // detail slot — the detail slot is wiped by the live-devices poll
-  // swap, which was killing both the panel visibility and the
-  // EventSource's onmessage closure binding. See dashboard.html.
-  var drawers = document.getElementById('event-drawers');
-  var drawer = document.createElement('div');
-  drawer.id = 'eventlog-' + deviceId;
-  drawer.className = 'bg-white rounded-xl border border-green-200 p-4 shadow-sm';
-  drawer.innerHTML =
-    '<div class="flex items-center justify-between mb-3">' +
-      '<h4 class="text-xs font-semibold text-green-700 uppercase tracking-wider flex items-center">' +
-        '<span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>' +
-        'Event log: ' +
-        '<code class="text-sm normal-case ml-1 text-green-800">' +
-          deviceId + ' / ' + eventName +
-        '</code>' +
-      '</h4>' +
-      '<button data-close-eventlog="' + deviceId + '"' +
-              ' class="text-gray-400 hover:text-gray-600 text-xs">&times; Close</button>' +
-    '</div>' +
-    '<div id="eventlog-entries-' + deviceId + '"' +
-        ' class="space-y-1 max-h-64 overflow-y-auto text-xs">' +
-      '<p class="text-gray-400 italic">Listening for events...</p>' +
-    '</div>';
-  drawers.appendChild(drawer);
-  drawer.querySelector('[data-close-eventlog]').addEventListener('click', function() {
-    closeEventLog(deviceId);
-  });
-
+  var panel = document.getElementById('eventlog-' + deviceId);
+  var nameEl = document.getElementById('eventlog-name-' + deviceId);
   var entries = document.getElementById('eventlog-entries-' + deviceId);
+  if (!panel || !nameEl || !entries) return;
+
+  nameEl.textContent = eventName;
+  entries.innerHTML = '<p class="text-gray-400 italic">Listening for events...</p>';
+  panel.classList.remove('hidden');
 
   var es = new EventSource('/api/devices/' + deviceId + '/events/' + eventName + '/stream' + _tenantParam);
   window._eventSources[deviceId] = es;
@@ -377,10 +356,8 @@ function openEventLog(deviceId, eventName) {
 function closeEventLog(deviceId) {
   var es = window._eventSources[deviceId];
   if (es) { es.close(); delete window._eventSources[deviceId]; }
-  var drawer = document.getElementById('eventlog-' + deviceId);
-  if (drawer && drawer.parentElement) {
-    drawer.parentElement.removeChild(drawer);
-  }
+  var panel = document.getElementById('eventlog-' + deviceId);
+  if (panel) panel.classList.add('hidden');
 }
 </script>
 {% endblock %}

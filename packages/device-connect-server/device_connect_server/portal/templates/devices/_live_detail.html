@@ -87,17 +87,30 @@
   <pre id="invoke-result-{{ device.device_id }}" class="hidden mt-3 bg-gray-900 text-gray-100 rounded-lg p-4 overflow-x-auto text-xs max-h-48 overflow-y-auto"></pre>
 </div>
 
-{# Event log panel intentionally NOT rendered here.
+{# Event log panel (shown by Live log button).
 
-   The panel and its accumulated entries are hoisted into a stable
-   #event-drawers container on the page shell (dashboard.html /
-   admin/tenant_detail.html), outside #live-devices. Rendering it
-   inside this slot meant every 10s poll swap wiped the panel, the
-   accumulated entries, and the live EventSource binding — which
-   could not be reliably restored from a swap-time DOM stash.
-
-   openEventLog() creates the drawer dynamically; the Live log button
-   above is the only entry point. #}
+   Lives inside the detail row so the log appears next to the device
+   it's streaming from — important UX at 100s of devices. Safe to
+   keep here because the JSON-poll architecture leaves the detail
+   slot untouched on every 10s tick; the only way the slot gets
+   re-fetched is a capability hash change, at which point the
+   client closes any open stream before the refetch (the events
+   list might have changed too). #}
+<div id="eventlog-{{ device.device_id }}" class="hidden mt-4 bg-white rounded-lg border border-green-200 p-4">
+  <div class="flex items-center justify-between mb-3">
+    <h4 class="text-xs font-semibold text-green-700 uppercase tracking-wider">
+      <span class="inline-flex items-center">
+        <span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>
+        Event log: <code id="eventlog-name-{{ device.device_id }}" class="text-sm normal-case ml-1"></code>
+      </span>
+    </h4>
+    <button onclick="event.stopPropagation(); closeEventLog('{{ device.device_id }}')"
+            class="text-gray-400 hover:text-gray-600 text-xs">&times; Close</button>
+  </div>
+  <div id="eventlog-entries-{{ device.device_id }}" class="space-y-1 max-h-64 overflow-y-auto text-xs">
+    <p class="text-gray-400 italic">Listening for events...</p>
+  </div>
+</div>
 
 {# Collapsible raw JSON #}
 <details class="mt-4">

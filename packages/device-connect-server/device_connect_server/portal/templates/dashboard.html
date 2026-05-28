@@ -58,12 +58,6 @@
   </div>
 </div>
 
-{# Stable container for live SSE event-log drawers. Lives OUTSIDE
-   #live-devices so the 10s poll swap can never touch it. Drawers
-   are created dynamically by openEventLog() and removed by
-   closeEventLog(). #}
-<div id="event-drawers" class="mt-6 space-y-4"></div>
-
 <script>
 // Tracks the last-seen capabilities hash per device so the JSON poll
 // only refreshes an expanded detail panel when the device's schema
@@ -145,13 +139,17 @@ function updateRowFromJson(d) {
   if (seenCell) seenCell.textContent = d.last_seen || '—';
 
   // Capabilities changed AND the detail is already expanded with
-  // content loaded — refresh the detail in place without collapsing.
+  // content loaded — refresh the detail in place without collapsing
+  // the row. The event log lives inside the slot, so close any open
+  // stream first: the events list itself may have changed, and the
+  // post-refetch slot HTML will have a fresh empty panel anyway.
   var prevHash = window._deviceCapsHash[d.device_id];
   if (prevHash && prevHash !== d.capabilities_hash) {
     var detailRow = document.getElementById('detail-' + d.device_id);
     if (detailRow && !detailRow.classList.contains('hidden')) {
       var slot = detailRow.querySelector('.detail-content');
       if (slot && slot.dataset.loaded === 'true') {
+        if (typeof closeEventLog === 'function') closeEventLog(d.device_id);
         delete slot.dataset.loaded;
         delete slot.dataset.loading;
         loadDetailIfNeeded(detailRow, d.device_id);
@@ -340,48 +338,32 @@ function submitInvoke(deviceId) {
 }
 
 // --- Event Log (SSE) ---
+//
+// The panel is rendered server-side inside each device's detail row
+// (devices/_live_detail.html). openEventLog finds the existing panel,
+// fills in the event name, un-hides it, and binds an EventSource to
+// the entries div. Safe to live in the detail slot because the
+// JSON-poll architecture only re-fetches that slot on capability
+// change, and updateRowFromJson() closes any open stream first.
 window._eventSources = {};
 
 function openEventLog(deviceId, eventName) {
-  // Close existing stream for this device (also removes any prior drawer).
+  // Close any existing stream for this device first.
   closeEventLog(deviceId);
 
-  // Build the drawer in the page-shell container, NOT inside the row's
-  // detail slot — the detail slot is wiped by the live-devices poll
-  // swap, which was killing both the panel visibility and the
-  // EventSource's onmessage closure binding.
-  var drawers = document.getElementById('event-drawers');
-  var drawer = document.createElement('div');
-  drawer.id = 'eventlog-' + deviceId;
-  drawer.className = 'bg-white rounded-xl border border-green-200 p-4 shadow-sm';
-  drawer.innerHTML =
-    '<div class="flex items-center justify-between mb-3">' +
-      '<h4 class="text-xs font-semibold text-green-700 uppercase tracking-wider flex items-center">' +
-        '<span class="w-2 h-2 bg-green-400 rounded-full pulse-dot mr-1.5"></span>' +
-        'Event log: ' +
-        '<code class="text-sm normal-case ml-1 text-green-800">' +
-          deviceId + ' / ' + eventName +
-        '</code>' +
-      '</h4>' +
-      '<button data-close-eventlog="' + deviceId + '"' +
-              ' class="text-gray-400 hover:text-gray-600 text-xs">&times; Close</button>' +
-    '</div>' +
-    '<div id="eventlog-entries-' + deviceId + '"' +
-        ' class="space-y-1 max-h-64 overflow-y-auto text-xs">' +
-      '<p class="text-gray-400 italic">Listening for events...</p>' +
-    '</div>';
-  drawers.appendChild(drawer);
-  drawer.querySelector('[data-close-eventlog]').addEventListener('click', function() {
-    closeEventLog(deviceId);
-  });
-
+  var panel = document.getElementById('eventlog-' + deviceId);
+  var nameEl = document.getElementById('eventlog-name-' + deviceId);
   var entries = document.getElementById('eventlog-entries-' + deviceId);
+  if (!panel || !nameEl || !entries) return;
+
+  nameEl.textContent = eventName;
+  entries.innerHTML = '<p class="text-gray-400 italic">Listening for events...</p>';
+  panel.classList.remove('hidden');
 
   var es = new EventSource('/api/devices/' + deviceId + '/events/' + eventName + '/stream');
   window._eventSources[deviceId] = es;
 
   es.onmessage = function(e) {
-    // Remove placeholder
     var placeholder = entries.querySelector('p.italic');
     if (placeholder) placeholder.remove();
 
@@ -407,11 +389,7 @@ function openEventLog(deviceId, eventName) {
     };
 
     entries.appendChild(row);
-
-    // Cap at 100 entries
     while (entries.children.length > 100) entries.removeChild(entries.firstChild);
-
-    // Auto-scroll
     entries.scrollTop = entries.scrollHeight;
   };
 
@@ -429,10 +407,8 @@ function closeEventLog(deviceId) {
     es.close();
     delete window._eventSources[deviceId];
   }
-  var drawer = document.getElementById('eventlog-' + deviceId);
-  if (drawer && drawer.parentElement) {
-    drawer.parentElement.removeChild(drawer);
-  }
+  var panel = document.getElementById('eventlog-' + deviceId);
+  if (panel) panel.classList.add('hidden');
 }
 </script>
 {% endblock %}
