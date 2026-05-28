@@ -151,9 +151,34 @@ curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
   {{ portal_url }}/api/agent/v1/devices
 ```
 
-To decommission: `DELETE /api/agent/v1/devices/{id}` or
-`dc-portalctl devices revoke-credentials …`. Decommission revokes the JWT —
-the device process will be disconnected on its next NATS reconnect.
+### Decommission, rotate, or revoke
+
+Three commands, three different intents — pick the verb that matches what you
+actually want to happen.
+
+| Command | Broker account | Local cred file | When to use |
+|---|---|---|---|
+| `dc-portalctl devices revoke-credentials <id>` | re-issued (rotates) | replaced with new contents | Same device should come back with a new identity (e.g. suspected leak). |
+| `dc-portalctl devices delete <id> --confirm` | removed | **left on disk** | Rarely the right choice on its own — the cred file lingers and shows up in the portal even though it's no longer valid. |
+| `dc-portalctl devices revoke <id> --confirm` | removed | **deleted** | Default for "this credential is gone." The device disconnects on next reconnect and the credential disappears from the portal counter and `/devices` list. |
+
+HTTP equivalents (all need `devices:provision` scope):
+
+```bash
+# Rotate
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/credentials:rotate
+
+# Delete (decommission only)
+curl -X DELETE -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}
+
+# Revoke (the full one)
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/revoke
+```
+
+Either decommission flow disconnects the device on its next NATS reconnect.
 
 ---
 
@@ -427,7 +452,9 @@ dc-portalctl devices events       <id>
 dc-portalctl devices provision    <name> --device-type X [--location Y] \
     --creds-output-file <path>
 dc-portalctl devices credentials  <id> --output-file <path>
-dc-portalctl devices revoke-credentials <id>
+dc-portalctl devices revoke-credentials <id>           # rotate: new creds, file replaced
+dc-portalctl devices delete             <id> --confirm # decommission account, leaves cred file
+dc-portalctl devices revoke             <id> --confirm # full revoke: account + cred file gone
 
 # Invocation
 dc-portalctl devices invoke          <id>          <fn> --params '{…}' --reason "…"
