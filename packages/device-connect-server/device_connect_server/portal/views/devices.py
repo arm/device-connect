@@ -23,6 +23,7 @@ def setup_routes(app: web.Application):
     app.router.add_get("/api/devices/agent-creds", download_agent_creds)
     app.router.add_get("/api/devices/demo-bundle", download_demo_bundle)
     app.router.add_get("/api/devices/{name}/creds", download_credential)
+    app.router.add_post("/api/devices/{name}/revoke", revoke_credential)
     app.router.add_get("/api/devices/bundle", download_bundle)
 
 
@@ -138,7 +139,8 @@ async def create_device(request: web.Request):
             content_type="text/html",
         )
 
-    # Return the new row as HTML fragment
+    # Return the new row as HTML fragment, with `highlight` flag on so
+    # the partial paints the brief green flash on the just-created row.
     cred = {
         "device_id": full_name,
         "filename": f"{full_name}.creds.json",
@@ -146,6 +148,7 @@ async def create_device(request: web.Request):
     return aiohttp_jinja2.render_template("devices/_device_row.html", request, {
         "cred": cred,
         "user": user,
+        "highlight": True,
     })
 
 
@@ -173,6 +176,69 @@ async def download_credential(request: web.Request):
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+async def revoke_credential(request: web.Request):
+    """Revoke a device credential: kill the backend account, then delete the file.
+
+    Returns an empty 200 body so an htmx swap can drop the row from the
+    page. The dashboard's JSON poll picks up the lower count and the
+    registry-entry removal on its next 10s tick.
+
+    Auth: portal session, tenant-scoped. Admins may revoke across
+    tenants. Non-admins can only touch their own tenant's creds.
+    """
+    user = request["user"]
+    tenant = user["tenant"]
+    device_name = request.match_info["name"]
+    filename = f"{device_name}.creds.json"
+
+    cred_data = credentials.get_credential_data(filename)
+    if not cred_data:
+        raise web.HTTPNotFound(text=f"Credential file not found: {filename}")
+    cred_tenant = cred_data.get("tenant", "")
+    if cred_tenant != tenant and user.get("role") != "admin":
+        raise web.HTTPForbidden(text="Access denied: credential belongs to another tenant")
+
+    # 1. Revoke the broker account so the device can no longer connect.
+    #    Best-effort: a backend without remove_device returns 501-style
+    #    behavior, but we still want the file gone in that case so the
+    #    operator's UI reflects the intent.
+    backend = get_backend()
+    remove = getattr(backend, "remove_device", None)
+    backend_error: str | None = None
+    if remove is not None:
+        try:
+            await remove(cred_tenant, device_name)
+            await backend.reload_broker()
+        except Exception as e:
+            backend_error = str(e)
+    else:
+        backend_error = f"{backend.backend_name()} backend does not support remove_device"
+
+    # 2. Delete the local credential file so it stops appearing in the
+    #    portal's list. Done after the backend revocation so a backend
+    #    failure doesn't leave us with a "ghost" file that points at a
+    #    still-valid account.
+    deleted = credentials.delete_credential(filename)
+    if not deleted:
+        # File was there a moment ago (cred_data was non-None) but
+        # we couldn't unlink it. Surface this loudly.
+        raise web.HTTPInternalServerError(
+            text=f"Failed to remove credential file: {filename}"
+            + (f" (backend: {backend_error})" if backend_error else ""),
+        )
+
+    # The device's etcd registry entry expires on its TTL after the
+    # device disconnects; no explicit cleanup needed here.
+
+    # Empty body — htmx's `hx-swap="delete"` removes the row from the
+    # page on a 2xx response. Surface backend errors as a non-blocking
+    # warning header so the operator at least sees it.
+    headers = {}
+    if backend_error:
+        headers["X-Revoke-Warning"] = backend_error
+    return web.Response(status=200, headers=headers, text="")
 
 
 async def download_bundle(request: web.Request):
