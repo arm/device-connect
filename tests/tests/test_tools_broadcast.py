@@ -330,6 +330,41 @@ async def test_subscribe_event_selector_live_stream(device_spawner, messaging_ur
 
 @pytest.mark.asyncio
 @pytest.mark.integration
+async def test_subscribe_top_level_event_selector_before_any_matching_device(
+    clear_registry, device_spawner, messaging_url
+):
+    """Top-level event subscriptions include devices that register later."""
+    from device_connect_agent_tools import connect, disconnect, subscribe
+
+    await asyncio.to_thread(connect, nats_url=messaging_url)
+    try:
+        with subscribe("event(object_detected)") as sub:
+            await asyncio.sleep(SETTLE_TIME)
+            _device, driver = await device_spawner.spawn_camera(
+                "itest-evempty-cam", location="lab-A",
+            )
+            await _wait_for_devices(messaging_url, {"itest-evempty-cam"})
+
+            await driver.trigger_event(
+                "object_detected",
+                {"label": "late-empty", "confidence": 0.93},
+            )
+            msgs = await asyncio.to_thread(
+                list, sub.iter(timeout=2.0, poll_interval=0.05),
+            )
+            labels = {
+                (m.get("params") or {}).get("label") or m.get("label")
+                for m in msgs
+            }
+            assert "late-empty" in labels, (
+                f"no late-joining object_detected events received: {msgs}"
+            )
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
 async def test_subscribe_top_level_event_selector_includes_late_joiners(
     device_spawner, messaging_url
 ):

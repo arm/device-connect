@@ -5,54 +5,21 @@
 """Slow NATS-only large-fleet selector/invoke integration tests."""
 
 import asyncio
-import os
-import time
 import uuid
 
 import pytest
 from device_connect_edge.drivers import DeviceDriver, rpc
 from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
+from fixtures.scale import (
+    assert_compact_function_rows,
+    assert_expanded_function_rows,
+    scale_fleet_size,
+    wait_for_devices,
+)
+
 SETTLE_TIME = 0.3
-DEFAULT_SCALE_FLEET_SIZE = 200
 DISCOVERY_TIMEOUT = 60.0
-
-
-def _scale_fleet_size(*, minimum: int = 1) -> int:
-    return max(minimum, int(os.getenv("DC_SCALE_FLEET_SIZE", str(DEFAULT_SCALE_FLEET_SIZE))))
-
-
-async def _wait_for_devices(messaging_url, expected_ids, timeout=DISCOVERY_TIMEOUT):
-    """Connect and poll until all expected ``device_ids`` are visible."""
-    from device_connect_agent_tools import connect
-    from device_connect_agent_tools.connection import get_connection
-
-    await asyncio.to_thread(connect, nats_url=messaging_url)
-    deadline = time.monotonic() + timeout
-    while True:
-        conn = get_connection()
-        devices = await asyncio.to_thread(conn.list_devices)
-        ids = {d.get("device_id") for d in devices}
-        if expected_ids.issubset(ids) or time.monotonic() > deadline:
-            return devices
-        await asyncio.sleep(0.25)
-
-
-def _assert_compact_function_rows(rows):
-    assert rows
-    for row in rows:
-        assert set(row) <= {"device_id", "name", "labels"}
-        assert "parameters" not in row
-        assert "description" not in row
-
-
-def _assert_expanded_function_rows(rows):
-    assert rows
-    for row in rows:
-        assert "device_id" in row
-        assert "name" in row
-        assert "parameters" in row
-        assert "description" in row
 
 
 class EmergencyStopDriver(DeviceDriver):
@@ -104,20 +71,21 @@ async def _spawn_estop_fleet(
     *,
     location: str,
     registration_timeout: float = 45.0,
+    max_concurrent: int = 32,
 ):
-    spawned = await asyncio.gather(*[
-        device_spawner._spawn(
-            EmergencyStopDriver(location),
-            f"{prefix}-{i:04d}",
-            wait_for_registration=False,
-        )
-        for i in range(count)
-    ])
-    await asyncio.gather(*[
-        device_spawner._wait_for_registration(device, registration_timeout)
-        for device, _ in spawned
-    ])
-    return spawned
+    semaphore = asyncio.Semaphore(max(1, max_concurrent))
+
+    async def spawn_one(index: int):
+        async with semaphore:
+            device, driver = await device_spawner._spawn(
+                EmergencyStopDriver(location),
+                f"{prefix}-{index:04d}",
+                wait_for_registration=False,
+            )
+            await device_spawner._wait_for_registration(device, registration_timeout)
+            return device, driver
+
+    return await asyncio.gather(*(spawn_one(i) for i in range(count)))
 
 
 @pytest.mark.asyncio
@@ -135,7 +103,7 @@ async def test_large_function_set_stays_compact_and_supports_drill_down(
     from device_connect_agent_tools import disconnect, discover
     from device_connect_agent_tools.tools import DC_FUNCTION_THRESHOLD
 
-    total_size = _scale_fleet_size(minimum=(DC_FUNCTION_THRESHOLD // 3) + 3)
+    total_size = scale_fleet_size(minimum=(DC_FUNCTION_THRESHOLD // 3) + 3)
     sensor_count = total_size - 2
     prefix = f"itest-lfi-fn-{uuid.uuid4().hex[:8]}"
     sensor_location = f"{prefix}-sensor-room"
@@ -156,7 +124,11 @@ async def test_large_function_set_stays_compact_and_supports_drill_down(
     ])
     await asyncio.sleep(SETTLE_TIME)
 
-    await _wait_for_devices(messaging_url, sensor_ids | camera_ids)
+    await wait_for_devices(
+        messaging_url,
+        sensor_ids | camera_ids,
+        timeout=DISCOVERY_TIMEOUT,
+    )
     try:
         broad = await asyncio.to_thread(
             discover, f"device(location:{sensor_location}).function(*)", 0, 50,
@@ -167,7 +139,7 @@ async def test_large_function_set_stays_compact_and_supports_drill_down(
         assert broad["returned"] == expected_returned
         if sensor_count * 3 > 50:
             assert broad["next_offset"] == 50
-        _assert_compact_function_rows(broad["results"])
+        assert_compact_function_rows(broad["results"])
         assert broad["label_histogram"]["direction"]["values"]["read"] == sensor_count
         assert broad["label_histogram"]["direction"]["values"]["write"] == sensor_count * 2
 
@@ -175,7 +147,7 @@ async def test_large_function_set_stays_compact_and_supports_drill_down(
             discover, f"device({prefix}-sensor-0000).function(set_location)",
         )
         assert sensor_drill_down["matched"] == 1
-        _assert_expanded_function_rows(sensor_drill_down["results"])
+        assert_expanded_function_rows(sensor_drill_down["results"])
         assert sensor_drill_down["results"][0]["name"] == "set_location"
         assert "location" in sensor_drill_down["results"][0]["parameters"]["properties"]
 
@@ -183,7 +155,7 @@ async def test_large_function_set_stays_compact_and_supports_drill_down(
             discover, f"device(location:{camera_location}).function(capture_image)",
         )
         assert camera_drill_down["matched"] == 2
-        _assert_expanded_function_rows(camera_drill_down["results"])
+        assert_expanded_function_rows(camera_drill_down["results"])
         assert {row["name"] for row in camera_drill_down["results"]} == {"capture_image"}
     finally:
         await asyncio.to_thread(disconnect)
@@ -203,7 +175,7 @@ async def test_invoke_many_estop_alias_targets_only_estop_functions_at_scale(
 
     from device_connect_agent_tools.tools import DC_FUNCTION_THRESHOLD
 
-    estop_count = _scale_fleet_size(minimum=DC_FUNCTION_THRESHOLD + 1)
+    estop_count = scale_fleet_size(minimum=DC_FUNCTION_THRESHOLD + 1)
     decoy_count = 3
     prefix = f"itest-lfi-estop-{uuid.uuid4().hex[:8]}"
     location = f"{prefix}-room"
@@ -228,7 +200,11 @@ async def test_invoke_many_estop_alias_targets_only_estop_functions_at_scale(
 
     from device_connect_agent_tools import disconnect, discover, invoke_many
 
-    await _wait_for_devices(messaging_url, estop_ids | decoy_ids)
+    await wait_for_devices(
+        messaging_url,
+        estop_ids | decoy_ids,
+        timeout=DISCOVERY_TIMEOUT,
+    )
     try:
         discovered = await asyncio.to_thread(discover, "function(estop)", 0, 50)
         assert discovered["scope"] == "function_only"
@@ -243,7 +219,7 @@ async def test_invoke_many_estop_alias_targets_only_estop_functions_at_scale(
             estop_count
         )
         assert not any(row["device_id"] in decoy_ids for row in discovered["results"])
-        _assert_compact_function_rows(discovered["results"])
+        assert_compact_function_rows(discovered["results"])
 
         result = await asyncio.to_thread(
             invoke_many,
@@ -277,7 +253,7 @@ async def test_invoke_ambiguity_stays_bounded_in_large_fleet(
     if messaging_backend != "nats":
         pytest.skip("large-fleet invoke test uses registry-backed NATS discovery")
 
-    fleet_size = _scale_fleet_size(minimum=11)
+    fleet_size = scale_fleet_size(minimum=11)
     prefix = f"itest-lfi-amb-{uuid.uuid4().hex[:8]}"
     location = f"{prefix}-room"
     expected_ids = {f"{prefix}-{i:04d}" for i in range(fleet_size)}
@@ -293,7 +269,11 @@ async def test_invoke_ambiguity_stays_bounded_in_large_fleet(
 
     from device_connect_agent_tools import disconnect, invoke
 
-    await _wait_for_devices(messaging_url, expected_ids)
+    await wait_for_devices(
+        messaging_url,
+        expected_ids,
+        timeout=DISCOVERY_TIMEOUT,
+    )
     try:
         result = await asyncio.to_thread(
             invoke,
@@ -323,7 +303,7 @@ async def test_invoke_many_partial_failure_accounting_at_scale(
     if messaging_backend != "nats":
         pytest.skip("large-fleet invoke_many test uses registry-backed NATS discovery")
 
-    fleet_size = _scale_fleet_size(minimum=12)
+    fleet_size = scale_fleet_size(minimum=12)
     failing_count = max(2, min(10, fleet_size // 10))
     healthy_count = fleet_size - failing_count
     prefix = f"itest-lfi-pf-{uuid.uuid4().hex[:8]}"
@@ -352,7 +332,11 @@ async def test_invoke_many_partial_failure_accounting_at_scale(
 
     from device_connect_agent_tools import disconnect, invoke_many
 
-    await _wait_for_devices(messaging_url, healthy_ids | failing_ids)
+    await wait_for_devices(
+        messaging_url,
+        healthy_ids | failing_ids,
+        timeout=DISCOVERY_TIMEOUT,
+    )
     try:
         result = await asyncio.to_thread(
             invoke_many,

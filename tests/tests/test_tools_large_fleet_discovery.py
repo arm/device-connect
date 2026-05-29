@@ -5,15 +5,19 @@
 """Slow NATS-only large-fleet discovery integration tests."""
 
 import asyncio
-import os
-import time
 import uuid
 
 import pytest
 
+from fixtures.scale import (
+    assert_device_row_compact,
+    assert_device_row_expanded,
+    scale_fleet_size,
+    wait_for_devices,
+)
+
 SETTLE_TIME = 0.3
 DISCOVERY_TIMEOUT = 60.0
-DEFAULT_SCALE_FLEET_SIZE = 200
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -24,52 +28,11 @@ pytestmark = [
 ]
 
 
-def _scale_fleet_size() -> int:
-    return max(1, int(os.getenv("DC_SCALE_FLEET_SIZE", str(DEFAULT_SCALE_FLEET_SIZE))))
-
-
-async def _wait_for_devices(messaging_url, expected_ids, timeout=DISCOVERY_TIMEOUT):
-    """Connect and poll until all expected device ids are visible."""
-    from device_connect_agent_tools import connect
-    from device_connect_agent_tools.connection import get_connection
-
-    await asyncio.to_thread(connect, nats_url=messaging_url)
-    deadline = time.monotonic() + timeout
-    while True:
-        conn = get_connection()
-        conn.invalidate_cache()
-        devices = await asyncio.to_thread(conn.list_devices)
-        ids = {d.get("device_id") for d in devices}
-        if expected_ids <= ids or time.monotonic() > deadline:
-            return devices
-        await asyncio.sleep(0.25)
-
-
-def _assert_device_row_compact(row):
-    assert "function_count" in row
-    assert "function_names" in row
-    assert "functions" not in row
-    assert "events" not in row
-    assert "capabilities" not in row
-
-
-def _assert_device_row_expanded(row, expected_function):
-    assert "function_count" in row
-    assert "function_names" in row
-    assert "functions" in row
-    function = next(
-        (fn for fn in row["functions"] if fn["name"] == expected_function),
-        None,
-    )
-    assert function is not None
-    assert "parameters" in function
-
-
 async def test_large_device_set_summary_does_not_expand_full_schemas(
     messaging_backend, messaging_url, clear_registry, device_spawner
 ):
     """A large matched device selector stays compact but keeps counts and labels."""
-    fleet_size = max(_scale_fleet_size(), 6)
+    fleet_size = scale_fleet_size(minimum=6)
     prefix = f"itest-lfs-{uuid.uuid4().hex[:8]}"
     location = f"{prefix}-room"
     expected_ids = {f"{prefix}-{i:04d}" for i in range(fleet_size)}
@@ -84,7 +47,12 @@ async def test_large_device_set_summary_does_not_expand_full_schemas(
 
     from device_connect_agent_tools import disconnect, discover
 
-    await _wait_for_devices(messaging_url, expected_ids)
+    await wait_for_devices(
+        messaging_url,
+        expected_ids,
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
     try:
         page_size = min(25, fleet_size - 1)
         result = await asyncio.to_thread(
@@ -98,7 +66,7 @@ async def test_large_device_set_summary_does_not_expand_full_schemas(
         assert result["label_histogram"]["location"]["values"][location] == fleet_size
         assert result["label_histogram"]["category"]["values"]["sensor"] == fleet_size
         for row in result["results"]:
-            _assert_device_row_compact(row)
+            assert_device_row_compact(row)
     finally:
         await asyncio.to_thread(disconnect)
 
@@ -107,7 +75,7 @@ async def test_small_matched_subset_expands_inside_large_global_fleet(
     messaging_backend, messaging_url, clear_registry, device_spawner
 ):
     """Expansion is based on matched selector cardinality, not global size."""
-    total_size = max(_scale_fleet_size(), 8)
+    total_size = scale_fleet_size(minimum=8)
     sensor_count = total_size - 2
     prefix = f"itest-lfm-{uuid.uuid4().hex[:8]}"
     large_location = f"{prefix}-bulk"
@@ -127,7 +95,12 @@ async def test_small_matched_subset_expands_inside_large_global_fleet(
 
     from device_connect_agent_tools import disconnect, discover
 
-    await _wait_for_devices(messaging_url, sensor_ids | camera_ids)
+    await wait_for_devices(
+        messaging_url,
+        sensor_ids | camera_ids,
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
     try:
         large = await asyncio.to_thread(
             discover, f"device(location:{large_location})", 0, 10
@@ -139,13 +112,13 @@ async def test_small_matched_subset_expands_inside_large_global_fleet(
         assert large["matched"] == sensor_count
         assert large["returned"] == 10
         for row in large["results"]:
-            _assert_device_row_compact(row)
+            assert_device_row_compact(row)
 
         assert small["matched"] == 2
         assert small["returned"] == 2
         assert {row["device_id"] for row in small["results"]} == camera_ids
         for row in small["results"]:
-            _assert_device_row_expanded(row, "capture_image")
+            assert_device_row_expanded(row, "capture_image")
     finally:
         await asyncio.to_thread(disconnect)
 
@@ -158,7 +131,7 @@ async def test_long_tail_label_histogram_reports_more(
     from device_connect_agent_tools import tools as tools_mod
 
     top_n = max(1, min(tools_mod.LABEL_VALUES_TOP_N, 200))
-    fleet_size = max(_scale_fleet_size(), top_n + 1)
+    fleet_size = scale_fleet_size(minimum=top_n + 1)
     prefix = f"itest-lfl-{uuid.uuid4().hex[:8]}"
     expected_ids = {f"{prefix}-{i:04d}" for i in range(fleet_size)}
 
@@ -170,7 +143,12 @@ async def test_long_tail_label_histogram_reports_more(
     )
     await asyncio.sleep(SETTLE_TIME)
 
-    await _wait_for_devices(messaging_url, expected_ids)
+    await wait_for_devices(
+        messaging_url,
+        expected_ids,
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
     try:
         result = await asyncio.to_thread(discover_labels)
         location = result["device_keys"]["location"]
@@ -190,7 +168,7 @@ async def test_per_key_label_drill_down_bypasses_truncation(
     from device_connect_agent_tools import tools as tools_mod
 
     top_n = max(1, min(tools_mod.LABEL_VALUES_TOP_N, 200))
-    fleet_size = max(_scale_fleet_size(), top_n + 1)
+    fleet_size = scale_fleet_size(minimum=top_n + 1)
     prefix = f"itest-lfp-{uuid.uuid4().hex[:8]}"
     expected_ids = {f"{prefix}-{i:04d}" for i in range(fleet_size)}
     expected_locations = {f"{prefix}-zone-{i:04d}" for i in range(fleet_size)}
@@ -203,7 +181,12 @@ async def test_per_key_label_drill_down_bypasses_truncation(
     )
     await asyncio.sleep(SETTLE_TIME)
 
-    await _wait_for_devices(messaging_url, expected_ids)
+    await wait_for_devices(
+        messaging_url,
+        expected_ids,
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
     try:
         seen = {}
         offset = 0
@@ -232,7 +215,7 @@ async def test_device_label_or_and_filtering_over_large_fleet(
     messaging_backend, messaging_url, clear_registry, device_spawner
 ):
     """Device label OR within a key and AND across keys scale together."""
-    total_size = max(_scale_fleet_size(), 12)
+    total_size = scale_fleet_size(minimum=12)
     sensor_count = total_size - 5
     prefix = f"itest-lfo-{uuid.uuid4().hex[:8]}"
     loc_a = f"{prefix}-alpha"
@@ -257,7 +240,12 @@ async def test_device_label_or_and_filtering_over_large_fleet(
 
     from device_connect_agent_tools import disconnect, discover
 
-    await _wait_for_devices(messaging_url, sensor_ids | camera_ids | robot_ids)
+    await wait_for_devices(
+        messaging_url,
+        sensor_ids | camera_ids | robot_ids,
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
     try:
         category_or = await asyncio.to_thread(
             discover,
@@ -293,7 +281,7 @@ async def test_function_label_selection_over_heterogeneous_fleet(
     messaging_backend, messaging_url, clear_registry, device_spawner
 ):
     """Function-label selectors return the expected heterogeneous matrix."""
-    total_size = max(_scale_fleet_size(), 12)
+    total_size = scale_fleet_size(minimum=12)
     sensor_count = total_size - 4
     prefix = f"itest-lff-{uuid.uuid4().hex[:8]}"
     location = f"{prefix}-floor"
@@ -315,7 +303,12 @@ async def test_function_label_selection_over_heterogeneous_fleet(
 
     from device_connect_agent_tools import disconnect, discover
 
-    await _wait_for_devices(messaging_url, sensor_ids | camera_ids | robot_ids)
+    await wait_for_devices(
+        messaging_url,
+        sensor_ids | camera_ids | robot_ids,
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
     try:
         read_selector = f"device(location:{location}).function(direction:read)"
         read_functions = await asyncio.to_thread(

@@ -11,11 +11,12 @@ end-to-end.
 """
 
 import asyncio
-import os
 import time
 import uuid
 
 import pytest
+
+from fixtures.scale import scale_fleet_size, spawn_scale_sensor_fleet
 
 SETTLE_TIME = 0.3
 DISCOVERY_TIMEOUT = 5.0
@@ -79,19 +80,17 @@ async def test_scalable_fleet_discovery_and_invoke_many(
     if messaging_backend != "nats":
         pytest.skip("scale test uses registry-backed NATS discovery")
 
-    fleet_size = int(os.getenv("DC_SCALE_FLEET_SIZE", "200"))
+    fleet_size = scale_fleet_size()
     prefix = f"itest-scale-{uuid.uuid4().hex[:8]}"
     location = f"{prefix}-room"
-    expected_ids = {f"{prefix}-{i:04d}" for i in range(fleet_size)}
-
-    await device_spawner.spawn_sensor_fleet(
-        prefix,
-        fleet_size,
+    expected_ids = await spawn_scale_sensor_fleet(
+        device_spawner,
+        prefix=prefix,
+        fleet_size=fleet_size,
+        settle_time=SETTLE_TIME,
         location=location,
-        initial_temp=21.0,
         registration_timeout=30.0,
     )
-    await asyncio.sleep(SETTLE_TIME)
 
     from device_connect_agent_tools import (
         disconnect,

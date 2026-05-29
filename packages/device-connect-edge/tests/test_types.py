@@ -4,6 +4,8 @@
 
 """Unit tests for device_connect_edge.types module."""
 
+import pytest
+
 from device_connect_edge.types import (
     DeviceState,
     DeviceIdentity,
@@ -76,6 +78,11 @@ class TestEventDef:
             parameters={"type": "object", "properties": {"zone": {"type": "string"}}},
         )
         assert event.name == "motion_detected"
+
+    @pytest.mark.parametrize("name", ["motion.detected", "*", ">", "", "bad name"])
+    def test_rejects_names_that_are_not_subject_tokens(self, name):
+        with pytest.raises(ValueError, match="Invalid event name"):
+            EventDef(name=name)
 
 
 class TestLabels:

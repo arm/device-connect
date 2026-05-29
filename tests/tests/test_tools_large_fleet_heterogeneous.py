@@ -5,15 +5,19 @@
 """Large-fleet integration tests for heterogeneous discovery and operations."""
 
 import asyncio
-import os
-import time
 import uuid
 
 import pytest
 
+from fixtures.scale import (
+    assert_compact_function_rows,
+    assert_expanded_function_rows,
+    scale_fleet_size,
+    wait_for_devices,
+)
+
 SETTLE_TIME = 0.3
 DISCOVERY_TIMEOUT = 60.0
-DEFAULT_SCALE_FLEET_SIZE = 200
 CAMERA_COUNT = 3
 ROBOT_COUNT = 2
 
@@ -26,50 +30,12 @@ pytestmark = [
 ]
 
 
-def _scale_fleet_size() -> int:
-    return max(12, int(os.getenv("DC_SCALE_FLEET_SIZE", str(DEFAULT_SCALE_FLEET_SIZE))))
-
-
 def _reply_timeout(fleet_size: int) -> float:
     return max(15.0, min(60.0, fleet_size * 0.2))
 
 
-async def _wait_for_devices(messaging_url, expected_ids, timeout=DISCOVERY_TIMEOUT):
-    """Connect and poll until all expected device ids are visible."""
-    from device_connect_agent_tools import connect
-    from device_connect_agent_tools.connection import get_connection
-
-    await asyncio.to_thread(connect, nats_url=messaging_url)
-    deadline = time.monotonic() + timeout
-    while True:
-        conn = get_connection()
-        conn.invalidate_cache()
-        devices = await asyncio.to_thread(conn.list_devices)
-        ids = {d.get("device_id") for d in devices}
-        if expected_ids <= ids or time.monotonic() > deadline:
-            return devices
-        await asyncio.sleep(0.25)
-
-
-def _assert_compact_function_rows(rows):
-    assert rows
-    for row in rows:
-        assert set(row) <= {"device_id", "name", "labels"}
-        assert "parameters" not in row
-        assert "description" not in row
-
-
-def _assert_expanded_function_rows(rows):
-    assert rows
-    for row in rows:
-        assert "device_id" in row
-        assert "name" in row
-        assert "parameters" in row
-        assert "description" in row
-
-
 async def _spawn_heterogeneous_fleet(device_spawner, prefix: str):
-    fleet_size = _scale_fleet_size()
+    fleet_size = scale_fleet_size(minimum=12)
     sensor_count = fleet_size - CAMERA_COUNT - ROBOT_COUNT
     location = f"{prefix}-mixed-room"
 
@@ -119,7 +85,12 @@ async def test_heterogeneous_discovery_outputs_expected_matrix(
 
     prefix = f"itest-lfh-disc-{uuid.uuid4().hex[:8]}"
     fleet = await _spawn_heterogeneous_fleet(device_spawner, prefix)
-    await _wait_for_devices(messaging_url, fleet["all_ids"])
+    await wait_for_devices(
+        messaging_url,
+        fleet["all_ids"],
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
 
     try:
         labels = await asyncio.to_thread(discover_labels)
@@ -204,9 +175,9 @@ async def test_heterogeneous_discovery_outputs_expected_matrix(
                 assert result["label_histogram"][key]["values"][value] == count
 
             if result["matched"] <= DC_FUNCTION_THRESHOLD:
-                _assert_expanded_function_rows(result["results"])
+                assert_expanded_function_rows(result["results"])
             else:
-                _assert_compact_function_rows(result["results"])
+                assert_compact_function_rows(result["results"])
 
         broad = await asyncio.to_thread(
             discover,
@@ -219,7 +190,7 @@ async def test_heterogeneous_discovery_outputs_expected_matrix(
         )
         assert broad["returned"] == 40
         assert broad["next_offset"] == 40
-        _assert_compact_function_rows(broad["results"])
+        assert_compact_function_rows(broad["results"])
         assert broad["label_histogram"]["direction"]["values"]["read"] == (
             fleet["sensor_count"] + fleet["robot_count"]
         )
@@ -250,7 +221,12 @@ async def test_heterogeneous_invoke_many_targets_only_matching_functions(
 
     prefix = f"itest-lfh-inv-{uuid.uuid4().hex[:8]}"
     fleet = await _spawn_heterogeneous_fleet(device_spawner, prefix)
-    await _wait_for_devices(messaging_url, fleet["all_ids"])
+    await wait_for_devices(
+        messaging_url,
+        fleet["all_ids"],
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
 
     try:
         result = await asyncio.to_thread(
@@ -283,7 +259,12 @@ async def test_heterogeneous_broadcast_replies_only_from_matching_functions(
 
     prefix = f"itest-lfh-bc-{uuid.uuid4().hex[:8]}"
     fleet = await _spawn_heterogeneous_fleet(device_spawner, prefix)
-    await _wait_for_devices(messaging_url, fleet["all_ids"])
+    await wait_for_devices(
+        messaging_url,
+        fleet["all_ids"],
+        timeout=DISCOVERY_TIMEOUT,
+        invalidate_cache=True,
+    )
 
     try:
         result = await asyncio.to_thread(
