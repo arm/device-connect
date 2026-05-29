@@ -531,12 +531,15 @@ class TestRefreshHeartbeat:
         mock_etcd3gw.client.return_value = mock_client
 
         mock_lease = MagicMock()
+        mock_lease.refresh.return_value = 30  # etcd returns the new TTL
         reg = DeviceRegistry(host="localhost", port=2379)
         reg.leases["default/camera-001"] = mock_lease
 
         reg.refresh("default", "camera-001")
 
         mock_lease.refresh.assert_called_once()
+        # Live lease stays tracked
+        assert reg.leases["default/camera-001"] is mock_lease
 
     @patch("device_connect_server.registry.service.registry.etcd3gw")
     def test_refresh_noop_for_unknown_device(self, mock_etcd3gw):
@@ -553,7 +556,9 @@ class TestRefreshHeartbeat:
         mock_etcd3gw.client.return_value = mock_client
 
         lease_a = MagicMock()
+        lease_a.refresh.return_value = 30
         lease_b = MagicMock()
+        lease_b.refresh.return_value = 30
         reg = DeviceRegistry(host="localhost", port=2379)
         reg.leases["tenant-a/cam-001"] = lease_a
         reg.leases["tenant-b/cam-001"] = lease_b
@@ -635,6 +640,67 @@ class TestRefreshLeaseRecovery:
             expected_key, json.dumps(existing), lease=new_lease,
         )
         # The lease should now be tracked
+        assert reg.leases["default/cam-001"] is new_lease
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_refresh_evicts_expired_lease_no_raise(self, mock_etcd3gw):
+        """A stale handle whose lease TTL-expired (refresh() -> -1, no raise)
+        is evicted, so has_lease() reports False and the data is gone."""
+        mock_client = _make_mock_etcd_client()
+        # etcd dropped the lease and its attached key when the TTL expired.
+        mock_client.get.return_value = []
+        mock_etcd3gw.client.return_value = mock_client
+
+        stale_lease = MagicMock()
+        stale_lease.refresh.return_value = -1  # etcd: lease already expired
+        reg = DeviceRegistry(host="localhost", port=2379)
+        reg.leases["default/cam-001"] = stale_lease
+
+        reg.refresh("default", "cam-001", ttl=15)
+
+        stale_lease.refresh.assert_called_once()
+        # Stale handle dropped -> server will fire requestRegistration.
+        assert "default/cam-001" not in reg.leases
+        assert reg.has_lease("default", "cam-001") is False
+        # No phantom lease re-created when etcd has no data.
+        mock_client.lease.assert_not_called()
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_refresh_evicts_stale_lease_on_error(self, mock_etcd3gw):
+        """A transport/server error from refresh() also evicts the handle."""
+        mock_client = _make_mock_etcd_client()
+        mock_client.get.return_value = []
+        mock_etcd3gw.client.return_value = mock_client
+
+        stale_lease = MagicMock()
+        stale_lease.refresh.side_effect = RuntimeError("lease not found")
+        reg = DeviceRegistry(host="localhost", port=2379)
+        reg.leases["default/cam-001"] = stale_lease
+
+        reg.refresh("default", "cam-001", ttl=15)
+
+        assert "default/cam-001" not in reg.leases
+        assert reg.has_lease("default", "cam-001") is False
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_refresh_recovers_when_data_survives_lease(self, mock_etcd3gw):
+        """If the stale lease died but the device doc is still in etcd,
+        refresh() re-issues a lease and re-stores the data."""
+        mock_client = _make_mock_etcd_client()
+        existing = {"device_id": "cam-001", "status": {"online": True}}
+        mock_client.get.return_value = [json.dumps(existing)]
+        new_lease = MagicMock()
+        mock_client.lease.return_value = new_lease
+        mock_etcd3gw.client.return_value = mock_client
+
+        stale_lease = MagicMock()
+        stale_lease.refresh.return_value = -1
+        reg = DeviceRegistry(host="localhost", port=2379)
+        reg.leases["default/cam-001"] = stale_lease
+
+        reg.refresh("default", "cam-001", ttl=15)
+
+        mock_client.lease.assert_called_once_with(ttl=15)
         assert reg.leases["default/cam-001"] is new_lease
 
 

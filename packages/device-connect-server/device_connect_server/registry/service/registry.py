@@ -148,8 +148,24 @@ class DeviceRegistry:
         lk = self._lease_key(tenant, device_id)
         lease = self.leases.get(lk)
         if lease:
-            lease.refresh()
-            return
+            # Lease can die in etcd (TTL-expired) while we still hold the stale
+            # handle. etcd3gw's refresh() returns the new TTL, or -1 when the
+            # lease has already expired -- it does NOT raise in that case. A
+            # transport/server error does raise. Either way, drop the stale
+            # handle and fall through to recovery so has_lease() reports False
+            # and the server can ask the device to re-register.
+            try:
+                new_ttl = lease.refresh()
+            except Exception:
+                new_ttl = -1
+            if new_ttl >= 0:
+                return
+            self.leases.pop(lk, None)
+            _logger.info(
+                "stale lease for %s/%s dropped; attempting recovery",
+                tenant,
+                device_id,
+            )
 
         # No lease handle — attempt recovery
         if ttl is None:
