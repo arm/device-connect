@@ -17,9 +17,54 @@ import asyncio
 import time
 
 import pytest
+from device_connect_edge.drivers import DeviceDriver, emit
+from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
 SETTLE_TIME = 0.4
 DISCOVERY_TIMEOUT = 5.0
+
+
+class _BaseMotionEventDriver(DeviceDriver):
+    """Minimal driver used to verify event-label subscription routing."""
+
+    device_type = "test_motion_source"
+    labels = {"category": "sensor"}
+
+    def __init__(self, location: str = "lab-A"):
+        super().__init__()
+        self._location = location
+
+    @property
+    def identity(self) -> DeviceIdentity:
+        return DeviceIdentity(
+            device_type="motion_source",
+            manufacturer="TestCorp",
+            model="EventLabelTest",
+            firmware_version="1.0.0-test",
+            arch="x86_64",
+        )
+
+    @property
+    def status(self) -> DeviceStatus:
+        return DeviceStatus(location=self._location)
+
+    async def connect(self) -> None:
+        pass
+
+    async def disconnect(self) -> None:
+        pass
+
+
+class _CriticalMotionEventDriver(_BaseMotionEventDriver):
+    @emit(labels={"safety": "critical"})
+    async def motion_detected(self, label: str):
+        pass
+
+
+class _RoutineMotionEventDriver(_BaseMotionEventDriver):
+    @emit(labels={"safety": "routine"})
+    async def motion_detected(self, label: str):
+        pass
 
 
 async def _wait_for_devices(messaging_url, expected_ids):
@@ -401,6 +446,43 @@ async def test_subscribe_top_level_event_selector_includes_late_joiners(
                 for m in msgs
             }
             assert {"first", "late"} <= labels, msgs
+    finally:
+        await asyncio.to_thread(disconnect)
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_subscribe_top_level_event_selector_keeps_event_label_filter(
+    device_spawner, messaging_url
+):
+    """Top-level event subscriptions with labels resolve exact matching subjects."""
+    _critical_device, critical_driver = await device_spawner._spawn(
+        _CriticalMotionEventDriver(), "itest-evlabel-critical",
+    )
+    _routine_device, routine_driver = await device_spawner._spawn(
+        _RoutineMotionEventDriver(), "itest-evlabel-routine",
+    )
+    await asyncio.sleep(SETTLE_TIME)
+
+    from device_connect_agent_tools import disconnect, subscribe
+
+    await _wait_for_devices(
+        messaging_url, {"itest-evlabel-critical", "itest-evlabel-routine"}
+    )
+    try:
+        with subscribe("event(motion_detected, safety:critical)") as sub:
+            await asyncio.sleep(SETTLE_TIME)
+            await routine_driver.motion_detected(label="routine")
+            await critical_driver.motion_detected(label="critical")
+            msgs = await asyncio.to_thread(
+                list, sub.iter(timeout=2.0, poll_interval=0.05),
+            )
+            labels = {
+                (m.get("params") or {}).get("label") or m.get("label")
+                for m in msgs
+            }
+            assert "critical" in labels, msgs
+            assert "routine" not in labels, msgs
     finally:
         await asyncio.to_thread(disconnect)
 

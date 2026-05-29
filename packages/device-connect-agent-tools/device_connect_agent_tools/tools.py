@@ -1178,6 +1178,33 @@ def _event_subjects_for_selector(
 
     if sel.scope == Scope.EVENT_ONLY:
         conn = get_connection()
+        if sel.event is not None and sel.event.key_filters:
+            rows: list[dict] = []
+            offset = 0
+            while True:
+                page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
+                if "error" in page:
+                    return None, page, None
+                rows.extend(page["results"])
+                if page["next_offset"] is None:
+                    break
+                offset = page["next_offset"]
+
+            subjects: list[str] = []
+            seen: set[str] = set()
+            for row in rows:
+                device_id = row.get("device_id") or ""
+                event_name = row.get("name") or ""
+                if not device_id or not event_name:
+                    continue
+                if not _is_safe_event_name(event_name):
+                    return None, _empty_envelope(error=_invalid_event_name(event_name)), None
+                subj = f"device-connect.{conn.zone}.{device_id}.event.{event_name}"
+                if subj not in seen:
+                    seen.add(subj)
+                    subjects.append(subj)
+            return subjects, None, None
+
         if event_name_match and not _is_glob_name_match(event_name_match):
             return [
                 f"device-connect.{conn.zone}.*.event.>",
