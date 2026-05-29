@@ -256,6 +256,7 @@ class DeviceStatus(BaseModel):
     task_stack: list[str] | None = None
     battery: int | None = None  # Battery level percentage (0-100)
     online: bool | None = None  # Whether device is online
+    local_zenoh: dict | None = None  # LAN Zenoh route advertisement for agent shortcuts
 
 
 class RegisterParams(BaseModel):

@@ -573,6 +573,54 @@ class TestBuildRegistrationParams:
 
         assert "attestation" not in params
 
+    def test_local_zenoh_advertised_for_zenoh_unicast(self):
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="sensor-zenoh",
+            messaging_urls=["tcp/192.168.0.10:7447"],
+        )
+        rt._messaging_backend = "zenoh"
+
+        params = rt._build_registration_params()
+
+        assert params["status"]["local_zenoh"]["routes"] == ["tcp/192.168.0.10:7447"]
+
+    def test_local_zenoh_env_override_for_container_router(self, monkeypatch):
+        """Connect URL can be in-container; advertise host-published router port."""
+        monkeypatch.setenv(
+            "DEVICE_CONNECT_LOCAL_ZENOH_ROUTES",
+            "tcp/host.docker.internal:7447",
+        )
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="sensor-container",
+            messaging_urls=["tcp/zenoh:7447"],
+        )
+        rt._messaging_backend = "zenoh"
+
+        params = rt._build_registration_params()
+
+        assert params["status"]["local_zenoh"]["routes"] == [
+            "tcp/host.docker.internal:7447"
+        ]
+
+    def test_manual_status_local_zenoh_not_overwritten(self, monkeypatch):
+        monkeypatch.setenv("DEVICE_CONNECT_LOCAL_ZENOH_ROUTES", "tcp/ignored:7447")
+        driver = StubDriver()
+        rt = DeviceRuntime(
+            driver=driver,
+            device_id="sensor-manual",
+            messaging_urls=["tcp/zenoh:7447"],
+            status={"local_zenoh": {"routes": ["tcp/localhost:7447"]}},
+        )
+        rt._messaging_backend = "zenoh"
+
+        params = rt._build_registration_params()
+
+        assert params["status"]["local_zenoh"]["routes"] == ["tcp/localhost:7447"]
+
 
 # ── _cmd_subscription requestRegistration ───────────────────────
 

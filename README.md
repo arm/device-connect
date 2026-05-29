@@ -118,6 +118,9 @@ cd packages/device-connect-server && python3 -m pytest tests/ -v
 # Agent-tools unit tests (no Docker)
 cd packages/device-connect-agent-tools && python3 -m pytest tests/test_connection_unit.py tests/test_tools_unit.py -v
 
+# Portal local-route + small-fleet shortcut integration tests
+cd tests && pytest tests/test_tools_portal.py -v -m portal --timeout=120
+
 # Integration tests (requires Docker)
 cd tests && docker compose -f docker-compose-itest.yml up -d
 DEVICE_CONNECT_ALLOW_INSECURE=true python3 -m pytest tests/ -v -m "not llm"

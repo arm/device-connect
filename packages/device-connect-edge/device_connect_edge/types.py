@@ -216,6 +216,27 @@ class DeviceIdentity(BaseModel):
     )
 
 
+class LocalZenohRoute(BaseModel):
+    """LAN-reachable Zenoh locator advertised for agent local shortcuts.
+
+    Devices publish this in ``DeviceStatus.local_zenoh`` so agents with portal
+    credentials can discover a same-site Zenoh router or device endpoint via the
+    registry, then connect directly while retaining portal identity as fallback.
+    """
+    routes: List[str] = Field(
+        default_factory=list,
+        description="Zenoh locators (e.g. tcp/192.168.1.10:7447, tls/host:7447)",
+    )
+    tls: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional TLS file paths (ca_file, cert_file, key_file) for mTLS",
+    )
+    expires_at: Optional[str] = Field(
+        default=None,
+        description="ISO-8601 expiry after which agents should not use this route",
+    )
+
+
 class DeviceStatus(BaseModel):
     """Runtime device status - dynamic state that changes over time.
 
@@ -230,7 +251,8 @@ class DeviceStatus(BaseModel):
             busy_score=0.7,
             battery=85,
             online=True,
-            error_state=None
+            error_state=None,
+            local_zenoh=LocalZenohRoute(routes=["tcp/192.168.1.10:7447"]),
         )
     """
     ts: datetime = Field(
@@ -264,6 +286,10 @@ class DeviceStatus(BaseModel):
     error_state: Optional[str] = Field(
         default=None,
         description="Error description if device is in error state"
+    )
+    local_zenoh: Optional[LocalZenohRoute] = Field(
+        default=None,
+        description="Optional LAN Zenoh route for agents to use as a local fast path",
     )
 
 

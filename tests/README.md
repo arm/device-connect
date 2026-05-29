@@ -19,7 +19,9 @@ tests/
 │   ├── test_sensor_device.py          # Sensor device patterns
 │   ├── test_multi_device_scenario.py  # Multi-device scenarios
 │   ├── test_d2d_discovery.py          # D2D device discovery
-│   ├── test_tools_discover.py         # Agent tools: device discovery
+│   ├── test_tools_discover.py         # Agent tools: selector discovery
+│   ├── test_tools_hierarchical.py     # Agent tools: hierarchical + small-fleet shortcut
+│   ├── test_tools_portal.py           # Agent tools: portal local-route bundles
 │   ├── test_tools_invoke.py           # Agent tools: function invocation
 │   ├── test_strands_agent.py          # Strands agent integration (LLM)
 │   ├── test_messaging_conformance.py  # Messaging backend conformance
@@ -75,6 +77,9 @@ pip install -r requirements.txt
 
 ```bash
 docker compose -f docker-compose-itest.yml up -d
+# After device-connect-edge registration schema changes, rebuild the registry image:
+# docker compose -f docker-compose-itest.yml build device-registry-service
+# docker compose -f docker-compose-itest.yml up -d device-registry-service --force-recreate
 ```
 
 ### Tier 1: Core integration tests (no LLM)
@@ -119,6 +124,7 @@ docker compose -f docker-compose-itest.yml down -v --remove-orphans
 | `llm`         | Requires a real LLM API key                          |
 | `slow`        | Takes > 30 seconds                                   |
 | `conformance` | Messaging backend conformance tests                  |
+| `portal`      | Portal credential bundle tests (own messaging env)   |
 
 ## CI/CD
 

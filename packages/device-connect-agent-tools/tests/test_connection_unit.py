@@ -10,7 +10,7 @@ using mocks (no real NATS required).
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from device_connect_agent_tools import connection as conn_mod
 
@@ -90,6 +90,129 @@ class TestDeviceConnectConnectionConfig:
         assert conn._tls_config == {"ca_file": "/from-env/ca.pem"}
         conn.close()
 
+    @patch.object(conn_mod, "_auto_discover_tls", return_value=None)
+    @patch.object(conn_mod, "_auto_discover_credentials", return_value=None)
+    def test_portal_bundle_prefers_local_zenoh_route(self, _ad_creds, _ad_tls, tmp_path):
+        bundle = tmp_path / "agent.creds.json"
+        bundle.write_text(json.dumps({
+            "tenant": "lab-a",
+            "device_id": "robot-001",
+            "nats": {
+                "urls": ["nats://portal.example:4222"],
+                "jwt": "portal-jwt",
+                "nkey_seed": "portal-seed",
+            },
+            "local": {
+                "routes": ["tls/192.168.1.42:7447"],
+                "tls": {
+                    "ca_file": "/tmp/ca.pem",
+                    "cert_file": "/tmp/client.pem",
+                    "key_file": "/tmp/client-key.pem",
+                },
+            },
+        }))
+
+        with patch.dict(os.environ, {"DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE": str(bundle)}, clear=True):
+            conn = conn_mod.DeviceConnection()
+
+        assert conn.zone == "lab-a"
+        assert conn._backend == "zenoh"
+        assert conn._servers == ["tls/192.168.1.42:7447"]
+        assert conn._tls_config == {
+            "ca_file": "/tmp/ca.pem",
+            "cert_file": "/tmp/client.pem",
+            "key_file": "/tmp/client-key.pem",
+        }
+        assert conn._d2d_mode is True
+        assert conn._fallback_config["servers"] == ["nats://portal.example:4222"]
+        conn.close()
+
+    @patch.object(conn_mod, "_auto_discover_tls", return_value=None)
+    @patch.object(conn_mod, "_auto_discover_credentials", return_value=None)
+    def test_portal_bundle_can_disable_local_preference(self, _ad_creds, _ad_tls, tmp_path):
+        bundle = tmp_path / "agent.creds.json"
+        bundle.write_text(json.dumps({
+            "tenant": "lab-a",
+            "nats": {"urls": ["nats://portal.example:4222"], "jwt": "j", "nkey_seed": "s"},
+            "local_routes": ["tls/192.168.1.42:7447"],
+            "zenoh": {"tls": {"ca_file": "/tmp/ca.pem"}},
+        }))
+
+        env = {
+            "DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE": str(bundle),
+            "DEVICE_CONNECT_PREFER_LOCAL": "false",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            conn = conn_mod.DeviceConnection()
+
+        assert conn._backend == "nats"
+        assert conn._servers == ["nats://portal.example:4222"]
+        assert conn._credentials == {"jwt": "j", "nkey_seed": "s"}
+        assert conn._d2d_mode is False
+        conn.close()
+
+    @patch.object(conn_mod, "_auto_discover_tls", return_value=None)
+    @patch.object(conn_mod, "_auto_discover_credentials", return_value=None)
+    def test_local_route_connect_failure_falls_back_to_portal(self, _ad_creds, _ad_tls, tmp_path):
+        bundle = tmp_path / "agent.creds.json"
+        bundle.write_text(json.dumps({
+            "tenant": "lab-a",
+            "nats": {
+                "urls": ["nats://portal.example:4222"],
+                "jwt": "portal-jwt",
+                "nkey_seed": "portal-seed",
+            },
+            "local": {
+                "routes": ["tls/192.168.1.42:7447"],
+                "tls": {"ca_file": "/tmp/local-ca.pem"},
+            },
+        }))
+
+        local_client = MagicMock()
+        local_client.connect = AsyncMock(side_effect=RuntimeError("local route unavailable"))
+        local_client.close = AsyncMock()
+        portal_client = MagicMock()
+        portal_client.connect = AsyncMock()
+        portal_client.close = AsyncMock()
+        registry = MagicMock()
+
+        env = {"DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE": str(bundle)}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("device_connect_agent_tools.connection.create_client",
+                   side_effect=[local_client, portal_client]) as create_client, \
+             patch("device_connect_agent_tools.connection._SDKRegistryClient",
+                   return_value=registry) as registry_client:
+            conn = conn_mod.DeviceConnection()
+            conn.connect()
+
+        assert [call.kwargs["backend"] for call in create_client.call_args_list] == ["zenoh", "nats"]
+        local_client.connect.assert_awaited_once_with(
+            servers=["tls/192.168.1.42:7447"],
+            credentials=None,
+            tls_config={"ca_file": "/tmp/local-ca.pem"},
+        )
+        local_client.close.assert_awaited_once()
+        portal_client.connect.assert_awaited_once_with(
+            servers=["nats://portal.example:4222"],
+            credentials={"jwt": "portal-jwt", "nkey_seed": "portal-seed"},
+            tls_config=None,
+        )
+        registry_client.assert_called_once_with(
+            portal_client,
+            tenant="lab-a",
+            timeout=30.0,
+            cache_ttl=30.0,
+        )
+        assert conn._backend == "nats"
+        assert conn._servers == ["nats://portal.example:4222"]
+        assert conn._credentials == {"jwt": "portal-jwt", "nkey_seed": "portal-seed"}
+        assert conn._tls_config is None
+        assert conn._using_local_route is False
+        assert conn._d2d_mode is False
+        assert conn._fallback_config is None
+        assert conn._provider is registry
+        conn.close()
+
 
 # ── Auto-discovery helpers ───────────────────────────────────────
 
@@ -132,6 +255,85 @@ class TestAutoDiscovery:
         with patch.object(conn_mod, "_find_device_connect_root", return_value=tmp_path):
             result = conn_mod._auto_discover_tls()
             assert result == {"ca_file": str(certs_dir / "ca-cert.pem")}
+
+    def test_normalize_local_zenoh_dict(self):
+        cfg = conn_mod.normalize_local_zenoh_dict(
+            {"routes": ["tcp/10.0.0.5:7447"], "tls": {"ca_file": "/tmp/ca.pem"}},
+        )
+        assert cfg == {
+            "backend": "zenoh",
+            "servers": ["tcp/10.0.0.5:7447"],
+            "credentials": None,
+            "tls": {"ca_file": "/tmp/ca.pem"},
+        }
+
+    def test_collect_local_route_candidates_from_devices(self):
+        devices = [
+            {
+                "device_id": "a",
+                "status": {"local_zenoh": {"routes": ["tcp/10.0.0.1:7447"]}},
+            },
+            {
+                "device_id": "b",
+                "status": {"local_zenoh": {"routes": ["tcp/10.0.0.1:7447"]}},
+            },
+            {
+                "device_id": "c",
+                "status": {"local_zenoh": {"routes": ["tcp/10.0.0.2:7447"]}},
+            },
+        ]
+        candidates = conn_mod.collect_local_route_candidates_from_devices(devices)
+        assert len(candidates) == 2
+        assert {tuple(c["servers"]) for c in candidates} == {
+            ("tcp/10.0.0.1:7447",),
+            ("tcp/10.0.0.2:7447",),
+        }
+
+    @patch.object(conn_mod, "_auto_discover_tls", return_value=None)
+    @patch.object(conn_mod, "_auto_discover_credentials", return_value=None)
+    def test_portal_bundle_registry_local_discovery_flag(self, _ad_creds, _ad_tls, tmp_path):
+        bundle = tmp_path / "agent.creds.json"
+        bundle.write_text(json.dumps({
+            "tenant": "lab-a",
+            "nats": {"urls": ["nats://portal.example:4222"], "jwt": "j", "nkey_seed": "s"},
+        }))
+
+        with patch.dict(os.environ, {"DEVICE_CONNECT_PORTAL_CREDENTIALS_FILE": str(bundle)}, clear=True):
+            conn = conn_mod.DeviceConnection()
+
+        assert conn._registry_local_discovery is True
+        assert conn._stored_portal_cfg["servers"] == ["nats://portal.example:4222"]
+        assert conn._fallback_config["servers"] == ["nats://portal.example:4222"]
+        conn.close()
+
+    def test_load_portal_credentials_file_splits_portal_and_local_routes(self, tmp_path):
+        bundle = tmp_path / "agent.creds.json"
+        bundle.write_text(json.dumps({
+            "tenant": "lab-a",
+            "nats": {"urls": ["nats://portal.example:4222"], "jwt": "j", "nkey_seed": "s"},
+            "local_routes": ["tls/192.168.1.42:7447"],
+            "zenoh": {"tls": {"ca_file": "/tmp/ca.pem"}},
+        }))
+
+        result = conn_mod.load_portal_credentials_file(bundle)
+
+        assert result == {
+            "tenant": "lab-a",
+            "portal": {
+                "backend": "nats",
+                "servers": ["nats://portal.example:4222"],
+                "credentials": {"jwt": "j", "nkey_seed": "s"},
+                "tls": None,
+            },
+            "local": {
+                "backend": "zenoh",
+                "servers": ["tls/192.168.1.42:7447"],
+                "credentials": None,
+                "tls": {"ca_file": "/tmp/ca.pem"},
+                "device_id": None,
+                "expires_at": None,
+            },
+        }
 
 
 # ── Singleton connect/disconnect ──────────────────────────────────

@@ -90,6 +90,20 @@ from device_connect_edge.telemetry.tracer import SpanKind
 logger = logging.getLogger(__name__)
 
 
+def _env_local_zenoh_advertise_routes() -> Optional[List[str]]:
+    """Zenoh locators advertised in ``status.local_zenoh`` (may differ from connect URLs).
+
+    Set ``DEVICE_CONNECT_LOCAL_ZENOH_ROUTES`` to comma-separated locators reachable
+    from agents on the host/LAN (e.g. a published router port) while the device
+    connects internally via ``ZENOH_CONNECT`` / ``messaging_urls``.
+    """
+    raw = os.getenv("DEVICE_CONNECT_LOCAL_ZENOH_ROUTES", "").strip()
+    if not raw:
+        return None
+    routes = [part.strip() for part in raw.split(",") if part.strip()]
+    return routes or None
+
+
 
 def build_rpc_response(id_: str, result: Any) -> bytes:
     return json.dumps({"jsonrpc": "2.0", "id": id_, "result": result}).encode()
@@ -940,18 +954,62 @@ class DeviceRuntime:
                 self._logger.error("Event queue still full after drop; event lost: %s", event)
 
 
+    def _status_has_local_zenoh(self) -> bool:
+        """True when the operator set ``local_zenoh`` in device status (manual advertisement)."""
+        local = self.status.get("local_zenoh")
+        if not isinstance(local, dict):
+            return False
+        routes = local.get("routes") or local.get("urls") or []
+        return bool(routes)
+
+    def _build_local_zenoh_advertisement(self) -> Optional[dict]:
+        """Return auto-generated ``local_zenoh`` status material for registry/agent shortcuts."""
+        if self._status_has_local_zenoh():
+            return None
+        if os.getenv("DEVICE_CONNECT_ADVERTISE_LOCAL_ZENOH", "true").strip().lower() in (
+            "0", "false", "no", "off",
+        ):
+            return None
+        if self._messaging_backend != "zenoh":
+            return None
+        routes = _env_local_zenoh_advertise_routes() or list(self.messaging_urls or [])
+        if not routes:
+            return None
+        tls_payload = None
+        if self.messaging_tls:
+            tls_payload = {
+                k: self.messaging_tls[k]
+                for k in ("ca_file", "cert_file", "key_file")
+                if self.messaging_tls.get(k)
+            }
+        return {
+            "routes": routes,
+            "tls": tls_payload or None,
+        }
+
+    def _advertised_local_zenoh(self) -> Optional[dict]:
+        """``local_zenoh`` for registration/heartbeats: manual status wins over auto-build."""
+        if self._status_has_local_zenoh():
+            local = self.status.get("local_zenoh")
+            return local if isinstance(local, dict) else None
+        return self._build_local_zenoh_advertisement()
+
     def _build_registration_params(self) -> dict:
         """Build the registration payload shared by _register and requestRegistration."""
         caps = self._driver.capabilities if self._driver else self.capabilities
+        status = {
+            **self.status,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        local_zenoh = self._advertised_local_zenoh()
+        if local_zenoh:
+            status["local_zenoh"] = local_zenoh
         params = {
             "device_id": self.device_id,
             "device_ttl": self.ttl,
             "capabilities": caps.model_dump(),
             "identity": self.identity,
-            "status": {
-                **self.status,
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            },
+            "status": status,
         }
         if hasattr(self, '_attestation_token') and self._attestation_token:
             params["attestation"] = self._attestation_token
@@ -1003,6 +1061,9 @@ class DeviceRuntime:
         while True:
             # Build heartbeat payload
             beat = {"device_id": self.device_id, "ts": time.time()}
+            local_zenoh = self._advertised_local_zenoh()
+            if local_zenoh:
+                beat["local_zenoh"] = local_zenoh
             self._logger.debug(f"Heartbeat loop iteration, beat={beat}")
             if self._heartbeat_provider:
                 try:

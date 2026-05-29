@@ -10,7 +10,7 @@ Uses device_connect_edge (device-connect-edge) — validates the edge SDK packag
 import asyncio
 import logging
 import uuid
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from device_connect_edge import DeviceRuntime
 
@@ -43,11 +43,12 @@ class DeviceFactory:
         device_id: str,
         wait_for_registration: bool = True,
         registration_timeout: float = 10.0,
+        status: Optional[dict] = None,
     ) -> Tuple[DeviceRuntime, object]:
         """Common spawn logic for any driver."""
         driver._device_id = device_id
 
-        device = DeviceRuntime(
+        runtime_kwargs = dict(
             driver=driver,
             device_id=device_id,
             messaging_urls=[self.messaging_url],
@@ -55,6 +56,10 @@ class DeviceFactory:
             ttl=self.default_ttl,
             allow_insecure=True,
         )
+        if status is not None:
+            runtime_kwargs["status"] = status
+
+        device = DeviceRuntime(**runtime_kwargs)
 
         task = asyncio.create_task(device.run())
         self._devices.append(device)
