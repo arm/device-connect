@@ -154,6 +154,20 @@ Provisioning creates a NATS credential bound to this tenant and registers the
 device id with the portal. Device ids are tenant-prefixed: a request for
 `cam-001` lands as `{{ tenant }}-cam-001`.
 
+> ⚠️ **Self-registered devices break the prefix assumption.** The portal
+> **always** rewrites `<id>` → `{{ tenant }}-<id>` on the invoke path unless
+> `<id>` already starts with `{{ tenant }}-`. Devices created via
+> `dc-portalctl devices provision` follow this convention. Devices that
+> self-register from a browser / firmware / external SDK can use any id
+> they want — `dc-portalctl devices list` returns whatever they chose,
+> verbatim. When the registered id does not start with `{{ tenant }}-`,
+> the rewrite produces a NATS subject no one is subscribed to, and every
+> `dc-portalctl devices invoke` (and the equivalent HTTP endpoint) returns
+> `code -1` with `elapsed_ms ≈ 0` — instantly, not after a timeout. Detect
+> by scanning `devices list`: any id that does not start with `{{ tenant }}-`
+> is unreachable via the portal HTTP path until the server fix lands (see
+> §7 and the troubleshooting table).
+
 ```bash
 dc-portalctl devices provision cam-001 \
     --device-type camera \
@@ -483,9 +497,19 @@ error)** → HTTP **200** with a success envelope; the embedded `response`
 field carries a JSON-RPC error dict
 `{"error": {"code": int, "message": str}}`. Codes from the NATS backend:
 
-- `-1` "Device {id} is not responding" — no responders (target offline,
-  wrong tenant prefix, or unknown id; the invoke path doesn't do a
-  registry existence check, so bad ids surface here, not as 404)
+- `-1` "Device {id} is not responding" — no responders on the published
+  subject. The invoke path doesn't do a registry existence check, so bad
+  ids surface here, not as 404. **Use `elapsed_ms` to disambiguate:**
+  - `elapsed_ms ≈ 0` → no responder at all. Cross-check `devices list`:
+    - `Last Seen` fresh (<1 min) → **ID-rewrite mismatch.** The device is
+      online but subscribed under an id that doesn't match the portal's
+      rewrite (`<id>` → `{{ tenant }}-<id>`). Common with self-registered
+      browser / firmware devices — see §3 callout. No HTTP-only workaround
+      today; use `device-connect-agent-tools` from Python or report to
+      the operator.
+    - `Last Seen` stale → device is actually offline.
+  - `elapsed_ms ≈ timeout` → subject had a subscriber that never replied;
+    device crashed mid-RPC or its handler hung.
 - `-2` "Request timed out after {timeout}s" — target busy / unresponsive
 - `-3` "<other>" — generic transport error caught inside `nats_rpc.invoke`
 
@@ -614,7 +638,8 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | Device retries `nkeys library required for JWT auth` forever | `nkeys` import is failing — almost always because its `pynacl` transitive can't load (prebuilt wheel incompatible with the host libc) | Reinstall `device-connect-edge` (`nkeys` is already a required dep — `pip install --upgrade --force-reinstall device-connect-edge`); on glibc < 2.34 rebuild `pynacl` from source per Section 5. `pip install nkeys` only helps if deps were originally installed with `--no-deps` |
 | Device process crashes at startup with `AttributeError: '...' object has no attribute '_routines_collected'` (or `_internal_handlers_collected`) | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
 | `invoke_remote` raises `PublishError` / `RequestTimeoutError` | Target offline, wrong tenant-prefixed id, or unresponsive. Backend-dependent: NATS → `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh → typically `RequestTimeoutError` after retries | `dc-portalctl devices list` to confirm id; check target's logs |
-| `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1 / -2` | Device-level failure: -1 = "Device not responding" (no responders), -2 = "Request timed out". Target offline / unresponsive | Verify target with `dc-portalctl devices list`; inspect target logs |
+| `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1` with `elapsed_ms ≈ 0`, and `devices list` shows the target online with a fresh `Last Seen` | **ID-rewrite mismatch.** Portal rewrote `<id>` → `{{ tenant }}-<id>` but the device subscribed on the raw id (self-registered, no `provision` step — typical of browser / firmware clients). The rewritten subject has no responder. | No HTTP-only workaround today. Either (a) use `device-connect-agent-tools` from Python — it publishes to the raw NATS subject from `discover()` and bypasses the rewrite — or (b) report to the operator so they can upgrade the portal (see §3 callout and the server-fix note in §7). |
+| `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1 / -2` (other shapes) | Device-level failure: -1 = "Device not responding" (no responders), -2 = "Request timed out". Target offline / unresponsive | Verify target with `dc-portalctl devices list`; inspect target logs |
 | `dc-portalctl devices invoke` returns HTTP 502 `invoke_failed` | Infrastructure-level failure — broker unreachable, registry creds missing/wrong, or backend connect failed (`device_connect_server.portal.services.nats_rpc.connect()` raises before the try/except in `invoke()`) | Check portal logs for the underlying exception; verify NATS broker reachable and `registry.creds.json` is present and valid |
 | `revoke-credentials` or `delete` returns HTTP 501 `not_implemented` | Backend hasn't wired `rotate_device_credentials` / `remove_device` (none do as of 0.2.3) | See Section 3 lifecycle limitations callout; stop the device process directly and/or edit the backing store |
 | Writes to a serial / GPIO / socket fail mid-session with EIO | Resource transiently disconnected; driver holds stale handle | Use the reopen-on-failure pattern (Section 4) |
