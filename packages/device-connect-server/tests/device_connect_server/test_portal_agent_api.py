@@ -691,3 +691,111 @@ class TestInvokeFallbackDuplicates:
             tried = body["result"]["tried"]
             assert [t["ok"] for t in tried] == [False, False, True]
             assert len(tried) == 3
+
+
+# ── invoke addresses devices by their registry-canonical id ───────
+
+
+class TestInvokeUsesCanonicalRegistryId:
+    """invoke / fallback / event-stream must route to the device id that is
+    actually registered on the bus, not to a synthetic tenant-prefixed twin.
+
+    The pre-fix code unconditionally rewrote `<id>` → `<tenant>-<id>`. For
+    devices provisioned via `dc-portalctl devices provision` this matched
+    what the device subscribed on. For devices that self-register from a
+    browser / firmware / shared-credential SDK — common in the
+    flashlight-auditorium BrowserPhone shape — the rewrite published to a
+    NATS subject no one was listening on, and the call returned HTTP 200
+    with `code: -1, elapsed_ms ~0, message: "Device <full> is not responding"`.
+    That looked indistinguishable from "device offline" and burned an entire
+    debugging session in the wild before being root-caused.
+    """
+
+    async def test_self_registered_id_passes_through_unchanged(self, invoke_client):
+        """Browser-style id `audience.r2.s1.k2uus2n3` must hit the bus
+        exactly as registered, with no tenant prefix bolted on."""
+        seen: dict = {}
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                seen["full_name"] = full_name
+                return {"ok": True}
+
+        registry_doc = {"device_id": "audience.r2.s1.k2uus2n3"}
+        with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=registry_doc,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/audience.r2.s1.k2uus2n3/invoke",
+                headers=H(),
+                json={"function": "set_screen_color", "params": {"r": 255, "g": 0, "b": 0}},
+            )
+            assert r.status == 200
+        # Pre-fix: this would have been "acme-audience.r2.s1.k2uus2n3" (no responder).
+        assert seen["full_name"] == "audience.r2.s1.k2uus2n3"
+
+    async def test_short_name_aliases_to_provisioned_full_id(self, invoke_client):
+        """Caller types the provisioning short name; resolver finds the
+        provisioned `acme-cam-001` in the registry on the second probe and
+        routes there. Legacy CLI workflows keep working."""
+        seen: dict = {}
+
+        def _get_device(tenant, did):
+            return {"device_id": "acme-cam-001"} if did == "acme-cam-001" else None
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                seen["full_name"] = full_name
+                return {"ok": True}
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            side_effect=_get_device,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/cam-001/invoke",
+                headers=H(),
+                json={"function": "ping"},
+            )
+            assert r.status == 200
+        assert seen["full_name"] == "acme-cam-001"
+
+    async def test_unknown_id_falls_back_to_provision_style_prefix(self, invoke_client):
+        """Registry miss preserves the legacy behavior: publish to
+        `<tenant>-<id>` so a just-provisioned-but-not-yet-registered device
+        still works, and a truly absent device surfaces as "not responding"
+        the same way it does today."""
+        seen: dict = {}
+
+        class _FakeBackend:
+            def backend_name(self): return "test"
+
+            async def rpc_invoke(self, tenant, full_name, fn, params, timeout):
+                seen["full_name"] = full_name
+                return {"error": {"code": -1, "message": "no responder"}}
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.registry_client.get_device",
+            return_value=None,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=_FakeBackend(),
+        ):
+            r = await invoke_client.post(
+                "/api/agent/v1/devices/cam-001/invoke",
+                headers=H(),
+                json={"function": "ping"},
+            )
+            assert r.status == 200
+        assert seen["full_name"] == "acme-cam-001"

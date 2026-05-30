@@ -137,11 +137,64 @@ def _resolve_tenant(request: web.Request) -> tuple[str, web.Response | None]:
 
 
 def _full_device_name(tenant: str, device_id: str) -> str:
-    """Match the existing devices.create_device convention: tenant-prefixed, unless
-    the caller already passed a fully-qualified id."""
+    """Synthesize the default device name a `provision` call would have minted.
+
+    Used ONLY for provisioning (the device doesn't exist yet, so the
+    registry can't tell us the canonical id). For every other endpoint
+    that addresses an *existing* device on the bus, use
+    `_resolve_device_id` so self-registered devices (browser / firmware
+    / shared-credential SDK) — whose ids land in the registry without
+    the tenant prefix — are addressed by their registered id, not by a
+    synthetic prefixed twin that no subscriber listens on.
+    """
     if device_id.startswith(f"{tenant}-"):
         return device_id
     return f"{tenant}-{device_id}"
+
+
+def _resolve_device_id(tenant: str, raw_id: str) -> str:
+    """Resolve a caller-supplied device id to its canonical registry form.
+
+    The portal's invoke / event-stream / credentials / revoke / delete
+    endpoints all publish on `device-connect.{tenant}.{device_id}.cmd`
+    (or `.event.{name}`). The subscriber on that subject is the running
+    device process — and the subject it listens on is determined by the
+    id under which the device *registered itself*, not by any naming
+    convention the portal assumes.
+
+    Self-registered devices (BrowserPhone, firmware, anything using
+    `DeviceRuntime` with a shared-credential SDK) commonly register with
+    an id that does NOT start with `{tenant}-`. The old code unconditionally
+    rewrote `<id>` → `{tenant}-<id>`, sent the RPC to a subject with no
+    responder, and surfaced an instant "Device is not responding" while
+    `devices list` showed the device online — a debugging dead-end.
+
+    Lookup order:
+      1. The id exactly as the caller passed it (catches self-registered
+         devices AND callers who already typed the full provisioned form).
+      2. The provision-style prefix `{tenant}-<id>` (preserves the legacy
+         short-name alias for devices provisioned via `dc-portalctl`).
+
+    On a hit, the registry's canonical `device_id` field wins — that is
+    what the device subscribes on.
+
+    Falls back to `_full_device_name(tenant, raw_id)` when the registry
+    is unreachable or the id is genuinely unknown, so a caller invoking a
+    just-provisioned-but-not-yet-online device still gets today's
+    "no responders" path rather than a hard 404.
+    """
+    try:
+        doc = registry_client.get_device(tenant, raw_id)
+        if not doc and not raw_id.startswith(f"{tenant}-"):
+            doc = registry_client.get_device(tenant, _full_device_name(tenant, raw_id))
+        if doc:
+            canonical = doc.get("device_id")
+            if canonical:
+                return canonical
+    except Exception:
+        logger.debug("resolve_device_id: registry lookup failed for %s/%s",
+                     tenant, raw_id, exc_info=True)
+    return _full_device_name(tenant, raw_id)
 
 
 def _audit(request: web.Request, action: str, **fields):
@@ -509,7 +562,7 @@ async def device_credentials_get(request: web.Request) -> web.Response:
         return err
 
     device_id = request.match_info["device_id"]
-    full_name = _full_device_name(tenant, device_id)
+    full_name = _resolve_device_id(tenant, device_id)
     filename = f"{full_name}.creds.json"
     cred = credentials_svc.get_credential_data(filename)
 
@@ -556,7 +609,7 @@ async def device_credentials_rotate(request: web.Request) -> web.Response:
         return err
 
     device_id = request.match_info["device_id"]
-    full_name = _full_device_name(tenant, device_id)
+    full_name = _resolve_device_id(tenant, device_id)
 
     backend = get_backend()
     rotate = getattr(backend, "rotate_device_credentials", None)
@@ -597,7 +650,7 @@ async def device_revoke(request: web.Request) -> web.Response:
         return err
 
     device_id = request.match_info["device_id"]
-    full_name = _full_device_name(tenant, device_id)
+    full_name = _resolve_device_id(tenant, device_id)
     filename = f"{full_name}.creds.json"
 
     # Same shape as the portal handler: a backend without remove_device
@@ -676,7 +729,7 @@ async def device_delete(request: web.Request) -> web.Response:
         return err
 
     device_id = request.match_info["device_id"]
-    full_name = _full_device_name(tenant, device_id)
+    full_name = _resolve_device_id(tenant, device_id)
 
     backend = get_backend()
     remove = getattr(backend, "remove_device", None)
@@ -717,7 +770,7 @@ async def device_invoke(request: web.Request) -> web.Response:
         return err
 
     device_id = request.match_info["device_id"]
-    full_name = _full_device_name(tenant, device_id)
+    full_name = _resolve_device_id(tenant, device_id)
 
     try:
         body = await request.json()
@@ -790,7 +843,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
     backend = get_backend()
     failures = []
     for idx, raw_id in enumerate(ids):
-        full_name = _full_device_name(tenant, raw_id)
+        full_name = _resolve_device_id(tenant, raw_id)
         started = time.monotonic()
         try:
             response = await backend.rpc_invoke(tenant, full_name, function, params, timeout=timeout)
@@ -801,7 +854,7 @@ async def invoke_with_fallback(request: web.Request) -> web.Response:
             return _ok(
                 {"device_id": full_name, "function": function,
                  "elapsed_ms": elapsed_ms, "response": response,
-                 "tried": [{"device_id": _full_device_name(tenant, x), "ok": (i == idx)}
+                 "tried": [{"device_id": _resolve_device_id(tenant, x), "ok": (i == idx)}
                            for i, x in enumerate(ids[: idx + 1])],
                  "failures": failures},
                 trace_id=trace,
@@ -846,7 +899,7 @@ async def device_event_stream(request: web.Request) -> web.Response:
         validate_name(event_name, "event")
     except ValueError as e:
         return _err(status=400, code="invalid_event_name", message=str(e))
-    full_name = _full_device_name(tenant, device_id)
+    full_name = _resolve_device_id(tenant, device_id)
 
     fmt = (request.query.get("format") or "ndjson").lower()
     if fmt not in ("ndjson", "sse"):
