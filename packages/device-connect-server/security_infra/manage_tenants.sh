@@ -60,13 +60,33 @@ usage() {
 
 regenerate_nats_config() {
   local output="${SCRIPT_DIR}/nats-jwt-generated.conf"
-  nsc generate config --mem-resolver --config-file "${output}" 2>/dev/null
-  cat >> "${output}" <<EOF
+  # Preserve any previously-appended server directives (listen, http_port,
+  # max_payload, the websocket {} block, native tls {}, ...) across this
+  # regeneration. `nsc generate config` rewrites the file from scratch, so
+  # without this it silently drops everything below the marker -- which has
+  # taken the browser WebSocket listener (added via setup_deployment.sh
+  # --enable-websocket) offline in production every time a tenant or device
+  # was added. All appended directives live below the marker line.
+  local additions=""
+  if [ -f "${output}" ] && grep -q '^# Device Connect additions' "${output}"; then
+    additions=$(sed -n '/^# Device Connect additions/,$p' "${output}")
+  fi
+  # Newer nsc (v2.12+) refuses to overwrite an existing --config-file, and the
+  # file always exists here (we just read it for "${additions}"). Remove it
+  # first, matching setup_deployment.sh, or generation fails before the
+  # preserved additions can be appended back.
+  rm -f "${output}"
+  nsc generate config --mem-resolver --config-file "${output}"
+  if [ -n "${additions}" ]; then
+    printf '\n%s\n' "${additions}" >> "${output}"
+  else
+    cat >> "${output}" <<EOF
 
 # Device Connect additions
 listen: 0.0.0.0:4222
 http_port: 8222
 EOF
+  fi
   echo "    NATS config regenerated: ${output}"
 }
 

@@ -50,8 +50,8 @@ Browser-based devices (WebSocket):
   --websocket-port PORT           WS listen port inside the container (default: 8443).
   --websocket-allowed-origins LIST
                                   Comma-separated list of allowed Origin headers.
-                                  Defaults to empty, which keeps nats-server's
-                                  same_origin=true behavior. Set this only when
+                                  Defaults to empty, which emits same_origin=true
+                                  (same-origin only). Set this only when
                                   a reverse proxy rewrites Host headers (e.g.
                                   the page is at https://app.example.com and
                                   the WS endpoint is wss://app.example.com/nats
@@ -199,23 +199,26 @@ if [ "$ENABLE_WEBSOCKET" -eq 1 ]; then
       echo "  # port is exposed to the network."
       echo "  no_tls: true"
     fi
-    if [ -n "$WS_ALLOWED_ORIGINS" ]; then
-      # Trim each token and skip empties so "a.com,,b.com" or a trailing
-      # comma doesn't produce a stray "" entry in allowed_origins.
-      origins_json=$(echo "$WS_ALLOWED_ORIGINS" | awk -F, '{
-        out=""; first=1;
-        for (i=1; i<=NF; i++) {
-          tok = $i;
-          gsub(/^[ \t]+|[ \t]+$/, "", tok);
-          if (tok == "") continue;
-          out = out (first ? "" : ", ") "\"" tok "\"";
-          first = 0;
-        }
-        print out
-      }')
-      if [ -n "$origins_json" ]; then
-        echo "  allowed_origins: [${origins_json}]"
-      fi
+    # Trim each token and skip empties so "a.com,,b.com" or a trailing
+    # comma doesn't produce a stray "" entry in allowed_origins.
+    origins_json=$(echo "$WS_ALLOWED_ORIGINS" | awk -F, '{
+      out=""; first=1;
+      for (i=1; i<=NF; i++) {
+        tok = $i;
+        gsub(/^[ \t]+|[ \t]+$/, "", tok);
+        if (tok == "") continue;
+        out = out (first ? "" : ", ") "\"" tok "\"";
+        first = 0;
+      }
+      print out
+    }')
+    if [ -n "$origins_json" ]; then
+      echo "  allowed_origins: [${origins_json}]"
+    else
+      # No explicit origins: lock to same-origin. nats-server's same_origin
+      # defaults to FALSE, so an empty/omitted allowed_origins would otherwise
+      # accept connections from ANY Origin. Emit it explicitly to be safe.
+      echo "  same_origin: true"
     fi
     echo "  compression: true"
     echo "}"
