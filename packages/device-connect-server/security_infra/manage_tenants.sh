@@ -71,7 +71,12 @@ regenerate_nats_config() {
   if [ -f "${output}" ] && grep -q '^# Device Connect additions' "${output}"; then
     additions=$(sed -n '/^# Device Connect additions/,$p' "${output}")
   fi
-  nsc generate config --mem-resolver --config-file "${output}" 2>/dev/null
+  # Newer nsc (v2.12+) refuses to overwrite an existing --config-file, and the
+  # file always exists here (we just read it for "${additions}"). Remove it
+  # first, matching setup_deployment.sh, or generation fails before the
+  # preserved additions can be appended back.
+  rm -f "${output}"
+  nsc generate config --mem-resolver --config-file "${output}"
   if [ -n "${additions}" ]; then
     printf '\n%s\n' "${additions}" >> "${output}"
   else

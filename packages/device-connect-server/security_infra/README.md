@@ -327,6 +327,8 @@ DC_NATS_WS_PORT=8443 \
 
 `setup_deployment.sh` prints the exact one-liner (with the value you passed) at the end of its run so you can copy-paste it.
 
+**Origin checking.** When `--websocket-allowed-origins` is omitted, the generated block emits `same_origin: true`, so the listener only accepts WebSocket handshakes whose `Origin` header matches the request host. (nats-server's `same_origin` defaults to `false` — accepting any Origin — so this is emitted explicitly rather than relying on the default.) Pass `--websocket-allowed-origins` only when a reverse proxy rewrites the Host header and you need to allow specific cross-origin pages.
+
 The override binds the port to `127.0.0.1:8443` by default. **Plain WS on the listener is intentional**: the assumption is that a reverse proxy (Caddy, nginx, Cloudflare Tunnel, ...) terminates TLS and proxies to loopback. Without TLS in front, NATS JWTs travel in cleartext.
 
 To skip the reverse proxy and have NATS do TLS termination natively, pass `--websocket-tls-cert` and `--websocket-tls-key` to `setup_deployment.sh`. The resulting block uses `tls { ... }` instead of `no_tls: true`, and you can safely expose the port directly (override `DC_NATS_WS_BIND=0.0.0.0:8443` in the env when running compose).
