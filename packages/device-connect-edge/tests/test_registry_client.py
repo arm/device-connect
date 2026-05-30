@@ -252,9 +252,12 @@ class TestListDevicesPagination:
         assert second_payload["params"]["offset"] == 100
 
     @pytest.mark.asyncio
-    async def test_list_devices_breaks_on_non_advancing_next_offset(self, caplog):
+    async def test_list_devices_raises_on_non_advancing_next_offset(self):
         """A buggy server returning next_offset <= current offset must not
-        spin the client forever — the page loop bails with a warning."""
+        spin the client forever — and must NOT silently return a truncated
+        list either. Callers run fleet-wide telemetry/broadcast off this
+        result, so a partial fleet that looks complete is more dangerous
+        than a raised error. The page loop raises rather than bailing."""
         client, messaging = _make_client()
         # Server bug: keeps returning the same offset.
         repeating = json.dumps({
@@ -268,11 +271,8 @@ class TestListDevicesPagination:
         }).encode()
         messaging.request = AsyncMock(return_value=repeating)
 
-        with caplog.at_level("WARNING"):
-            devices = await client.list_devices()
+        with pytest.raises(RuntimeError, match="non-advancing pagination cursor"):
+            await client.list_devices()
 
-        assert len(devices) == 1
+        # Bailed on the first non-advancing reply — did not spin.
         assert messaging.request.call_count == 1
-        assert any(
-            "non-advancing next_offset" in rec.message for rec in caplog.records
-        )

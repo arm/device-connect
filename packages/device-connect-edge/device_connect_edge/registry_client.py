@@ -187,16 +187,18 @@ class RegistryClient:
             if next_offset is None:
                 break
             # Defense-in-depth: a buggy or future server returning a
-            # non-advancing cursor would loop forever otherwise. Break
-            # with a warning so a fleet-scale incident becomes a
-            # recoverable log line.
+            # non-advancing cursor would loop forever otherwise. Fail
+            # loudly rather than returning a silently truncated list:
+            # callers run fleet-wide telemetry/broadcast off this result,
+            # and a partial fleet that *looks* complete is far more
+            # dangerous than a raised error they can see and retry.
             if next_offset <= offset:
-                logger.warning(
-                    "Registry returned non-advancing next_offset=%s (current offset=%s); "
-                    "stopping page walk to avoid infinite loop",
-                    next_offset, offset,
+                raise RuntimeError(
+                    f"Registry returned a non-advancing pagination cursor "
+                    f"(next_offset={next_offset} <= offset={offset}) after "
+                    f"{len(devices)} devices; refusing to return a silently "
+                    f"truncated device list."
                 )
-                break
             offset = next_offset
         logger.debug("Discovered %d devices from registry", len(devices))
 
