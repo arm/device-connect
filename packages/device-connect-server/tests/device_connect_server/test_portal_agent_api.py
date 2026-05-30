@@ -487,12 +487,19 @@ class _RevokeBackend:
       rejected the revoke). The handler must NOT delete the local
       file in that case, so the operator can retry once the backend
       is healthy.
+    - ``raise_on_reload`` simulates remove() succeeding but the
+      follow-up broker reload failing. The account is already gone, so
+      the handler must still delete the file (a retry would re-call
+      remove() against a deleted account and fail forever) and surface
+      the reload failure as a non-blocking warning.
     """
 
     def __init__(self, *, supports_remove: bool = True,
-                 raise_on_remove: Exception | None = None):
+                 raise_on_remove: Exception | None = None,
+                 raise_on_reload: Exception | None = None):
         self._supports = supports_remove
         self._raise = raise_on_remove
+        self._raise_reload = raise_on_reload
         self.removed: list[tuple[str, str]] = []
         self.reloaded = 0
         if supports_remove:
@@ -507,6 +514,8 @@ class _RevokeBackend:
 
     async def reload_broker(self) -> None:
         self.reloaded += 1
+        if self._raise_reload is not None:
+            raise self._raise_reload
 
 
 class TestDeviceRevoke:
@@ -573,6 +582,37 @@ class TestDeviceRevoke:
             # operator who expected a real revoke knows it didn't happen.
             assert "backend_warning" in body["result"]
             assert deleted == ["acme-cam-001.creds.json"]
+
+    async def test_reload_failure_after_remove_still_deletes_file(
+        self, provision_client,
+    ):
+        """remove() succeeds but reload_broker() fails: the account is
+        already gone, so the file MUST still be deleted (a retry would
+        re-call remove() against a deleted account and strand the file
+        forever). The reload failure surfaces as a non-blocking warning,
+        not a 502."""
+        backend = _RevokeBackend(raise_on_reload=TimeoutError("broker timeout"))
+        deleted = []
+
+        def _delete(filename):
+            deleted.append(filename)
+            return True
+
+        with patch(
+            "device_connect_server.portal.views.agent_api.get_backend",
+            return_value=backend,
+        ), patch(
+            "device_connect_server.portal.views.agent_api.credentials_svc.delete_credential",
+            side_effect=_delete,
+        ):
+            r = await provision_client.post(
+                "/api/agent/v1/devices/cam-001/revoke", headers=H(),
+            )
+            assert r.status == 200
+            body = await r.json()
+            assert body["result"]["revoked"] is True
+            assert deleted == ["acme-cam-001.creds.json"]
+            assert "broker reload failed" in body["result"]["backend_warning"]
 
     async def test_backend_succeeds_then_file_missing_explains_partial(
         self, provision_client,

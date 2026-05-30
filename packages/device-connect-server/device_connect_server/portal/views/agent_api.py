@@ -609,13 +609,28 @@ async def device_revoke(request: web.Request) -> web.Response:
     remove = getattr(backend, "remove_device", None)
     backend_supported = remove is not None
     backend_error: str | None = None
+    reload_warning: str | None = None
     if backend_supported:
         try:
             await remove(tenant, full_name)
-            await backend.reload_broker()
         except Exception as e:
             logger.exception("revoke: backend remove failed for %s/%s", tenant, full_name)
             backend_error = str(e)
+        else:
+            # remove() succeeded -> the account is gone from the
+            # authoritative store. reload_broker() is independently
+            # retryable, so its failure must NOT strand the credential
+            # file (a retry would re-call remove() against a deleted
+            # account and fail forever). Warn and delete the file.
+            try:
+                await backend.reload_broker()
+            except Exception as e:
+                logger.exception("revoke: broker reload failed for %s/%s", tenant, full_name)
+                reload_warning = (
+                    f"account revoked but broker reload failed: {e}; the "
+                    f"broker may keep serving the old account until its "
+                    f"next reload"
+                )
     else:
         backend_error = f"{backend.backend_name()} backend does not support remove_device"
 
@@ -644,8 +659,9 @@ async def device_revoke(request: web.Request) -> web.Response:
 
     _audit(request, "revoke", trace_id=trace, device_id=full_name)
     result = {"device_id": full_name, "revoked": True}
-    if backend_error:
-        result["backend_warning"] = backend_error
+    warning = backend_error or reload_warning
+    if warning:
+        result["backend_warning"] = warning
     return _ok(result, trace_id=trace)
 
 

@@ -197,6 +197,16 @@ async def revoke_credential(request: web.Request):
     if not cred_data:
         raise web.HTTPNotFound(text=f"Credential file not found: {filename}")
     cred_tenant = cred_data.get("tenant", "")
+    if not cred_tenant:
+        # A credential file with no (or empty) tenant can't be revoked
+        # safely: ``remove("", device_name)`` would target the wrong
+        # namespace (a no-op or error depending on backend) and leave the
+        # real account live. For an admin this would otherwise slip past
+        # the tenant-match check below. Refuse loudly instead.
+        raise web.HTTPUnprocessableEntity(
+            text=f"Credential file {filename} has no tenant; cannot revoke safely. "
+                 f"Fix or remove the file by hand.",
+        )
     if cred_tenant != tenant and user.get("role") != "admin":
         raise web.HTTPForbidden(text="Access denied: credential belongs to another tenant")
 
@@ -210,12 +220,31 @@ async def revoke_credential(request: web.Request):
     remove = getattr(backend, "remove_device", None)
     backend_supported = remove is not None
     backend_error: str | None = None
+    reload_warning: str | None = None
     if backend_supported:
         try:
             await remove(cred_tenant, device_name)
-            await backend.reload_broker()
         except Exception as e:
+            # The account is still live on the broker — this is the hard
+            # failure. Keep the file so the operator can retry.
             backend_error = str(e)
+        else:
+            # remove() succeeded: the account is gone from the
+            # authoritative store, so the credential is dead no matter
+            # what happens next. reload_broker() only asks the broker to
+            # re-read its config and is independently retryable, so a
+            # failure here must NOT strand the credential file — a retry
+            # would re-call remove() against an already-deleted account
+            # and fail, leaving the file orphaned forever. Surface it as
+            # a non-blocking warning and fall through to delete the file.
+            try:
+                await backend.reload_broker()
+            except Exception as e:
+                reload_warning = (
+                    f"account revoked but broker reload failed: {e}; the "
+                    f"broker may keep serving the old account until its "
+                    f"next reload"
+                )
     else:
         backend_error = f"{backend.backend_name()} backend does not support remove_device"
 
@@ -252,11 +281,13 @@ async def revoke_credential(request: web.Request):
     # device disconnects; no explicit cleanup needed here.
 
     # Empty body — htmx's `hx-swap="delete"` removes the row from the
-    # page on a 2xx response. Surface backend warnings (e.g. unsupported
-    # backend) as a non-blocking header so the operator at least sees it.
+    # page on a 2xx response. Surface backend warnings (unsupported
+    # backend, or a post-revoke broker-reload failure) as a non-blocking
+    # header so the operator at least sees it.
     headers = {}
-    if backend_error:
-        headers["X-Revoke-Warning"] = backend_error
+    warning = backend_error or reload_warning
+    if warning:
+        headers["X-Revoke-Warning"] = warning
     return web.Response(status=200, headers=headers, text="")
 
 
