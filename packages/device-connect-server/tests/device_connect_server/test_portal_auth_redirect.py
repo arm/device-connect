@@ -109,9 +109,13 @@ class TestAuthMiddlewareRedirect:
                     f"``next`` capture; got {redirect!r}"
                 )
 
-    async def test_api_request_does_not_capture_next(self):
-        """Even a non-htmx GET on an /api/ path (e.g. a script or stale
-        link) must not become a post-login destination."""
+    async def test_api_request_returns_401_not_redirect(self):
+        """A non-htmx GET on an /api/ path (the dashboard's raw fetch()
+        poll, row-html, live-detail, invoke) must get a real 401 rather
+        than a 302 to /login. fetch() follows redirects, so a 302 would
+        resolve to the login page with ``r.ok === true`` and get injected
+        into a fragment slot; a 401 lets the client bounce the tab through
+        the top-level login flow instead."""
         app = _build_app()
         async with TestServer(app) as server:
             async with TestClient(server) as cli:
@@ -119,8 +123,10 @@ class TestAuthMiddlewareRedirect:
                     "/api/devices/live?tenant=alpha",
                     allow_redirects=False,
                 )
-                assert r.status == 302
-                assert r.headers["Location"] == "/login"
+                assert r.status == 401
+                assert "Location" not in r.headers
+                body = await r.json()
+                assert body["error"]["code"] == "session_expired"
 
     async def test_top_level_navigation_captures_next(self):
         """Top-level HTML navigation to an authenticated page still

@@ -84,18 +84,27 @@ async def auth_middleware(request: web.Request, handler):
         # fragment instead of the dashboard.
         is_htmx = request.headers.get("HX-Request") == "true"
         is_api = path.startswith("/api/")
-        if is_htmx or is_api:
-            login_url = "/login"
-        else:
-            next_url = path
-            if request.query_string:
-                next_url = f"{path}?{request.query_string}"
-            from urllib.parse import quote
-            login_url = "/login?next=" + quote(next_url, safe="") if path != "/login" else "/login"
         if is_htmx:
+            # htmx swaps response bodies into the page, so a 302 to the
+            # login page would be injected as a fragment. Use htmx's own
+            # client-side redirect header instead.
             resp = web.Response(status=200)
-            resp.headers["HX-Redirect"] = login_url
+            resp.headers["HX-Redirect"] = "/login"
             return resp
+        if is_api:
+            # Background browser fetches (the JSON poll, row-html,
+            # live-detail, invoke) are raw fetch() calls that follow
+            # redirects: a 302 to /login resolves to the login page with
+            # r.ok === true and gets injected into a fragment slot. Return
+            # a real 401 so the client can never mistake the login page
+            # for fragment data; the client bounces the tab through the
+            # top-level login flow when it sees this.
+            return _json_error(401, "session_expired", "Session expired; log in again")
+        next_url = path
+        if request.query_string:
+            next_url = f"{path}?{request.query_string}"
+        from urllib.parse import quote
+        login_url = "/login?next=" + quote(next_url, safe="") if path != "/login" else "/login"
         raise web.HTTPFound(login_url)
 
     request["user"] = session

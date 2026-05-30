@@ -64,6 +64,20 @@
 // actually changed.
 window._deviceCapsHash = window._deviceCapsHash || {};
 
+// Auth guard for background fetches. The auth middleware returns a real
+// 401 (not an HTML redirect) for unauthenticated /api/ requests, so a
+// fetch can never inject the login page into a fragment slot. When we
+// see that 401, bounce the whole tab through the top-level login flow.
+// Returns true when it has taken over (caller should stop processing).
+function authGuard(r) {
+  if (r.status === 401) {
+    var next = window.location.pathname + window.location.search;
+    window.location.href = '/login?next=' + encodeURIComponent(next);
+    return true;
+  }
+  return false;
+}
+
 function loadDetailIfNeeded(row, deviceId) {
   var url = row.getAttribute('data-detail-url');
   var slot = row.querySelector('.detail-content');
@@ -72,6 +86,7 @@ function loadDetailIfNeeded(row, deviceId) {
   slot.dataset.loading = 'true';
   fetch(url, {credentials: 'same-origin'})
     .then(function(r) {
+      if (authGuard(r)) return null;
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     })
@@ -187,7 +202,7 @@ function insertNewDeviceRow(deviceId, capsHash, tbody) {
   window._pendingInserts[deviceId] = true;
   fetch('/api/devices/' + encodeURIComponent(deviceId) + '/row-html?tenant={{ tenant }}',
         { credentials: 'same-origin' })
-    .then(function(r) { return r.ok ? r.text() : null; })
+    .then(function(r) { if (authGuard(r)) return null; return r.ok ? r.text() : null; })
     .then(function(html) {
       // Was this insert cancelled by a removeDeviceRow that ran
       // between fetch start and response landing? If so the flag is
@@ -241,7 +256,7 @@ function reloadLiveFragment() {
 
 function pollDevices() {
   fetch('/api/devices/live.json?tenant={{ tenant }}', { credentials: 'same-origin' })
-    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(r) { if (authGuard(r)) return null; return r.ok ? r.json() : null; })
     .then(function(data) {
       if (!data) return;
       var oc = document.getElementById('online-count');
@@ -350,8 +365,9 @@ function submitInvoke(deviceId) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ function: state.fn, params: params })
   })
-  .then(function(r) { return r.json(); })
+  .then(function(r) { if (authGuard(r)) return null; return r.json(); })
   .then(function(data) {
+    if (data == null) return;  // auth guard took over
     statusEl.textContent = data.error ? 'Error' : 'OK';
     resultPre.textContent = JSON.stringify(data, null, 2);
     resultPre.classList.remove('hidden');
