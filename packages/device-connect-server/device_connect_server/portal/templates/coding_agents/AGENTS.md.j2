@@ -171,8 +171,9 @@ dc-portalctl devices credentials {{ tenant }}-cam-001 \
     --output-file ./{{ tenant }}-cam-001.creds.json
 ```
 
-> ⚠️ **Lifecycle limitations (as of 0.2.3).** The CLI exposes two lifecycle
-> verbs, but neither is implemented in any bundled backend yet:
+> ⚠️ **Lifecycle limitations (as of 0.2.3).** Two of the three lifecycle
+> verbs are not implemented in any bundled backend yet — `revoke` is the
+> one that works:
 >
 > - `dc-portalctl devices revoke-credentials <id>` → `POST
 >   /api/agent/v1/devices/{id}/credentials:rotate` → HTTP **501
@@ -181,12 +182,60 @@ dc-portalctl devices credentials {{ tenant }}-cam-001 \
 > - `dc-portalctl devices delete <id> --confirm` → `DELETE
 >   /api/agent/v1/devices/{id}` → HTTP **501 `not_implemented`** (no
 >   backend implements `remove_device`).
+> - `dc-portalctl devices revoke <id> --confirm` → `POST
+>   /api/agent/v1/devices/{id}/revoke` → **works on every bundled
+>   backend**. When the backend has `remove_device` the broker account
+>   is removed; when it doesn't, the local cred file is still deleted
+>   (soft success) and a `backend_warning` is surfaced in the response
+>   so the operator knows the account itself wasn't touched. This is
+>   the verb to reach for in normal operation.
 >
-> Until those land, to force a device offline stop the device process
-> directly; to drop the registry record, edit the backing store (etcd /
-> file / whichever backend is configured) by hand.
+> If you actually need the rotate or backend-only-delete behavior and
+> your backend doesn't support it, stop the device process directly
+> and/or edit the backing store (etcd / file / whichever backend is
+> configured) by hand.
 
-HTTP equivalents live in [Appendix A](#appendix-a-http-api-reference).
+```bash
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"device_name":"cam-001","device_type":"camera","location":"warehouse1/loading-dock"}' \
+  {{ portal_url }}/api/agent/v1/devices
+```
+
+### Decommission, rotate, or revoke
+
+Three commands, three different intents — pick the verb that matches what you
+actually want to happen. Only `revoke` works on every bundled backend today
+(see the lifecycle limitations callout above for the 501s on the other two).
+
+| Command | Broker account | Local cred file | When to use |
+|---|---|---|---|
+| `dc-portalctl devices revoke-credentials <id>` | re-issued (rotates) — ⚠ HTTP 501 on bundled backends | replaced with new contents | Same device should come back with a new identity (e.g. suspected leak). |
+| `dc-portalctl devices delete <id> --confirm` | removed — ⚠ HTTP 501 on bundled backends | **left on disk** | Rarely the right choice on its own — even if it landed, the cred file would linger and show up in the portal. |
+| `dc-portalctl devices revoke <id> --confirm` | removed when backend supports it; soft success otherwise | **deleted** | Default for "this credential is gone." The device disconnects on next reconnect and the credential disappears from the portal counter and `/devices` list. |
+
+HTTP equivalents (all need `devices:provision` scope):
+
+```bash
+# Rotate
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/credentials:rotate
+
+# Delete (decommission only)
+curl -X DELETE -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}
+
+# Revoke (the full one — preferred today)
+curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
+  {{ portal_url }}/api/agent/v1/devices/{{ example_device_id }}/revoke
+```
+
+`revoke` returns HTTP 502 `backend_revoke_failed` (and keeps the cred file
+in place) when the backend supports `remove_device` but the broker rejected
+the call — retry once the backend is healthy. On a soft-success backend
+(no `remove_device`) it returns 200 with a `backend_warning` field.
+
+Either decommission flow disconnects the device on its next NATS reconnect.
 
 ---
 
@@ -536,8 +585,9 @@ dc-portalctl devices events       <id>
 dc-portalctl devices provision    <name> --device-type X [--location Y] \
     --creds-output-file <path>
 dc-portalctl devices credentials  <id> --output-file <path>
-dc-portalctl devices revoke-credentials <id>      # ⚠ HTTP 501 on bundled backends (see §3)
-dc-portalctl devices delete       <id> --confirm  # ⚠ HTTP 501 on bundled backends (see §3)
+dc-portalctl devices revoke-credentials <id>           # rotate: ⚠ HTTP 501 on bundled backends (see §3)
+dc-portalctl devices delete       <id> --confirm       # decommission only: ⚠ HTTP 501 on bundled backends (see §3)
+dc-portalctl devices revoke       <id> --confirm       # full revoke (account + cred file): works on every bundled backend
 
 # Invocation
 dc-portalctl devices invoke          <id>          <fn> --params '{…}' --reason "…"

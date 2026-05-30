@@ -61,6 +61,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -89,6 +90,44 @@ from device_connect_edge.telemetry.tracer import SpanKind
 
 logger = logging.getLogger(__name__)
 
+
+def _env_float(name: str, default: float) -> float:
+    """Best-effort float env-var parser; falls back to default on garbage."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+# Registration knobs. At fleet scale a 2s request timeout combined with N
+# phones starting in lockstep produces congestion collapse on the
+# registry: every queued-but-late reply triggers a retry that re-enters
+# the queue. A larger timeout lets the registry catch up before any
+# retry fires, and an up-front jitter spreads the initial herd so the
+# registry never sees a synchronized burst in the first place. Both are
+# env-tunable (jitter can be disabled by setting it to 0). The 2s jitter
+# default is a compromise: it decorrelates ~1000 devices into ~500/sec
+# (much better than lockstep) while staying tolerable for single-device
+# development. Operators at fleet scale should bump this via
+# DEVICE_CONNECT_REGISTER_JITTER=10 (or higher) to spread the herd
+# further.
+#
+# Lease-TTL interaction: the registry creates the etcd lease at the
+# moment _do_register runs, so if a slow registry takes ~timeout
+# seconds to reply, the lease can be near-expired before the heartbeat
+# loop emits its first beat (`run()` awaits _register before starting
+# the heartbeat task). With the 15s timeout default and the 15s `ttl`
+# default that race is real; it self-heals — the next heartbeat fires
+# `has_lease()=False` on the registry and triggers a requestRegistration
+# round-trip — but operators raising DEVICE_CONNECT_REGISTER_TIMEOUT
+# (or running a stressed registry where requests routinely take >ttl/3)
+# should raise `ttl` in lockstep or shorten `heartbeat_interval` so
+# the first beat lands inside the lease window.
+_REGISTER_REQUEST_TIMEOUT = _env_float("DEVICE_CONNECT_REGISTER_TIMEOUT", 15.0)
+_REGISTER_STARTUP_JITTER = _env_float("DEVICE_CONNECT_REGISTER_JITTER", 2.0)
 
 
 def build_rpc_response(id_: str, result: Any) -> bytes:
@@ -974,6 +1013,19 @@ class DeviceRuntime:
                 self._logger.debug("Registration completed by another task, skipping")
                 return
 
+            # Spread the herd. With 1000+ phones spinning up in lockstep
+            # the registry sees a single synchronized burst that times
+            # out most callers and amplifies into a retry storm. A small
+            # randomized delay before the first request decorrelates the
+            # arrivals; subsequent retries already have exponential
+            # backoff so we only jitter once per _register call.
+            if _REGISTER_STARTUP_JITTER > 0:
+                jitter = random.uniform(0, _REGISTER_STARTUP_JITTER)
+                self._logger.debug(
+                    "Pre-registration jitter: sleeping %.2fs before first request", jitter,
+                )
+                await asyncio.sleep(jitter)
+
             delay = 1 # initial retry delay in seconds
             while True:
                 req_id = f"{self.device_id}-{int(time.time()*1000)}"
@@ -983,7 +1035,7 @@ class DeviceRuntime:
                     response_data = await self.messaging.request(
                         f"device-connect.{self.tenant}.registry",
                         json.dumps({"jsonrpc": "2.0", "id": req_id, "method": "registerDevice", "params": params}).encode(),
-                        timeout=2,
+                        timeout=_REGISTER_REQUEST_TIMEOUT,
                     )
                     self._handle_registration_reply(response_data)
                     # Note: device/online event is published by the registry service
@@ -1762,7 +1814,10 @@ class DeviceRuntime:
         if not isinstance(self._driver, DeviceDriver):
             return
 
-        self._logger.info("Setting up DeviceDriver D2D capabilities")
+        self._logger.info(
+            "Setting up DeviceDriver inter-device messaging "
+            "(router, registry, @on subscriptions)"
+        )
 
         # Create and set D2D router (inline — no orchestration dependency).
         router = _RemoteInvoker(
@@ -1796,7 +1851,11 @@ class DeviceRuntime:
 
         # Set up event subscriptions
         await self._driver.setup_subscriptions()
-        self._logger.info("DeviceDriver D2D setup complete")
+        registry_kind = "D2DRegistry" if self._d2d_mode else "RegistryClient"
+        self._logger.info(
+            "DeviceDriver inter-device messaging ready (registry=%s)",
+            registry_kind,
+        )
 
     async def _teardown_agentic_driver(self) -> None:
         """Teardown DeviceDriver subscriptions if applicable."""
@@ -1825,10 +1884,30 @@ class DeviceRuntime:
         Uses ``_subscription_lock`` to prevent concurrent invocations
         from rapid reconnects.
         """
-        if not self._subscription_lock.acquire_nowait():
+        # Review notes (do not re-litigate without reading these):
+        #
+        # 1. ``asyncio.Lock`` does NOT have ``acquire_nowait()``. That
+        #    was a latent bug in the original implementation — the
+        #    method only exists on ``threading.Lock``. At fleet scale
+        #    during a reconnect storm it raised ``AttributeError`` on
+        #    every reconnect and silently killed @on resubscription.
+        #    See commit 1716f8d.
+        #
+        # 2. The ``locked() then await acquire()`` pattern below looks
+        #    like a TOCTOU race but is safe under single-loop asyncio:
+        #    ``Lock.locked()`` is synchronous and ``Lock.acquire()``
+        #    has a fast path that returns without yielding when the
+        #    lock is free. Two concurrent callers cannot both observe
+        #    ``locked() is False`` between the check and the take
+        #    because there is no event-loop yield in that window.
+        #    If you switch to a multi-loop primitive (anyio, trio,
+        #    threading) this assumption breaks — use ``wait_for(...,
+        #    timeout=0)`` over ``acquire()`` instead.
+        if self._subscription_lock.locked():
             self._logger.debug("Subscription re-establishment already in progress, skipping")
             return
 
+        await self._subscription_lock.acquire()
         try:
             delay = 1
             while True:

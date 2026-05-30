@@ -30,14 +30,23 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from device_connect_edge.messaging.base import MessagingClient
 from device_connect_edge.messaging.exceptions import RequestTimeoutError
 
 logger = logging.getLogger(__name__)
+
+# Per-page chunk size when the client transparently iterates the full fleet.
+# Sized to keep one JSON-RPC reply well under the default NATS max_payload
+# of 1 MB even when device records carry rich function schemas (~10 KB each
+# in the worst case observed): 100 * ~10 KB = ~1 MB, with the actual upper
+# bound for typical records (~6 KB) landing at ~600 KB. Operators on
+# unusually rich schemas can drop this via DEVICE_CONNECT_LIST_PAGE_SIZE.
+_DEFAULT_LIST_PAGE_SIZE = int(os.getenv("DEVICE_CONNECT_LIST_PAGE_SIZE", "100"))
 
 
 class RegistryClient:
@@ -157,8 +166,105 @@ class RegistryClient:
                     self._cache, device_type, location, capabilities,
                 )
 
+        # Page through the registry transparently so the wire never carries
+        # a fleet-sized reply (NATS default max_payload is 1 MB and was
+        # being exceeded at ~1400 devices). Older servers that don't
+        # understand ``limit`` just return everything in one reply with
+        # ``next_offset`` absent, so the loop exits after a single
+        # iteration — fully backward compatible.
+        devices: List[Dict[str, Any]] = []
+        offset = 0
+        while True:
+            page, next_offset, _total = await self._list_devices_page(
+                device_type=device_type,
+                location=location,
+                capabilities=capabilities,
+                offset=offset,
+                limit=_DEFAULT_LIST_PAGE_SIZE,
+                timeout=timeout,
+            )
+            devices.extend(page)
+            if next_offset is None:
+                break
+            # Defense-in-depth: a buggy or future server returning a
+            # non-advancing cursor would loop forever otherwise. Fail
+            # loudly rather than returning a silently truncated list:
+            # callers run fleet-wide telemetry/broadcast off this result,
+            # and a partial fleet that *looks* complete is far more
+            # dangerous than a raised error they can see and retry.
+            if next_offset <= offset:
+                raise RuntimeError(
+                    f"Registry returned a non-advancing pagination cursor "
+                    f"(next_offset={next_offset} <= offset={offset}) after "
+                    f"{len(devices)} devices; refusing to return a silently "
+                    f"truncated device list."
+                )
+            offset = next_offset
+        logger.debug("Discovered %d devices from registry", len(devices))
+
+        # Update cache (store unfiltered if we fetched without filters)
+        if (
+            self._cache_ttl > 0
+            and device_type is None
+            and location is None
+            and not capabilities
+        ):
+            self._cache = devices
+            self._cache_time = time.time()
+
+        return devices
+
+    async def list_devices_page(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = _DEFAULT_LIST_PAGE_SIZE,
+        device_type: Optional[str] = None,
+        location: Optional[str] = None,
+        capabilities: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
+        """Fetch a single page of devices with pagination metadata.
+
+        Use this when you want to display a paged UI or stream results;
+        most callers should stick with :meth:`list_devices`, which loops
+        internally and returns the full fleet.
+
+        Returns:
+            ``(devices, next_offset, total_matched)`` where ``next_offset``
+            is ``None`` on the final page.
+
+        ACL caveat:
+            When the registry has ACLs enabled, server-side filtering
+            runs *after* slicing. As a result ``len(devices)`` for a
+            given page may be smaller than ``limit`` even when more
+            pages follow, and ``total_matched`` is the unfiltered total
+            (before the caller's ACL applies). UIs should treat
+            ``total_matched`` as an upper bound on what the caller will
+            ever see, and must not assume ``len(devices) == limit``
+            implies a full page.
+        """
+        return await self._list_devices_page(
+            device_type=device_type,
+            location=location,
+            capabilities=capabilities,
+            offset=offset,
+            limit=limit,
+            timeout=timeout,
+        )
+
+    async def _list_devices_page(
+        self,
+        *,
+        device_type: Optional[str],
+        location: Optional[str],
+        capabilities: Optional[List[str]],
+        offset: int,
+        limit: int,
+        timeout: Optional[float],
+    ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
         subject = f"device-connect.{self._tenant}.discovery"
-        params: Dict[str, Any] = {}
+        params: Dict[str, Any] = {"offset": int(offset), "limit": int(limit)}
         if device_type:
             params["device_type"] = device_type
         if location:
@@ -167,20 +273,12 @@ class RegistryClient:
             params["capabilities"] = capabilities
 
         result = await self._request(
-            subject,
-            "discovery/listDevices",
-            params if params else None,
-            timeout,
+            subject, "discovery/listDevices", params, timeout,
         )
         devices = result.get("devices", [])
-        logger.debug("Discovered %d devices from registry", len(devices))
-
-        # Update cache (store unfiltered if we fetched without filters)
-        if self._cache_ttl > 0 and not params:
-            self._cache = devices
-            self._cache_time = time.time()
-
-        return devices
+        next_offset = result.get("next_offset")
+        total = result.get("total_matched", len(devices))
+        return devices, next_offset, total
 
     async def get_device(
         self,

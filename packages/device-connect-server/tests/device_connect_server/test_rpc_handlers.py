@@ -121,6 +121,7 @@ def mock_registry():
     with patch("device_connect_server.registry.service.main.registry") as mock_reg:
         mock_reg.register = MagicMock()
         mock_reg.list_devices = MagicMock(return_value=[])
+        mock_reg.list_devices_page = MagicMock(return_value=([], None, 0))
         mock_reg.get_device = MagicMock(return_value=None)
         mock_reg.refresh = MagicMock()
         mock_reg.update_status = MagicMock()
@@ -296,20 +297,49 @@ class TestRegisterHandler:
 class TestListDevicesHandler:
 
     @pytest.mark.asyncio
-    async def test_list_devices_success(self, messaging, mock_registry):
+    async def test_list_devices_legacy_no_limit_returns_unbounded(self, messaging, mock_registry):
+        """Without ``limit`` the handler takes the legacy unpaged path."""
         mock_registry.list_devices.return_value = [SAMPLE_DEVICE]
         handler = _make_list_handler(TENANT, messaging)
-        data = _rpc_request("discovery/listDevices", {})
-        await handler(data, "reply-sub")
+        await handler(_rpc_request("discovery/listDevices", {}), "reply-sub")
 
+        # Legacy path: list_devices is called, list_devices_page is not.
         mock_registry.list_devices.assert_called_once_with(
             TENANT, device_type=None, location=None,
         )
+        mock_registry.list_devices_page.assert_not_called()
+
         response = json.loads(messaging.publish.call_args[0][1])
         assert response["result"]["devices"] == [SAMPLE_DEVICE]
+        # Legacy reply shape: no pagination metadata leaks out so old
+        # clients that ignore unknown keys aren't surprised by it.
+        assert "next_offset" not in response["result"]
+        assert "total_matched" not in response["result"]
+
+    @pytest.mark.asyncio
+    async def test_list_devices_with_limit_paginates(self, messaging, mock_registry):
+        """Passing ``limit`` opts the caller into the paged contract."""
+        mock_registry.list_devices_page.return_value = ([SAMPLE_DEVICE], 100, 250)
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": 100, "offset": 0}),
+            "reply-sub",
+        )
+
+        mock_registry.list_devices_page.assert_called_once()
+        call_kwargs = mock_registry.list_devices_page.call_args.kwargs
+        assert call_kwargs["offset"] == 0
+        assert call_kwargs["limit"] == 100
+        mock_registry.list_devices.assert_not_called()
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["result"]["devices"] == [SAMPLE_DEVICE]
+        assert response["result"]["next_offset"] == 100
+        assert response["result"]["total_matched"] == 250
 
     @pytest.mark.asyncio
     async def test_list_devices_with_filters(self, messaging, mock_registry):
+        """Legacy filter forwarding (no ``limit`` -> unpaged path)."""
         mock_registry.list_devices.return_value = [SAMPLE_DEVICE]
         handler = _make_list_handler(TENANT, messaging)
         data = _rpc_request("discovery/listDevices", {
@@ -329,13 +359,15 @@ class TestListDevicesHandler:
 
         response = json.loads(messaging.publish.call_args[0][1])
         assert response["result"]["devices"] == []
+        # Legacy reply, so no total_matched.
+        assert "total_matched" not in response["result"]
 
     @pytest.mark.asyncio
     async def test_list_devices_with_acl(self, messaging, mock_registry):
+        """Legacy + ACL: filter shrinks the reply, no total_matched leaks."""
         mock_registry.list_devices.return_value = [SAMPLE_DEVICE, SAMPLE_DEVICE_2]
 
         acl_mgr = ACLManager()
-        # Hide camera-001 from robot-001
         acl_mgr.set_acl(DeviceACL(
             device_id="camera-001", tenant=TENANT,
             hidden_from=["robot-001"],
@@ -349,6 +381,231 @@ class TestListDevicesHandler:
         device_ids = [d["device_id"] for d in response["result"]["devices"]]
         assert "camera-001" not in device_ids
         assert "robot-001" in device_ids
+
+    @pytest.mark.asyncio
+    async def test_list_devices_paged_acl_total_is_unfiltered(self, messaging, mock_registry):
+        """Documented caveat: total_matched reflects pre-ACL fleet size,
+        and the page shrinks below ``limit`` after ACL drops hidden rows.
+        """
+        # Server returns a full page of 2; ACL hides one.
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE, SAMPLE_DEVICE_2], None, 2,
+        )
+
+        acl_mgr = ACLManager()
+        acl_mgr.set_acl(DeviceACL(
+            device_id="camera-001", tenant=TENANT,
+            hidden_from=["robot-001"],
+        ))
+
+        handler = _make_list_handler(TENANT, messaging, acl_manager=acl_mgr)
+        await handler(
+            _rpc_request("discovery/listDevices", {
+                "limit": 2, "offset": 0, "requester_id": "robot-001",
+            }),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        # Page is shorter than limit because ACL dropped a row.
+        assert len(response["result"]["devices"]) == 1
+        # total_matched is the unfiltered count, intentionally larger.
+        assert response["result"]["total_matched"] == 2
+
+    @pytest.mark.asyncio
+    async def test_list_devices_invalid_offset_returns_error(self, messaging, mock_registry):
+        """Malformed offset surfaces a clean JSON-RPC -32602 error."""
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"offset": "abc", "limit": 10}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "offset" in response["error"]["message"]
+        mock_registry.list_devices_page.assert_not_called()
+        mock_registry.list_devices.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_devices_negative_offset_returns_error(self, messaging, mock_registry):
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"offset": -5, "limit": 10}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "non-negative" in response["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_list_devices_invalid_limit_returns_error(self, messaging, mock_registry):
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": "lots"}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "limit" in response["error"]["message"]
+        mock_registry.list_devices_page.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_devices_zero_limit_returns_error(self, messaging, mock_registry):
+        """``limit=0`` is rejected rather than silently mapped to the cap."""
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": 0}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "positive" in response["error"]["message"]
+        mock_registry.list_devices_page.assert_not_called()
+        mock_registry.list_devices.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_devices_negative_limit_returns_error(self, messaging, mock_registry):
+        """Negative ``limit`` is rejected for the same reason as zero."""
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": -3}),
+            "reply-sub",
+        )
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        assert response["error"]["code"] == -32602
+        assert "positive" in response["error"]["message"]
+        mock_registry.list_devices_page.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_list_devices_limit_above_cap_is_clamped(self, messaging, mock_registry):
+        """A client asking for more than ``_LIST_DEVICES_MAX_LIMIT`` is
+        silently clamped server-side; the wire response uses
+        ``next_offset`` to signal the page break so the client paginates
+        naturally rather than truncating."""
+        from device_connect_server.registry.service.main import (
+            _LIST_DEVICES_MAX_LIMIT,
+        )
+        # Registry returns exactly one page-worth (the cap); next_offset
+        # signals there is more behind it.
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE], _LIST_DEVICES_MAX_LIMIT, 5000,
+        )
+        handler = _make_list_handler(TENANT, messaging)
+        await handler(
+            _rpc_request("discovery/listDevices", {"limit": 10000, "offset": 0}),
+            "reply-sub",
+        )
+
+        # Handler must clamp ``limit`` before calling the registry.
+        call_kwargs = mock_registry.list_devices_page.call_args.kwargs
+        assert call_kwargs["limit"] == _LIST_DEVICES_MAX_LIMIT
+
+        response = json.loads(messaging.publish.call_args[0][1])
+        # Client sees a forward-pointing next_offset, not a 500 or a
+        # silent truncation.
+        assert response["result"]["next_offset"] == _LIST_DEVICES_MAX_LIMIT
+        assert response["result"]["total_matched"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_list_devices_clamp_warns_once_per_requested_limit(
+        self, messaging, mock_registry, caplog,
+    ):
+        """An over-cap ``limit`` logs a warning on first sight but stays
+        quiet on repeated requests with the same value, so a misconfigured
+        client doesn't spam the log on every page."""
+        from device_connect_server.registry.service import main as registry_main
+
+        # Reset the dedup set so this test is independent of prior tests.
+        registry_main._WARNED_LIMIT_CLAMPS.clear()
+
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE], registry_main._LIST_DEVICES_MAX_LIMIT, 5000,
+        )
+        handler = _make_list_handler(TENANT, messaging)
+
+        with caplog.at_level("WARNING", logger="device_registry_service"):
+            # First over-cap request: must warn.
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 10000}),
+                "reply-sub",
+            )
+            warnings_after_first = [
+                r for r in caplog.records
+                if r.levelname == "WARNING" and "clamped to server cap" in r.message
+            ]
+            assert len(warnings_after_first) == 1, (
+                f"expected one clamp warning, got "
+                f"{[r.message for r in caplog.records]}"
+            )
+            assert "10000" in warnings_after_first[0].message
+
+            # Second request with same limit: must NOT warn again.
+            caplog.clear()
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 10000}),
+                "reply-sub",
+            )
+            warnings_after_second = [
+                r for r in caplog.records if "clamped to server cap" in r.message
+            ]
+            assert warnings_after_second == [], (
+                "repeated over-cap requests with the same limit must not "
+                "re-warn"
+            )
+
+            # Different over-cap limit: warns again (new value).
+            caplog.clear()
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 5000}),
+                "reply-sub",
+            )
+            warnings_after_new = [
+                r for r in caplog.records if "clamped to server cap" in r.message
+            ]
+            assert len(warnings_after_new) == 1
+            assert "5000" in warnings_after_new[0].message
+
+    @pytest.mark.asyncio
+    async def test_list_devices_at_or_under_cap_does_not_warn(
+        self, messaging, mock_registry, caplog,
+    ):
+        """A limit at or below the cap is the intended path — no clamp,
+        no warning. Pins that the warning is gated strictly on
+        ``effective < requested``."""
+        from device_connect_server.registry.service import main as registry_main
+
+        registry_main._WARNED_LIMIT_CLAMPS.clear()
+        mock_registry.list_devices_page.return_value = (
+            [SAMPLE_DEVICE], None, 1,
+        )
+        handler = _make_list_handler(TENANT, messaging)
+
+        with caplog.at_level("WARNING", logger="device_registry_service"):
+            # Exactly at cap.
+            await handler(
+                _rpc_request("discovery/listDevices", {
+                    "limit": registry_main._LIST_DEVICES_MAX_LIMIT,
+                }),
+                "reply-sub",
+            )
+            # Well under cap.
+            await handler(
+                _rpc_request("discovery/listDevices", {"limit": 10}),
+                "reply-sub",
+            )
+
+        clamp_warnings = [
+            r for r in caplog.records if "clamped to server cap" in r.message
+        ]
+        assert clamp_warnings == [], (
+            f"under-cap requests must not warn; got: "
+            f"{[r.message for r in clamp_warnings]}"
+        )
 
     @pytest.mark.asyncio
     async def test_list_devices_registry_error(self, messaging, mock_registry):
@@ -367,6 +624,7 @@ class TestListDevicesHandler:
 
         messaging.publish.assert_not_called()
         mock_registry.list_devices.assert_not_called()
+        mock_registry.list_devices_page.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

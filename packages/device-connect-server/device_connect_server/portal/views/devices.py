@@ -23,6 +23,7 @@ def setup_routes(app: web.Application):
     app.router.add_get("/api/devices/agent-creds", download_agent_creds)
     app.router.add_get("/api/devices/demo-bundle", download_demo_bundle)
     app.router.add_get("/api/devices/{name}/creds", download_credential)
+    app.router.add_post("/api/devices/{name}/revoke", revoke_credential)
     app.router.add_get("/api/devices/bundle", download_bundle)
 
 
@@ -138,7 +139,8 @@ async def create_device(request: web.Request):
             content_type="text/html",
         )
 
-    # Return the new row as HTML fragment
+    # Return the new row as HTML fragment, with `highlight` flag on so
+    # the partial paints the brief green flash on the just-created row.
     cred = {
         "device_id": full_name,
         "filename": f"{full_name}.creds.json",
@@ -146,6 +148,7 @@ async def create_device(request: web.Request):
     return aiohttp_jinja2.render_template("devices/_device_row.html", request, {
         "cred": cred,
         "user": user,
+        "highlight": True,
     })
 
 
@@ -173,6 +176,119 @@ async def download_credential(request: web.Request):
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+async def revoke_credential(request: web.Request):
+    """Revoke a device credential: kill the backend account, then delete the file.
+
+    Returns an empty 200 body so an htmx swap can drop the row from the
+    page. The dashboard's JSON poll picks up the lower count and the
+    registry-entry removal on its next 10s tick.
+
+    Auth: portal session, tenant-scoped. Admins may revoke across
+    tenants. Non-admins can only touch their own tenant's creds.
+    """
+    user = request["user"]
+    tenant = user["tenant"]
+    device_name = request.match_info["name"]
+    filename = f"{device_name}.creds.json"
+
+    cred_data = credentials.get_credential_data(filename)
+    if not cred_data:
+        raise web.HTTPNotFound(text=f"Credential file not found: {filename}")
+    cred_tenant = cred_data.get("tenant", "")
+    if not cred_tenant:
+        # A credential file with no (or empty) tenant can't be revoked
+        # safely: ``remove("", device_name)`` would target the wrong
+        # namespace (a no-op or error depending on backend) and leave the
+        # real account live. For an admin this would otherwise slip past
+        # the tenant-match check below. Refuse loudly instead.
+        raise web.HTTPUnprocessableEntity(
+            text=f"Credential file {filename} has no tenant; cannot revoke safely. "
+                 f"Fix or remove the file by hand.",
+        )
+    if cred_tenant != tenant and user.get("role") != "admin":
+        raise web.HTTPForbidden(text="Access denied: credential belongs to another tenant")
+
+    # 1. Revoke the broker account so the device can no longer connect.
+    #    A backend without remove_device is a "soft success": the file
+    #    is still deleted so the operator's UI reflects intent, but a
+    #    real failure from a backend that DOES support remove_device is
+    #    not — leaving a ghost file pointing at a still-valid account
+    #    is worse than leaving an orphan file the operator can retry.
+    backend = get_backend()
+    remove = getattr(backend, "remove_device", None)
+    backend_supported = remove is not None
+    backend_error: str | None = None
+    reload_warning: str | None = None
+    if backend_supported:
+        try:
+            await remove(cred_tenant, device_name)
+        except Exception as e:
+            # The account is still live on the broker — this is the hard
+            # failure. Keep the file so the operator can retry.
+            backend_error = str(e)
+        else:
+            # remove() succeeded: the account is gone from the
+            # authoritative store, so the credential is dead no matter
+            # what happens next. reload_broker() only asks the broker to
+            # re-read its config and is independently retryable, so a
+            # failure here must NOT strand the credential file — a retry
+            # would re-call remove() against an already-deleted account
+            # and fail, leaving the file orphaned forever. Surface it as
+            # a non-blocking warning and fall through to delete the file.
+            try:
+                await backend.reload_broker()
+            except Exception as e:
+                reload_warning = (
+                    f"account revoked but broker reload failed: {e}; the "
+                    f"broker may keep serving the old account until its "
+                    f"next reload"
+                )
+    else:
+        backend_error = f"{backend.backend_name()} backend does not support remove_device"
+
+    # 2. Delete the local credential file. Only attempted when the
+    #    backend revocation succeeded (or the backend doesn't support
+    #    it at all); a hard backend failure leaves the file in place
+    #    so the operator can retry once the backend is healthy.
+    if backend_supported and backend_error is not None:
+        # Hard backend failure: surface it, keep the file. The
+        # 502 (rather than 500) tells the operator the upstream
+        # broker is the problem, not the portal.
+        raise web.HTTPBadGateway(
+            text=f"Backend revocation failed for {device_name}: {backend_error}. "
+                 f"Credential file left in place; retry once the backend is healthy.",
+        )
+
+    deleted = credentials.delete_credential(filename)
+    if not deleted:
+        # File was there a moment ago (cred_data was non-None) but we
+        # couldn't unlink it. If the backend revoke already succeeded,
+        # the account is gone — say so explicitly rather than implying
+        # the whole operation failed.
+        suffix = (
+            " Backend account was already revoked; only the local file "
+            "remains and must be removed by hand."
+            if backend_supported and backend_error is None
+            else ""
+        )
+        raise web.HTTPInternalServerError(
+            text=f"Failed to remove credential file: {filename}.{suffix}",
+        )
+
+    # The device's etcd registry entry expires on its TTL after the
+    # device disconnects; no explicit cleanup needed here.
+
+    # Empty body — htmx's `hx-swap="delete"` removes the row from the
+    # page on a 2xx response. Surface backend warnings (unsupported
+    # backend, or a post-revoke broker-reload failure) as a non-blocking
+    # header so the operator at least sees it.
+    headers = {}
+    warning = backend_error or reload_warning
+    if warning:
+        headers["X-Revoke-Warning"] = warning
+    return web.Response(status=200, headers=headers, text="")
 
 
 async def download_bundle(request: web.Request):

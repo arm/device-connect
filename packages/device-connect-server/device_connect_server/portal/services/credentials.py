@@ -64,6 +64,24 @@ def get_credential_data(filename: str) -> dict | None:
         return None
 
 
+def delete_credential(filename: str) -> bool:
+    """Remove a credential file from disk.
+
+    Returns True if a file was deleted, False if no such file existed.
+    Uses the same path-traversal guard as :func:`get_credential`, so a
+    crafted ``filename`` that resolves outside ``CREDS_DIR`` is rejected.
+    """
+    path = get_credential(filename)
+    if not path:
+        return False
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        logger.exception("failed to remove credential %s", filename)
+        return False
+
+
 def get_tenants_summary() -> dict[str, dict]:
     """Get a summary of all tenants and their device counts.
 

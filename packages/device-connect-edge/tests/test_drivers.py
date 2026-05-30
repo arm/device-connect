@@ -392,6 +392,114 @@ class TestCollectEventSubscriptions:
         subs = driver._collect_event_subscriptions()
         assert len(subs) == 2
 
+    def test_underscore_prefixed_handler_is_still_collected(self):
+        """Single-underscore @on handlers must not silently become no-ops."""
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="phone", event_name="state_changed")
+            async def _on_phone_state(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        assert len(subs) == 1
+        assert subs[0]["device_type"] == "phone"
+        assert subs[0]["event_name"] == "state_changed"
+
+    def test_collector_survives_raising_property(self):
+        """A driver subclass with a @property that raises must not break
+        subscription collection. ``dir()`` surfaces every attribute on
+        the class, and ``getattr`` will invoke descriptors — a buggy or
+        lazy-init property would otherwise crash setup_subscriptions for
+        unrelated handlers."""
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @property
+            def _not_ready_yet(self):
+                # Simulates a property that depends on connect() having
+                # run, or a hardware probe that fails until init.
+                raise RuntimeError("not ready")
+
+            @on(device_type="phone", event_name="state_changed")
+            async def on_phone_state(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+        subs = driver._collect_event_subscriptions()
+        # Property side-effect was tolerated; the real handler still
+        # registered.
+        assert len(subs) == 1
+        assert subs[0]["event_name"] == "state_changed"
+
+    @pytest.mark.asyncio
+    async def test_portal_mode_device_type_filter_warns_at_setup(self, caplog):
+        """In portal/registry mode there is no D2D peer cache to resolve
+        a source device's type, so ``@on(device_type=...)`` filtering
+        silently passes events from other device types through. The
+        driver must emit a single setup-time WARNING so the subscriber
+        sees the gotcha once, not on every event."""
+
+        class MyDriver(DeviceDriver):
+            device_type = "test"
+
+            @on(device_type="camera", event_name="motion")
+            async def on_motion(self, device_id, event_name, payload):
+                pass
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        driver = MyDriver()
+
+        mock_messaging = AsyncMock()
+        mock_messaging.subscribe_with_subject = AsyncMock(return_value=MagicMock())
+
+        class FakeRouter:
+            def __init__(self):
+                self._messaging = mock_messaging
+                self._tenant = "default"
+
+        # Portal/registry mode: _device is set, but _d2d_collector is None.
+        # Use a plain object — MagicMock would auto-generate
+        # ``_is_event_subscription`` truthy values and leak phantom
+        # subscriptions into _collect_event_subscriptions.
+        class FakeDevice:
+            _d2d_collector = None
+        driver._device = FakeDevice()
+        driver._device_id = "watcher-1"
+        driver._router = FakeRouter()
+
+        with caplog.at_level("WARNING", logger="device_connect_edge.drivers.base"):
+            await driver.setup_subscriptions()
+
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        matching = [
+            r for r in warnings
+            if "device_type filtering is" in r.message
+            and "best-effort" in r.message
+        ]
+        assert len(matching) == 1, (
+            f"expected exactly one portal-mode warning, got "
+            f"{[r.message for r in warnings]}"
+        )
+
 
 # ── setup_subscriptions error isolation ───────────────────────────
 

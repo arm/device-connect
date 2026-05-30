@@ -53,6 +53,32 @@ _device_ttl: dict[str, int] = {}
 _DEFAULT_TTL = 15                # Fallback TTL when device doesn't report one
 _PULL_REGISTRATION_TIMEOUT = 5   # Timeout for requestRegistration RPC
 
+# Server-side cap for discovery/listDevices page sizes when the caller
+# opts into pagination by passing `limit`. NATS rejects any single
+# publish larger than the broker's max_payload, so the registry clamps
+# the page size to bound the reply size regardless of what `limit` the
+# caller asked for. Empirically a flashlight-auditorium phone record is
+# ~13KB serialized, so 200 records ~= 2.6MB, which fits comfortably under
+# the 8MB max_payload set in security_infra/setup_deployment.sh while
+# keeping per-page round-trip small.
+#
+# Old clients that omit `limit` entirely fall through to the legacy
+# unpaginated reply path — they keep working at small fleet scale and
+# fail loudly with `max_payload exceeded` at large scale, the same
+# behavior they had before this PR. Silently truncating their reply
+# would be worse: they would parse a partial fleet as if it were
+# complete and act on stale views. Operators hitting the ceiling should
+# upgrade clients to a version that passes `limit`.
+_LIST_DEVICES_MAX_LIMIT = int(os.getenv("DC_LIST_DEVICES_MAX_LIMIT", "200"))
+
+# Track which over-cap ``limit`` values we've already warned about so a
+# misconfigured client doesn't spam the log on every page. Deduped by the
+# requested value, not by caller — the warning is operator-facing
+# ("someone is tuning a knob that no longer matches the server cap"),
+# not per-request observability. Bounded by the number of distinct
+# limits a caller can ask for; in practice 1-2 values.
+_WARNED_LIMIT_CLAMPS: set[int] = set()
+
 
 def _resolve_tenants() -> List[str]:
     """Resolve the list of tenants to handle.
@@ -378,18 +404,161 @@ def _make_list_handler(
             if method == "discovery/listDevices":
                 device_type = params.get("device_type")
                 location = params.get("location")
-                devs = await asyncio.to_thread(
-                    registry.list_devices, tenant,
-                    device_type=device_type, location=location,
-                )
+                # Pagination: ``offset`` and ``limit`` are optional.
+                #
+                # If ``limit`` is absent the caller is on the legacy
+                # protocol — return the full filtered fleet in a single
+                # reply. This preserves backward compatibility (small
+                # deployments keep working untouched) and surfaces the
+                # original max_payload failure loudly at fleet scale
+                # rather than silently truncating to a cap the caller
+                # doesn't know about.
+                #
+                # If ``limit`` is present the caller understands the
+                # paged contract: we clamp to ``_LIST_DEVICES_MAX_LIMIT``
+                # to bound reply size, return ``next_offset`` and
+                # ``total_matched``, and expect the caller to loop.
+                #
+                # Review notes (do not re-litigate without reading):
+                # - Silently clamping legacy callers to the cap was
+                #   tried in 2349130 and reverted in 79247e6: a partial
+                #   reply with no ``next_offset`` signal is worse than
+                #   a loud failure because the caller acts on a
+                #   truncated fleet as if it were complete. Operators
+                #   hitting the ceiling must upgrade the client.
+                # - Streaming replies (multi-message paginated stream)
+                #   were considered and rejected in the PR design:
+                #   adds reassembly complexity for every caller while
+                #   buying nothing the page loop doesn't already get.
+                # - ``limit <= 0`` returns -32602 rather than mapping
+                #   to the cap (was a review-round-3 fix); the
+                #   surprise mapping masked client bugs that passed
+                #   unintentional zero/negative values.
+                requested_limit = params.get("limit")
+                paged = requested_limit is not None
+                # ``offset`` is validated up front so a malformed value
+                # (e.g. ``"abc"``) produces a clean JSON-RPC error
+                # rather than a 500 from int().
+                raw_offset = params.get("offset", 0)
+                try:
+                    offset_val = int(raw_offset or 0)
+                except (TypeError, ValueError):
+                    await messaging.publish(
+                        reply,
+                        build_rpc_error(
+                            payload.get("id"), -32602,
+                            f"offset must be an integer, got {raw_offset!r}",
+                        ),
+                    )
+                    return
+                if offset_val < 0:
+                    await messaging.publish(
+                        reply,
+                        build_rpc_error(
+                            payload.get("id"), -32602,
+                            f"offset must be non-negative, got {offset_val}",
+                        ),
+                    )
+                    return
+
+                if paged:
+                    try:
+                        requested_limit_int = int(requested_limit)
+                    except (TypeError, ValueError):
+                        await messaging.publish(
+                            reply,
+                            build_rpc_error(
+                                payload.get("id"), -32602,
+                                f"limit must be an integer, got {requested_limit!r}",
+                            ),
+                        )
+                        return
+                    # Reject ``limit <= 0`` rather than silently mapping
+                    # it to the server cap. Mapping was surprising
+                    # ("limit=0" usually means "no rows" elsewhere) and
+                    # masked client bugs that passed unintentional zero
+                    # / negative values.
+                    if requested_limit_int <= 0:
+                        await messaging.publish(
+                            reply,
+                            build_rpc_error(
+                                payload.get("id"), -32602,
+                                f"limit must be positive, got {requested_limit_int}",
+                            ),
+                        )
+                        return
+                    effective_limit = min(
+                        requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
+                    )
+                    # Surface silent clamps. The wire contract handles
+                    # the over-cap request correctly via ``next_offset``
+                    # — the caller just paginates more aggressively than
+                    # it asked for — but without a log line operators
+                    # tuning ``DEVICE_CONNECT_LIST_PAGE_SIZE`` above the
+                    # server cap have no signal that their knob is being
+                    # ignored. Deduped per process per requested value
+                    # so a steady-state misconfigured client logs once,
+                    # not once per page.
+                    if (
+                        effective_limit < requested_limit_int
+                        and requested_limit_int not in _WARNED_LIMIT_CLAMPS
+                    ):
+                        _WARNED_LIMIT_CLAMPS.add(requested_limit_int)
+                        logger.warning(
+                            "discovery/listDevices: caller requested limit=%d, "
+                            "clamped to server cap _LIST_DEVICES_MAX_LIMIT=%d. "
+                            "Caller will paginate more aggressively than "
+                            "expected. Raise DC_LIST_DEVICES_MAX_LIMIT (and "
+                            "NATS max_payload) if the smaller page is "
+                            "unintended.",
+                            requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
+                        )
+                    page, next_offset, total = await asyncio.to_thread(
+                        registry.list_devices_page, tenant,
+                        device_type=device_type,
+                        location=location,
+                        offset=offset_val,
+                        limit=effective_limit,
+                    )
+                else:
+                    page = await asyncio.to_thread(
+                        registry.list_devices, tenant,
+                        device_type=device_type, location=location,
+                    )
+                    # next_offset / total are unused on the legacy reply
+                    # path (see the ``if paged`` branch below); the
+                    # legacy shape is just ``{"devices": page}``.
+
                 if acl_manager:
                     requester_id = params.get("requester_id", "")
-                    devs = acl_manager.filter_visible_devices(
-                        requester_id, devs, tenant=tenant
+                    # ACL filtering runs after pagination — devices the
+                    # caller is not allowed to see are dropped from the
+                    # page rather than from the unsliced fleet, so
+                    # ``total_matched`` may be larger than what
+                    # eventually reaches the requester and successive
+                    # pages may be shorter than ``limit``. That's
+                    # acceptable: ACL is opt-in and primarily a
+                    # server-side hint, not a strict cardinality
+                    # contract. Callers should not assume
+                    # ``len(devices) == limit`` even mid-fleet.
+                    page = acl_manager.filter_visible_devices(
+                        requester_id, page, tenant=tenant
                     )
+
+                if paged:
+                    response_result = {
+                        "devices": page,
+                        "next_offset": next_offset,
+                        "total_matched": total,
+                    }
+                else:
+                    # Legacy reply shape: just ``devices``. Don't emit
+                    # ``next_offset`` so old clients that ignore unknown
+                    # keys aren't surprised by new metadata.
+                    response_result = {"devices": page}
                 await messaging.publish(
                     reply,
-                    build_rpc_response(payload.get("id"), {"devices": devs})
+                    build_rpc_response(payload.get("id"), response_result),
                 )
             elif method == "discovery/getDevice":
                 device_id = params.get("device_id")

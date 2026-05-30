@@ -21,6 +21,7 @@
               </svg>
             </div>
             <span class="font-semibold text-gray-900">Device Connect</span>
+            <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300" title="This is a testing version, not a production version. Do not use with real or sensitive data.">TESTING ONLY — NOT FOR PRODUCTION</span>
           </a>
           {% if user.role == 'admin' %}
           <a href="/admin" class="text-sm {% if nav == 'admin' %}text-indigo-600 font-medium{% else %}text-gray-500 hover:text-gray-700{% endif %}">Dashboard</a>

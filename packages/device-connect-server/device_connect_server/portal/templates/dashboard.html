@@ -10,15 +10,15 @@
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Credentials Created</div>
-    <div class="text-3xl font-bold text-gray-900 mt-1">{{ creds_count }}</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1"><span id="creds-count">{{ creds_count }}</span></div>
   </div>
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Devices Online</div>
-    <div class="text-3xl font-bold text-green-600 mt-1">{{ online_count }}</div>
+    <div class="text-3xl font-bold text-green-600 mt-1"><span id="online-count">{{ online_count }}</span></div>
   </div>
   <div class="bg-white rounded-xl border border-gray-200 p-5">
     <div class="text-sm font-medium text-gray-500">Devices Registered</div>
-    <div class="text-3xl font-bold text-gray-900 mt-1">{{ registered_count }}</div>
+    <div class="text-3xl font-bold text-gray-900 mt-1"><span id="registered-count">{{ registered_count }}</span></div>
   </div>
 </div>
 
@@ -45,34 +45,259 @@
       Auto-refreshing
     </span>
   </div>
+  {# Initial table render only — htmx fires `load` once and the
+     fragment lands here. From then on, /api/devices/live.json drives
+     in-place cell updates (status pill, location, last-seen) and
+     counter refresh, so the table DOM is never wholesale swapped
+     and scroll/expand state survives. #}
   <div id="live-devices"
        hx-get="/api/devices/live?tenant={{ tenant }}"
-       hx-trigger="load, every 3s"
+       hx-trigger="load"
        hx-swap="innerHTML">
     <div class="px-5 py-8 text-center text-gray-400 text-sm">Loading devices...</div>
   </div>
 </div>
 
 <script>
-window._expandedDevices = window._expandedDevices || new Set();
+// Tracks the last-seen capabilities hash per device so the JSON poll
+// only refreshes an expanded detail panel when the device's schema
+// actually changed.
+window._deviceCapsHash = window._deviceCapsHash || {};
+
+// Auth guard for background fetches. The auth middleware returns a real
+// 401 (not an HTML redirect) for unauthenticated /api/ requests, so a
+// fetch can never inject the login page into a fragment slot. When we
+// see that 401, bounce the whole tab through the top-level login flow.
+// Returns true when it has taken over (caller should stop processing).
+function authGuard(r) {
+  if (r.status === 401) {
+    var next = window.location.pathname + window.location.search;
+    window.location.href = '/login?next=' + encodeURIComponent(next);
+    return true;
+  }
+  return false;
+}
+
+function loadDetailIfNeeded(row, deviceId) {
+  var url = row.getAttribute('data-detail-url');
+  var slot = row.querySelector('.detail-content');
+  if (!url || !slot) return;
+  if (slot.dataset.loaded === 'true' || slot.dataset.loading === 'true') return;
+  slot.dataset.loading = 'true';
+  fetch(url, {credentials: 'same-origin'})
+    .then(function(r) {
+      if (authGuard(r)) return null;
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    })
+    .then(function(html) {
+      slot.innerHTML = html;
+      slot.dataset.loaded = 'true';
+      delete slot.dataset.loading;
+    })
+    .catch(function(err) {
+      delete slot.dataset.loading;
+      // Use textContent on a child so an Error message that happens
+      // to contain HTML (or future server-side error text routed
+      // through this path) can't inject markup.
+      slot.innerHTML = '';
+      var p = document.createElement('p');
+      p.className = 'text-xs text-red-500';
+      p.textContent = 'Failed to load details: ' + (err && err.message ? err.message : err);
+      slot.appendChild(p);
+    });
+}
 
 function toggleDetail(deviceId) {
+  // The row's `hidden` class IS the expansion state — we no longer
+  // need a side Set, because the table DOM is stable across polls.
   var row = document.getElementById('detail-' + deviceId);
   var chevron = document.getElementById('chevron-' + deviceId);
   if (!row) return;
   var opening = row.classList.contains('hidden');
   row.classList.toggle('hidden');
   if (chevron) chevron.style.transform = opening ? 'rotate(90deg)' : '';
-  if (opening) window._expandedDevices.add(deviceId);
-  else window._expandedDevices.delete(deviceId);
+  if (opening) loadDetailIfNeeded(row, deviceId);
 }
 
-// Pause auto-refresh while any detail row is expanded
-document.getElementById('live-devices').addEventListener('htmx:beforeRequest', function(evt) {
-  if (window._expandedDevices.size > 0) {
-    evt.preventDefault();
+// --- In-place poll (replaces the old table-wide htmx swap) ----------
+//
+// /api/devices/live.json returns a JSON snapshot of every device's
+// live values + a capabilities hash, plus the three header counts.
+// We update only the cells that change. The row, the chevron, the
+// expanded-state `class="hidden"` toggle, and the slot content all
+// survive untouched, so scroll position and any open invoke/event-log
+// state stay where the operator put them.
+//
+// Minimum scope: this version does NOT handle a brand new device
+// appearing or an existing device disappearing — those require a page
+// reload to show up. The reported "row collapses on poll" bug is
+// fixed regardless.
+
+function statusPillHtml(status) {
+  if (status === 'available') {
+    return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">' +
+             '<span class="w-1.5 h-1.5 bg-green-500 rounded-full mr-1 pulse-dot"></span>' +
+             'online' +
+           '</span>';
   }
-});
+  var safe = String(status == null ? 'unknown' : status)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">' +
+           '<span class="w-1.5 h-1.5 bg-gray-400 rounded-full mr-1"></span>' +
+           safe +
+         '</span>';
+}
+
+function updateRowFromJson(d) {
+  var row = document.getElementById('summary-' + d.device_id);
+  if (!row) return false;  // caller will fetch + insert via insertNewRow
+
+  var statusCell = row.querySelector('.cell-status');
+  if (statusCell) statusCell.innerHTML = statusPillHtml(d.status);
+  var locCell = row.querySelector('.cell-location');
+  if (locCell) locCell.textContent = d.location || '—';
+  var seenCell = row.querySelector('.cell-lastseen');
+  if (seenCell) seenCell.textContent = d.last_seen || '—';
+
+  // Capabilities changed AND the detail is already expanded with
+  // content loaded — refresh the detail in place without collapsing
+  // the row. The event log lives inside the slot, so close any open
+  // stream first: the events list itself may have changed, and the
+  // post-refetch slot HTML will have a fresh empty panel anyway.
+  var prevHash = window._deviceCapsHash[d.device_id];
+  if (prevHash && prevHash !== d.capabilities_hash) {
+    var detailRow = document.getElementById('detail-' + d.device_id);
+    if (detailRow && !detailRow.classList.contains('hidden')) {
+      var slot = detailRow.querySelector('.detail-content');
+      if (slot && slot.dataset.loaded === 'true') {
+        if (typeof closeEventLog === 'function') closeEventLog(d.device_id);
+        delete slot.dataset.loaded;
+        delete slot.dataset.loading;
+        loadDetailIfNeeded(detailRow, d.device_id);
+      }
+    }
+  }
+  window._deviceCapsHash[d.device_id] = d.capabilities_hash;
+  return true;
+}
+
+// In-flight map so a slow row-html fetch doesn't get re-issued by a
+// subsequent poll firing before the first response lands. We track
+// "still wanted" too: if the device disappears from a JSON poll
+// between issuing the fetch and the response landing, we drop the
+// response on the floor instead of appending an orphan row.
+//
+// Race we're guarding against:
+//   poll N    : device X present  -> insertNewDeviceRow(X) starts fetch
+//   poll N+1  : device X absent   -> removeDeviceRow(X) is a no-op
+//                                    (no summary row in DOM yet)
+//   fetch lands: append row for X -> orphan row until next poll
+// With the "still wanted" gate, removeDeviceRow clears the pending
+// flag and the late response is discarded.
+window._pendingInserts = window._pendingInserts || {};
+
+function insertNewDeviceRow(deviceId, capsHash, tbody) {
+  if (window._pendingInserts[deviceId]) return;
+  window._pendingInserts[deviceId] = true;
+  fetch('/api/devices/' + encodeURIComponent(deviceId) + '/row-html?tenant={{ tenant }}',
+        { credentials: 'same-origin' })
+    .then(function(r) { if (authGuard(r)) return null; return r.ok ? r.text() : null; })
+    .then(function(html) {
+      // Was this insert cancelled by a removeDeviceRow that ran
+      // between fetch start and response landing? If so the flag is
+      // gone -- discard the response.
+      if (!window._pendingInserts[deviceId]) return;
+      delete window._pendingInserts[deviceId];
+      if (!html) return;
+      // Re-check the DOM: a parallel poll may have already inserted
+      // the row, in which case we must not duplicate it.
+      if (document.getElementById('summary-' + deviceId)) return;
+      var liveTbody = document.querySelector('#live-devices tbody');
+      if (!liveTbody) return;
+      var holder = document.createElement('tbody');
+      holder.innerHTML = html;
+      while (holder.firstChild) liveTbody.appendChild(holder.firstChild);
+      window._deviceCapsHash[deviceId] = capsHash;
+    })
+    .catch(function() { delete window._pendingInserts[deviceId]; });
+}
+
+function removeDeviceRow(deviceId) {
+  var summary = document.getElementById('summary-' + deviceId);
+  var detail = document.getElementById('detail-' + deviceId);
+  if (summary && summary.parentElement) summary.parentElement.removeChild(summary);
+  if (detail && detail.parentElement) detail.parentElement.removeChild(detail);
+  delete window._deviceCapsHash[deviceId];
+  // Cancel any in-flight insertNewDeviceRow fetch for this id: the
+  // response landing after we've decided this device is gone would
+  // otherwise re-add an orphan row.
+  delete window._pendingInserts[deviceId];
+  // Tear down any live SSE drawer for this device.
+  if (typeof closeEventLog === 'function') closeEventLog(deviceId);
+}
+
+// One-shot full-fragment swap, used only across the empty<->non-empty
+// transition where the table itself either doesn't exist yet or has
+// to be replaced by the empty-state placeholder. Incremental updates
+// can't bridge that gap because there's no <tbody> to append to /
+// remove from.
+function reloadLiveFragment() {
+  // Route through htmx (not a raw fetch + innerHTML) so the fragment's
+  // hx-swap-oob counter spans are relocated into the header cards
+  // instead of rendering as literal text below the table.
+  if (window.htmx) {
+    htmx.ajax('GET', '/api/devices/live?tenant={{ tenant }}', {
+      target: '#live-devices',
+      swap: 'innerHTML',
+    });
+  }
+}
+
+function pollDevices() {
+  fetch('/api/devices/live.json?tenant={{ tenant }}', { credentials: 'same-origin' })
+    .then(function(r) { if (authGuard(r)) return null; return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) return;
+      var oc = document.getElementById('online-count');
+      if (oc) oc.textContent = data.counts.online;
+      var rc = document.getElementById('registered-count');
+      if (rc) rc.textContent = data.counts.registered;
+      var cc = document.getElementById('creds-count');
+      if (cc) cc.textContent = data.counts.creds;
+
+      var tbody = document.querySelector('#live-devices tbody');
+      var jsonHasDevices = data.devices.length > 0;
+
+      // Empty<->non-empty transitions need to swap the whole fragment
+      // (either we need the table scaffolding or the empty-state div).
+      if (jsonHasDevices !== !!tbody) {
+        reloadLiveFragment();
+        return;
+      }
+      if (!tbody) return;  // empty fleet, empty DOM — nothing to do
+
+      var seen = {};
+      data.devices.forEach(function(d) {
+        seen[d.device_id] = true;
+        if (!updateRowFromJson(d)) {
+          insertNewDeviceRow(d.device_id, d.capabilities_hash, tbody);
+        }
+      });
+
+      // Remove rows for devices that disappeared from the JSON.
+      Array.prototype.forEach.call(
+        tbody.querySelectorAll('tr[id^="summary-"]'),
+        function(row) {
+          var id = row.id.substring('summary-'.length);
+          if (!seen[id]) removeDeviceRow(id);
+        },
+      );
+    })
+    .catch(function() { /* transient failures are silently retried on the next tick */ });
+}
+
+setInterval(pollDevices, 10000);
 
 // --- RPC Invoke ---
 window._invokeState = {};
@@ -140,8 +365,9 @@ function submitInvoke(deviceId) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ function: state.fn, params: params })
   })
-  .then(function(r) { return r.json(); })
+  .then(function(r) { if (authGuard(r)) return null; return r.json(); })
   .then(function(data) {
+    if (data == null) return;  // auth guard took over
     statusEl.textContent = data.error ? 'Error' : 'OK';
     resultPre.textContent = JSON.stringify(data, null, 2);
     resultPre.classList.remove('hidden');
@@ -154,15 +380,23 @@ function submitInvoke(deviceId) {
 }
 
 // --- Event Log (SSE) ---
+//
+// The panel is rendered server-side inside each device's detail row
+// (devices/_live_detail.html). openEventLog finds the existing panel,
+// fills in the event name, un-hides it, and binds an EventSource to
+// the entries div. Safe to live in the detail slot because the
+// JSON-poll architecture only re-fetches that slot on capability
+// change, and updateRowFromJson() closes any open stream first.
 window._eventSources = {};
 
 function openEventLog(deviceId, eventName) {
-  // Close existing stream for this device
+  // Close any existing stream for this device first.
   closeEventLog(deviceId);
 
   var panel = document.getElementById('eventlog-' + deviceId);
   var nameEl = document.getElementById('eventlog-name-' + deviceId);
   var entries = document.getElementById('eventlog-entries-' + deviceId);
+  if (!panel || !nameEl || !entries) return;
 
   nameEl.textContent = eventName;
   entries.innerHTML = '<p class="text-gray-400 italic">Listening for events...</p>';
@@ -172,7 +406,6 @@ function openEventLog(deviceId, eventName) {
   window._eventSources[deviceId] = es;
 
   es.onmessage = function(e) {
-    // Remove placeholder
     var placeholder = entries.querySelector('p.italic');
     if (placeholder) placeholder.remove();
 
@@ -198,11 +431,7 @@ function openEventLog(deviceId, eventName) {
     };
 
     entries.appendChild(row);
-
-    // Cap at 100 entries
     while (entries.children.length > 100) entries.removeChild(entries.firstChild);
-
-    // Auto-scroll
     entries.scrollTop = entries.scrollHeight;
   };
 

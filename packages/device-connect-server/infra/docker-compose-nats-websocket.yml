@@ -1,0 +1,41 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Override: expose the NATS WebSocket listener to the host for browser-based
+# devices. Combine with the main multi-tenant compose file:
+#
+#   docker compose -f infra/docker-compose-multitenant-nats.yml \
+#                  -f infra/docker-compose-nats-websocket.yml up -d
+#
+# Prerequisite: the generated NATS config must include a `websocket {}` block.
+# Pass --enable-websocket to security_infra/setup_deployment.sh.
+#
+# IMPORTANT:
+#   The port is bound to 127.0.0.1 by default. The listener inside the
+#   container is plain WS (unless --websocket-tls-cert/--websocket-tls-key
+#   were passed to setup). A reverse proxy (Caddy, nginx, etc.) MUST do
+#   TLS termination on the host before the port is exposed to the network --
+#   without TLS, NATS JWTs travel in cleartext.
+#
+# Env vars (read at bring-up time, both default to 8443):
+#   DC_NATS_WS_PORT     The container-side port. MUST match the port that
+#                       setup_deployment.sh --websocket-port wrote into the
+#                       nats config. If they drift, NATS listens on one
+#                       port and the host maps a different one, and the
+#                       listener is silently unreachable.
+#   DC_NATS_WS_BIND     The host-side bind address + port. Defaults to
+#                       127.0.0.1:8443. Examples:
+#                         DC_NATS_WS_BIND=127.0.0.1:8443  # loopback only
+#                         DC_NATS_WS_BIND=10.0.0.5:8443   # LAN only
+#                       Never set it to 0.0.0.0 without TLS termination.
+#
+# Typical invocation (one-liner -- setup_deployment.sh prints this for you):
+#   DC_NATS_WS_PORT=8443 docker compose \
+#       -f infra/docker-compose-multitenant-nats.yml \
+#       -f infra/docker-compose-nats-websocket.yml up -d
+
+services:
+  nats:
+    ports:
+      - "${DC_NATS_WS_BIND:-127.0.0.1:8443}:${DC_NATS_WS_PORT:-8443}"

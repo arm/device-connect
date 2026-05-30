@@ -1,4 +1,12 @@
-<div class="px-5 py-4 border-b border-gray-100 hover:bg-gray-50 flex items-center justify-between bg-green-50" style="transition: background-color 2s ease-out">
+{# Single device credential row, used by both the /devices listing
+   and the create-device htmx response. `highlight` (default false)
+   toggles a brief green flash for newly-created rows. The wrapping
+   id="cred-row-{device_id}" gives the Revoke button a stable
+   hx-target for `hx-swap="delete"` to remove just this row on a
+   successful revoke. #}
+<div id="cred-row-{{ cred.device_id }}"
+     class="cred-row px-5 py-4 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 flex items-center justify-between{% if highlight %} bg-green-50{% endif %}"
+     {% if highlight %}style="transition: background-color 2s ease-out"{% endif %}>
   <div>
     <div class="text-sm font-medium text-gray-900">{{ cred.device_id }}</div>
     <div class="text-xs text-gray-400 mt-0.5">{{ cred.filename }}</div>
@@ -9,5 +17,13 @@
       <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
       Download
     </a>
+    <button hx-post="/api/devices/{{ cred.device_id }}/revoke"
+            hx-confirm="Revoke {{ cred.device_id }}? The device will be disconnected from the broker and its credential file deleted. This cannot be undone."
+            hx-target="#cred-row-{{ cred.device_id }}"
+            hx-swap="delete"
+            class="inline-flex items-center px-3 py-1.5 bg-red-50 text-red-700 text-xs font-medium rounded-lg hover:bg-red-100 transition-colors">
+      <svg class="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
+      Revoke
+    </button>
   </div>
 </div>

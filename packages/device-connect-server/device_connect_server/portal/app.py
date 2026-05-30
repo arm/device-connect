@@ -73,16 +73,38 @@ async def auth_middleware(request: web.Request, handler):
     session = await _get_session(request)
     if not session.get("username"):
         # Preserve the requested URL so post-login redirect lands the user
-        # back on (e.g.) the CLI approval page.
+        # back on (e.g.) the CLI approval page — but only for top-level
+        # HTML navigations. Background htmx polls and JSON fetches under
+        # /api/ return HTML fragments or JSON, not full pages, so using
+        # them as the post-login destination dumps the user onto a
+        # chrome-less fragment. The dashboard's 10s poll on
+        # /api/devices/live was the original repro: portal restart ->
+        # session lost -> next poll redirected to /login with the poll
+        # URL as ``next`` -> after login the user landed on the raw
+        # fragment instead of the dashboard.
+        is_htmx = request.headers.get("HX-Request") == "true"
+        is_api = path.startswith("/api/")
+        if is_htmx:
+            # htmx swaps response bodies into the page, so a 302 to the
+            # login page would be injected as a fragment. Use htmx's own
+            # client-side redirect header instead.
+            resp = web.Response(status=200)
+            resp.headers["HX-Redirect"] = "/login"
+            return resp
+        if is_api:
+            # Background browser fetches (the JSON poll, row-html,
+            # live-detail, invoke) are raw fetch() calls that follow
+            # redirects: a 302 to /login resolves to the login page with
+            # r.ok === true and gets injected into a fragment slot. Return
+            # a real 401 so the client can never mistake the login page
+            # for fragment data; the client bounces the tab through the
+            # top-level login flow when it sees this.
+            return _json_error(401, "session_expired", "Session expired; log in again")
         next_url = path
         if request.query_string:
             next_url = f"{path}?{request.query_string}"
         from urllib.parse import quote
         login_url = "/login?next=" + quote(next_url, safe="") if path != "/login" else "/login"
-        if request.headers.get("HX-Request"):
-            resp = web.Response(status=200)
-            resp.headers["HX-Redirect"] = login_url
-            return resp
         raise web.HTTPFound(login_url)
 
     request["user"] = session
@@ -179,6 +201,10 @@ def create_app() -> web.Application:
 
     # Seed admin on startup
     app.on_startup.append(_on_startup)
+    # Close the cached NATS invoke client on shutdown. Without this the
+    # socket leaks at graceful exit because the client is module-level
+    # state in nats_rpc, not tied to the aiohttp Application lifecycle.
+    app.on_cleanup.append(_on_cleanup)
 
     return app
 
@@ -190,3 +216,12 @@ async def _on_startup(app: web.Application):
         ensure_admin()
     except Exception as e:
         logger.warning("Could not seed admin account (etcd may not be ready): %s", e)
+
+
+async def _on_cleanup(app: web.Application):
+    """Release long-lived resources held at module scope."""
+    try:
+        from .services.nats_rpc import close_invoke_client
+        await close_invoke_client()
+    except Exception as e:
+        logger.warning("Error closing cached NATS invoke client: %s", e)

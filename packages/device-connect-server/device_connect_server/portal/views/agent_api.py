@@ -72,6 +72,7 @@ def setup_routes(app: web.Application):
     r.add_get(PREFIX + "/devices/{device_id}/events", device_events)
     r.add_get(PREFIX + "/devices/{device_id}/credentials", device_credentials_get)
     r.add_post(PREFIX + "/devices/{device_id}/credentials:rotate", device_credentials_rotate)
+    r.add_post(PREFIX + "/devices/{device_id}/revoke", device_revoke)
     r.add_post(PREFIX + "/devices/{device_id}/invoke", device_invoke)
     r.add_post(PREFIX + "/invoke-with-fallback", invoke_with_fallback)
     r.add_get(
@@ -574,6 +575,94 @@ async def device_credentials_rotate(request: web.Request) -> web.Response:
     cred_data = credentials_svc.get_credential_data(filename) or {}
     _audit(request, "credentials_rotate", trace_id=trace, device_id=full_name)
     return _ok({"filename": filename, "content": cred_data}, trace_id=trace)
+
+
+async def device_revoke(request: web.Request) -> web.Response:
+    """Revoke a device: kill the backend account AND delete the local cred file.
+
+    This is the full-revocation counterpart to ``device_delete`` (which
+    only decommissions the backend account) and to ``credentials:rotate``
+    (which only re-issues). After ``revoke`` the device cannot reconnect
+    and disappears from the portal credentials list.
+
+    Requires ``devices:provision`` — same scope as delete, since the
+    operation is at least as destructive.
+    """
+    trace = _trace_id()
+    _, err = _require_scope(request, "devices:provision")
+    if err:
+        return err
+    tenant, err = _resolve_tenant(request)
+    if err:
+        return err
+
+    device_id = request.match_info["device_id"]
+    full_name = _full_device_name(tenant, device_id)
+    filename = f"{full_name}.creds.json"
+
+    # Same shape as the portal handler: a backend without remove_device
+    # is a soft success (file still deleted so the operator's UI matches
+    # intent), but a hard failure from a backend that DOES support
+    # remove_device leaves the file in place so the operator can retry.
+    # Otherwise we'd risk a ghost file pointing at a still-valid account.
+    backend = get_backend()
+    remove = getattr(backend, "remove_device", None)
+    backend_supported = remove is not None
+    backend_error: str | None = None
+    reload_warning: str | None = None
+    if backend_supported:
+        try:
+            await remove(tenant, full_name)
+        except Exception as e:
+            logger.exception("revoke: backend remove failed for %s/%s", tenant, full_name)
+            backend_error = str(e)
+        else:
+            # remove() succeeded -> the account is gone from the
+            # authoritative store. reload_broker() is independently
+            # retryable, so its failure must NOT strand the credential
+            # file (a retry would re-call remove() against a deleted
+            # account and fail forever). Warn and delete the file.
+            try:
+                await backend.reload_broker()
+            except Exception as e:
+                logger.exception("revoke: broker reload failed for %s/%s", tenant, full_name)
+                reload_warning = (
+                    f"account revoked but broker reload failed: {e}; the "
+                    f"broker may keep serving the old account until its "
+                    f"next reload"
+                )
+    else:
+        backend_error = f"{backend.backend_name()} backend does not support remove_device"
+
+    if backend_supported and backend_error is not None:
+        # Hard backend failure: report it and keep the file. 502 tells
+        # the caller the upstream broker is the problem, not the portal.
+        return _err(status=502, code="backend_revoke_failed",
+                    message=f"Backend revocation failed for {full_name}: "
+                            f"{backend_error}. Credential file left in place; "
+                            f"retry once the backend is healthy.",
+                    trace_id=trace)
+
+    deleted = credentials_svc.delete_credential(filename)
+    if not deleted:
+        # File was there a moment ago (or the backend successfully
+        # removed it); name the fact that the account is already gone
+        # so the caller knows the partial-success state.
+        message = f"Credential file not found: {filename}"
+        if backend_supported and backend_error is None:
+            message += (
+                ". Backend account was already revoked; only the local "
+                "file is missing."
+            )
+        return _err(status=404, code="not_found",
+                    message=message, trace_id=trace)
+
+    _audit(request, "revoke", trace_id=trace, device_id=full_name)
+    result = {"device_id": full_name, "revoked": True}
+    warning = backend_error or reload_warning
+    if warning:
+        result["backend_warning"] = warning
+    return _ok(result, trace_id=trace)
 
 
 async def device_delete(request: web.Request) -> web.Response:

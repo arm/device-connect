@@ -425,6 +425,27 @@ async def cmd_devices_delete(client: PortalClient, args) -> int:
     return _exit_for_status(status, body)
 
 
+async def cmd_devices_revoke(client: PortalClient, args) -> int:
+    """Full revoke: kill the backend account and delete the credential file.
+
+    Distinct from ``revoke-credentials`` (which only rotates: re-issues
+    creds, file stays) and from ``delete`` (which decommissions the
+    backend account but leaves the file on disk). After ``revoke`` the
+    cred is gone from the portal's "Credentials Created" count.
+    """
+    if not args.confirm:
+        sys.stderr.write("revoke requires --confirm to proceed\n")
+        return 2
+    params = {"tenant": args.tenant} if args.tenant else None
+    status, body = await client.request(
+        "POST", _device_subpath(args.device_id, "/revoke"), params=params,
+    )
+    _maybe_print_error(status, body)
+    if 200 <= status < 300:
+        _emit(body, args.output)
+    return _exit_for_status(status, body)
+
+
 async def cmd_devices_invoke(client: PortalClient, args) -> int:
     try:
         params_obj = json.loads(args.params) if args.params else {}
@@ -603,11 +624,20 @@ def _build_parser() -> argparse.ArgumentParser:
     d_rev.add_argument("device_id")
     d_rev.set_defaults(func=cmd_devices_revoke_credentials)
 
-    d_del = dsub.add_parser("delete", help="decommission a device")
+    d_del = dsub.add_parser("delete", help="decommission a device (leaves cred file)")
     d_del.add_argument("device_id")
     d_del.add_argument("--confirm", action="store_true",
                        help="required: confirms the destructive action")
     d_del.set_defaults(func=cmd_devices_delete)
+
+    d_revoke = dsub.add_parser(
+        "revoke",
+        help="full revoke: kill backend account AND delete the cred file",
+    )
+    d_revoke.add_argument("device_id")
+    d_revoke.add_argument("--confirm", action="store_true",
+                          help="required: confirms the destructive action")
+    d_revoke.set_defaults(func=cmd_devices_revoke)
 
     d_inv = dsub.add_parser("invoke", help="invoke a device function")
     d_inv.add_argument("device_id")

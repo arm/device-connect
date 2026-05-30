@@ -37,6 +37,28 @@ def _etcd_client():
     return Etcd3Client(host=config.ETCD_HOST, port=config.ETCD_PORT)
 
 
+def format_live_device(data: dict) -> dict:
+    """Shape a raw etcd device record into the dashboard's row dict.
+
+    Shared between list_live_devices (table render) and the per-device
+    row-html endpoint (used by the dashboard JSON poll when a brand new
+    device appears mid-session). Keeping the formatting in one place
+    means the appended row matches the initial server-rendered rows.
+    """
+    status = data.get("status") or {}
+    identity = data.get("identity") or {}
+    reg = data.get("registry") or {}
+    return {
+        "device_id": data.get("device_id", "unknown"),
+        "device_type": identity.get("device_type", "unknown"),
+        "status": status.get("availability", "unknown"),
+        "location": status.get("location", ""),
+        "last_seen": _format_ts(status.get("ts")) or reg.get("registered_at", ""),
+        "capabilities": data.get("capabilities", {}),
+        "_raw": data,
+    }
+
+
 def list_live_devices(tenant: str) -> list[dict]:
     """Query etcd for all registered devices in a tenant namespace.
 
@@ -47,25 +69,14 @@ def list_live_devices(tenant: str) -> list[dict]:
 
     results = client.get_prefix(prefix)
     devices = []
-    for raw, meta in results:
+    for raw, _meta in results:
         try:
             if isinstance(raw, bytes):
                 raw = raw.decode()
             data = json.loads(raw)
-            status = data.get("status") or {}
-            identity = data.get("identity") or {}
-            reg = data.get("registry") or {}
-            devices.append({
-                "device_id": data.get("device_id", "unknown"),
-                "device_type": identity.get("device_type", "unknown"),
-                "status": status.get("availability", "unknown"),
-                "location": status.get("location", ""),
-                "last_seen": _format_ts(status.get("ts")) or reg.get("registered_at", ""),
-                "capabilities": data.get("capabilities", {}),
-                "_raw": data,
-            })
         except (json.JSONDecodeError, TypeError):
             continue
+        devices.append(format_live_device(data))
 
     return devices
 
