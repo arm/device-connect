@@ -263,6 +263,67 @@ class TestListDevices:
 
 
 # ---------------------------------------------------------------------------
+# TestFleetCache — short-TTL decoded-snapshot reuse (PR #38 review #4)
+# ---------------------------------------------------------------------------
+
+
+class TestFleetCache:
+    """list_devices/list_devices_page reuse a short-TTL decoded snapshot so
+    a multi-page walk doesn't re-scan + re-decode the whole tenant prefix on
+    every page (the ~19,600-decodes-per-poll concern in PR #38 review)."""
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_walk_scans_etcd_once_within_ttl(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        mock_client.get_prefix.return_value = [
+            (json.dumps({"device_id": f"d{i}"}),
+             {"key": _b64(f"/device-connect/default/devices/d{i}")})
+            for i in range(5)
+        ]
+        mock_etcd3gw.client.return_value = mock_client
+        reg = DeviceRegistry(host="localhost", port=2379)
+
+        # A 3-page walk in quick succession (well within the default TTL).
+        pages = [reg.list_devices_page("default", offset=o, limit=2)
+                 for o in (0, 2, 4)]
+
+        # Only the first page touched etcd; the rest read the cache.
+        assert mock_client.get_prefix.call_count == 1
+        # ...and pagination still slices correctly off the snapshot.
+        assert [len(p[0]) for p in pages] == [2, 2, 1]
+        assert pages[-1][1] is None  # last page -> next_offset None
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_register_invalidates_cache(self, mock_etcd3gw):
+        mock_client = _make_mock_etcd_client()
+        mock_client.get_prefix.return_value = []
+        mock_etcd3gw.client.return_value = mock_client
+        reg = DeviceRegistry(host="localhost", port=2379)
+
+        reg.list_devices("default")  # scan #1, caches the (empty) fleet
+        reg.register("default", "cam-1", {"device_id": "cam-1"}, ttl=30)
+        reg.list_devices("default")  # must re-scan, not serve a stale snapshot
+
+        assert mock_client.get_prefix.call_count == 2
+
+    @patch("device_connect_server.registry.service.registry.etcd3gw")
+    def test_disabled_cache_scans_every_call(self, mock_etcd3gw, monkeypatch):
+        monkeypatch.setattr(
+            "device_connect_server.registry.service.registry._FLEET_CACHE_TTL",
+            0.0,
+        )
+        mock_client = _make_mock_etcd_client()
+        mock_client.get_prefix.return_value = []
+        mock_etcd3gw.client.return_value = mock_client
+        reg = DeviceRegistry(host="localhost", port=2379)
+
+        reg.list_devices("default")
+        reg.list_devices("default")
+
+        assert mock_client.get_prefix.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # TestListDevicesPage — pagination for large fleets
 # ---------------------------------------------------------------------------
 
