@@ -151,8 +151,19 @@ class BridgeConfig:
         if "tls_ca_file" in nats_config:
             tls_config = {"ca_file": nats_config["tls_ca_file"]}
 
+        backend = os.getenv("MESSAGING_BACKEND")
+        if not backend and urls:
+            if all(
+                u.startswith(("nats://", "tls://", "nats+tls://", "ws://", "wss://"))
+                for u in urls
+            ):
+                backend = "nats"
+            elif all(u.startswith(("tcp/", "udp/", "tls/", "quic/")) for u in urls):
+                backend = "zenoh"
+
         return cls(
             messaging_urls=urls,
+            messaging_backend=backend,
             messaging_auth=auth if auth else None,
             messaging_tls=tls_config,
             tenant=data.get("tenant", "default"),
@@ -161,7 +172,16 @@ class BridgeConfig:
     def get_backend(self) -> str:
         """Determine messaging backend from explicit config or URL scheme."""
         if self.messaging_backend:
-            return self.messaging_backend
+            return self.messaging_backend.lower()
+        if self.messaging_urls and all(
+            u.startswith(("nats://", "tls://", "nats+tls://", "ws://", "wss://"))
+            for u in self.messaging_urls
+        ):
+            return "nats"
+        if self.messaging_urls and all(
+            u.startswith(("tcp/", "udp/", "tls/", "quic/")) for u in self.messaging_urls
+        ):
+            return "zenoh"
         from device_connect_edge.messaging.config import MessagingConfig
         config = MessagingConfig(servers=self.messaging_urls)
         return config.backend
