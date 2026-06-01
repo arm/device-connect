@@ -24,6 +24,7 @@ SAMPLE_DEVICES = [
         "functions": [],
         "events": [
             {"name": "object_detected", "labels": {"modality": "rgb"}},
+            {"name": "motion_detected", "labels": {"safety": "critical"}},
         ],
     },
     {
@@ -33,6 +34,7 @@ SAMPLE_DEVICES = [
         "functions": [],
         "events": [
             {"name": "object_detected", "labels": {"modality": "rgb"}},
+            {"name": "motion_detected", "labels": {"safety": "routine"}},
         ],
     },
 ]
@@ -45,6 +47,7 @@ class FakeConnection:
         self.zone = zone
         self.devices = devices or []
         self._inbox: dict[str, list[tuple]] = {}
+        self._subscriptions: dict[str, str] = {}
         self.subscribed_subjects: list[str] = []
         self.unsubscribed_names: list[str] = []
 
@@ -54,12 +57,14 @@ class FakeConnection:
     def subscribe_buffered(self, subject: str, name: str | None = None) -> str:
         name = name or subject
         self._inbox[name] = []
+        self._subscriptions[name] = subject
         self.subscribed_subjects.append(subject)
         return name
 
     def unsubscribe_buffered(self, name: str) -> None:
         self.unsubscribed_names.append(name)
         self._inbox.pop(name, None)
+        self._subscriptions.pop(name, None)
 
     def get_inbox(self, name: str | None = None):
         if name is not None:
@@ -69,7 +74,22 @@ class FakeConnection:
     # Test helper: simulate a message landing on a given subject.
     def deliver(self, subject: str, payload: dict):
         for name, _ in list(self._inbox.items()):
-            self._inbox[name].append((subject, payload))
+            pattern = self._subscriptions.get(name, name)
+            if self._subject_matches(pattern, subject):
+                self._inbox[name].append((subject, payload))
+
+    @staticmethod
+    def _subject_matches(pattern: str, subject: str) -> bool:
+        pattern_tokens = pattern.split(".")
+        subject_tokens = subject.split(".")
+        for i, token in enumerate(pattern_tokens):
+            if token == ">":
+                return True
+            if i >= len(subject_tokens):
+                return False
+            if token != "*" and token != subject_tokens[i]:
+                return False
+        return len(subject_tokens) == len(pattern_tokens)
 
 
 @pytest.fixture
@@ -104,12 +124,84 @@ class TestSubscribe:
             assert subj.endswith(".event.object_detected")
         sub.close()
 
-    def test_event_selector_zero_matches_returns_idle(self, fake_conn):
-        sub = tools_mod.subscribe("event(no_such_event)")
-        assert fake_conn.subscribed_subjects == []
-        # Idle subscription: read returns empty, close is a no-op.
-        assert sub.read() == []
+    def test_top_level_event_selector_subscribes_by_event_name_wildcard(self, fake_conn):
+        sub = tools_mod.subscribe("event(object_detected)")
+        assert fake_conn.subscribed_subjects == [
+            "device-connect.default.*.event.>"
+        ]
+        fake_conn.deliver(
+            "device-connect.default.cam-001.event.motion_detected",
+            {"device_id": "cam-001"},
+        )
+        fake_conn.deliver(
+            "device-connect.default.cam-001.event.object_detected",
+            {"device_id": "cam-001"},
+        )
+        msgs = sub.read()
+        assert len(msgs) == 1
+        assert msgs[0]["_subject"].endswith(".event.object_detected")
         sub.close()
+
+    def test_top_level_event_selector_with_no_current_matches_late_joins(self):
+        conn = FakeConnection(devices=[])
+        with patch.object(tools_mod, "get_connection", return_value=conn):
+            sub = tools_mod.subscribe("event(no_such_event)")
+        assert conn.subscribed_subjects == [
+            "device-connect.default.*.event.>"
+        ]
+        conn.deliver(
+            "device-connect.default.cam-001.event.object_detected",
+            {"device_id": "cam-001"},
+        )
+        assert sub.read() == []
+        conn.deliver(
+            "device-connect.default.cam-002.event.no_such_event",
+            {"device_id": "cam-002"},
+        )
+        msgs = sub.read()
+        assert len(msgs) == 1
+        assert msgs[0]["device_id"] == "cam-002"
+        sub.close()
+
+    def test_top_level_literal_event_selector_with_labels_keeps_label_filter(self, fake_conn):
+        sub = tools_mod.subscribe("event(motion_detected, safety:critical)")
+        assert fake_conn.subscribed_subjects == [
+            "device-connect.default.cam-001.event.motion_detected"
+        ]
+        fake_conn.deliver(
+            "device-connect.default.cam-002.event.motion_detected",
+            {"device_id": "cam-002"},
+        )
+        fake_conn.deliver(
+            "device-connect.default.cam-001.event.motion_detected",
+            {"device_id": "cam-001"},
+        )
+        msgs = sub.read()
+        assert len(msgs) == 1
+        assert msgs[0]["device_id"] == "cam-001"
+        sub.close()
+
+    def test_invalid_event_name_rejected_before_subscribe(self, fake_conn):
+        with pytest.raises(ValueError) as exc:
+            tools_mod.subscribe("event(bad.name)")
+        assert "invalid_event_name" in str(exc.value)
+        assert fake_conn.subscribed_subjects == []
+
+    def test_discovered_invalid_event_name_rejected_before_subscribe(self):
+        conn = FakeConnection(devices=[
+            {
+                "device_id": "cam-001",
+                "device_type": "camera",
+                "labels": {},
+                "functions": [],
+                "events": [{"name": "bad.name", "labels": {}}],
+            },
+        ])
+        with patch.object(tools_mod, "get_connection", return_value=conn):
+            with pytest.raises(ValueError) as exc:
+                tools_mod.subscribe("device(*).event(*)")
+        assert "invalid_event_name" in str(exc.value)
+        assert conn.subscribed_subjects == []
 
     def test_non_event_scope_rejected(self, fake_conn):
         with pytest.raises(ValueError) as exc:

@@ -570,12 +570,11 @@ async def test_discover_labels_per_key_pagination(device_spawner, messaging_url)
         await asyncio.to_thread(disconnect)
 
 
-# -- PR 28 review follow-ups: end-to-end regression guards ------------
+# -- Selector regression guards ---------------------------------------
 #
-# These tests cover behavior that was added or pinned in PR 28's review
-# round: bracket character-class globs on the name axis, long-tail
-# truncation in the multi-axis vocabulary form, case-sensitive selector
-# matching, and the documented response shape contract.
+# These tests cover bracket character-class globs on the name axis,
+# long-tail truncation in the multi-axis vocabulary form, case-sensitive
+# selector matching, and the documented response shape contract.
 
 
 @pytest.mark.asyncio
@@ -585,8 +584,8 @@ async def test_discover_bracket_glob_name_match(device_spawner, messaging_url):
     axis routes through the matcher's fnmatch path and resolves against real
     device functions.
 
-    Regression guard: before PR 28's heuristic fix, patterns containing only
-    ``[``/``]`` (no ``*``/``?``) were treated as literal strings.
+    Regression guard: patterns containing only ``[``/``]`` (no ``*``/``?``)
+    should still route through glob matching instead of literal matching.
     """
     await device_spawner.spawn_sensor("itest-sel-bgg-sensor", location="lab-A")
     await device_spawner.spawn_robot("itest-sel-bgg-robot", location="lab-A")

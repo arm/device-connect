@@ -10,7 +10,7 @@ Uses device_connect_edge (device-connect-edge) — validates the edge SDK packag
 import asyncio
 import logging
 import uuid
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from device_connect_edge import DeviceRuntime
 
@@ -19,6 +19,8 @@ from drivers.robot import TestRobotDriver
 from drivers.sensor import TestSensorDriver
 
 logger = logging.getLogger(__name__)
+
+SCALE_SPAWN_CONCURRENCY = 32
 
 
 class DeviceFactory:
@@ -105,6 +107,38 @@ class DeviceFactory:
             initial_temp=initial_temp, initial_humidity=initial_humidity,
         )
         return await self._spawn(driver, device_id, **kwargs)
+
+    async def spawn_sensor_fleet(
+        self,
+        prefix: str,
+        count: int,
+        *,
+        failure_rate: float = 0.0,
+        location: str = "scale-room",
+        location_for: Callable[[int], str] | None = None,
+        initial_temp: float = 22.0,
+        initial_humidity: float = 45.0,
+        registration_timeout: float = 20.0,
+        max_concurrent: int = SCALE_SPAWN_CONCURRENCY,
+    ) -> list[Tuple[DeviceRuntime, TestSensorDriver]]:
+        """Spawn many sensors concurrently for scale integration tests."""
+        semaphore = asyncio.Semaphore(max(1, max_concurrent))
+
+        async def spawn_one(index: int) -> Tuple[DeviceRuntime, TestSensorDriver]:
+            async with semaphore:
+                device, driver = await self.spawn_sensor(
+                    f"{prefix}-{index:04d}",
+                    failure_rate=failure_rate,
+                    location=location_for(index) if location_for else location,
+                    initial_temp=initial_temp + (index % 10) / 10,
+                    initial_humidity=initial_humidity,
+                    wait_for_registration=False,
+                )
+                await self._wait_for_registration(device, registration_timeout)
+                return device, driver
+
+        spawned = await asyncio.gather(*(spawn_one(i) for i in range(count)))
+        return list(spawned)
 
     async def _wait_for_registration(self, device: DeviceRuntime, timeout: float) -> None:
         start = asyncio.get_event_loop().time()

@@ -12,9 +12,26 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+EVENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def is_valid_event_name(name: str) -> bool:
+    """Return True for event names safe to use as one messaging subject token."""
+    return bool(EVENT_NAME_PATTERN.fullmatch(name))
+
+
+def validate_event_name(name: str) -> str:
+    if not is_valid_event_name(name):
+        raise ValueError(
+            f"Invalid event name {name!r}. Must match '^[A-Za-z0-9_-]+$'."
+        )
+    return name
 
 
 class DeviceState(str, Enum):
@@ -82,7 +99,7 @@ class EventDef(BaseModel):
 
     Example:
         EventDef(
-            name="event/objectDetected",
+            name="objectDetected",
             description="Emitted when an object is detected in the camera frame",
             payload_schema={
                 "type": "object",
@@ -94,7 +111,7 @@ class EventDef(BaseModel):
             tags=["vision", "detection"]
         )
     """
-    name: str = Field(description="Event name (e.g., 'event/objectDetected')")
+    name: str = Field(description="Event name (e.g., 'objectDetected')")
     description: str = Field(default="", description="Human-readable description")
     payload_schema: Optional[Dict[str, Any]] = Field(
         default=None,
@@ -111,6 +128,11 @@ class EventDef(BaseModel):
         default_factory=list,
         description="Tags for categorization"
     )
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return validate_event_name(value)
 
 
 class DeviceCapabilities(BaseModel):

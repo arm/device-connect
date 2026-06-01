@@ -58,6 +58,7 @@ Example:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -77,6 +78,7 @@ from device_connect_edge.types import (
     DeviceCapabilities,
     DeviceIdentity,
     DeviceStatus,
+    validate_event_name,
 )
 
 # Type checking imports for driver support
@@ -184,6 +186,7 @@ class _RemoteInvoker:
     ) -> None:
         """Publish an event on behalf of a device."""
         clean_name = event_name.split("/", 1)[-1] if "/" in event_name else event_name
+        validate_event_name(clean_name)
         subject = f"device-connect.{self._tenant}.{device_id}.event.{clean_name}"
         payload = {"jsonrpc": "2.0", "method": event_name, "params": params}
         await self._messaging.publish(subject, json.dumps(payload).encode())
@@ -272,6 +275,9 @@ class DeviceRuntime:
             messaging_urls=["zenoh+tls://localhost:7447"]
         )
     """
+
+    _WHERE_EVAL_MAX_WORKERS = 4
+    _WHERE_EVAL_TIMEOUT_S = 0.05
 
     def __init__(
         self,
@@ -551,6 +557,8 @@ class DeviceRuntime:
         self._stopped: Optional[asyncio.Event] = None
         self._background_tasks: List[asyncio.Task] = []
         self._spawned_tasks: set[asyncio.Task] = set()
+        self._where_eval_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+        self._where_eval_semaphore = asyncio.Semaphore(self._WHERE_EVAL_MAX_WORKERS)
 
     def _validate_device_id_from_creds(self, creds: dict) -> None:
         """
@@ -957,9 +965,11 @@ class DeviceRuntime:
         """Enqueue a JSON-RPC notification for a custom event."""
         # Future: event pre-processing by local recipes before emission is a
         # separate feature and not part of this code path.
+        clean_event = event.split("/", 1)[-1] if "/" in event else event
+        validate_event_name(clean_event)
 
         note = {"jsonrpc": "2.0", "method": event, "params": payload}
-        subj = f"device-connect.{self.tenant}.{self.device_id}.event.{event}"
+        subj = f"device-connect.{self.tenant}.{self.device_id}.event.{clean_event}"
         # Concurrency note: no TOCTOU race exists between get_nowait() and
         # put_nowait() below — asyncio is single-threaded and there are no
         # ``await`` points between them, so no other coroutine can interleave.
@@ -1263,7 +1273,7 @@ class DeviceRuntime:
         # the message is logged at WARNING with the correlation_id so an
         # operator can correlate a silent skip with a misspelled label key.
         where_expr = envelope.get("where")
-        if where_expr and not self._evaluate_where(
+        if where_expr and not await self._evaluate_where(
             where_expr, envelope.get("bindings"), correlation_id,
         ):
             return
@@ -1326,7 +1336,7 @@ class DeviceRuntime:
             )
 
 
-    def _evaluate_where(
+    async def _evaluate_where(
         self,
         where_expr: str,
         bindings: Optional[Dict[str, Any]],
@@ -1369,13 +1379,102 @@ class DeviceRuntime:
                 "status": status_dict,
                 "bindings": bindings or {},
             }
-            return bool(predicate.evaluate(context))
+            return await self._evaluate_where_with_timeout(
+                predicate, context, correlation_id,
+            )
         except Exception as e:
             self._logger.warning(
                 "Broadcast %s: where predicate failed (skipping): %s",
                 correlation_id, e,
             )
             return False
+
+
+    def _get_where_eval_executor(self) -> concurrent.futures.ThreadPoolExecutor:
+        """Return the shared executor used for edge-side predicate evaluation."""
+        if self._where_eval_executor is None:
+            self._where_eval_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=self._WHERE_EVAL_MAX_WORKERS,
+                thread_name_prefix=f"dc-where-{self.device_id}",
+            )
+        return self._where_eval_executor
+
+
+    def _shutdown_where_eval_executor(self) -> None:
+        """Stop accepting new where evaluations and release executor threads."""
+        if self._where_eval_executor is not None:
+            self._where_eval_executor.shutdown(wait=False, cancel_futures=True)
+            self._where_eval_executor = None
+
+
+    async def _evaluate_where_with_timeout(
+        self,
+        predicate: Any,
+        context: Dict[str, Any],
+        correlation_id: str,
+        timeout_s: float = _WHERE_EVAL_TIMEOUT_S,
+    ) -> bool:
+        """Evaluate a predicate off the event loop with a short wall-clock deadline."""
+
+        def _run() -> bool:
+            return bool(predicate.evaluate(context))
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+
+        try:
+            await asyncio.wait_for(self._where_eval_semaphore.acquire(), timeout_s)
+        except asyncio.TimeoutError:
+            self._logger.warning(
+                "Broadcast %s: where predicate timed out after %.3fs (skipping)",
+                correlation_id, timeout_s,
+            )
+            return False
+
+        remaining_s = deadline - loop.time()
+        if remaining_s <= 0:
+            self._where_eval_semaphore.release()
+            self._logger.warning(
+                "Broadcast %s: where predicate timed out after %.3fs (skipping)",
+                correlation_id, timeout_s,
+            )
+            return False
+
+        future = loop.run_in_executor(self._get_where_eval_executor(), _run)
+
+        def _release_slot(done: asyncio.Future) -> None:
+            self._where_eval_semaphore.release()
+            if done.cancelled():
+                return
+            try:
+                done.exception()
+            except Exception:
+                pass
+
+        future.add_done_callback(_release_slot)
+
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), remaining_s)
+        except asyncio.TimeoutError:
+            self._logger.warning(
+                "Broadcast %s: where predicate timed out after %.3fs (skipping)",
+                correlation_id, timeout_s,
+            )
+            return False
+
+
+    def _warn_if_predicate_extra_missing(self) -> None:
+        """Log once at startup when edge-side CEL predicates are unavailable."""
+        try:
+            from device_connect_edge.predicate import compile_where
+            compile_where("true")
+        except Exception as e:
+            self._logger.warning(
+                "Edge-side where predicates are unavailable on this device: %s. "
+                "Install the predicate extra on every edge that should evaluate "
+                "broadcast where clauses: pip install 'device-connect-edge[predicate]'",
+                e,
+            )
 
 
     async def _event_dispatch_loop(self) -> None:
@@ -1604,6 +1703,8 @@ class DeviceRuntime:
             # Set up DeviceDriver capabilities (router, registry, subscriptions)
             await self._setup_agentic_driver()
 
+            self._warn_if_predicate_extra_missing()
+
             # Start device routines (@periodic decorated methods)
             await self._driver._start_routines()
 
@@ -1737,6 +1838,8 @@ class DeviceRuntime:
             if self.messaging is not None and not self.messaging.is_closed:
                 await self.messaging.close()
                 self._logger.debug("Messaging connection closed")
+
+            self._shutdown_where_eval_executor()
 
             if self._stopped is not None:
                 self._stopped.set()

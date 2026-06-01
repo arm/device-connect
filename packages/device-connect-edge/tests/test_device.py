@@ -348,6 +348,21 @@ class TestEnqueueEvent:
         assert subject == "device-connect.lab.dev-1.event.readComplete"
 
     @pytest.mark.asyncio
+    async def test_enqueue_strips_event_prefix_from_subject(self):
+        rt = DeviceRuntime(device_id="dev-1", tenant="lab", messaging_urls=["nats://localhost:4222"])
+        await rt.enqueue_event("event/readComplete", {"plate_id": "P1"})
+        subject, data = await rt._event_queue.get()
+        parsed = json.loads(data)
+        assert subject == "device-connect.lab.dev-1.event.readComplete"
+        assert parsed["method"] == "event/readComplete"
+
+    @pytest.mark.asyncio
+    async def test_enqueue_rejects_unsafe_event_subject_token(self):
+        rt = DeviceRuntime(device_id="dev-1", tenant="lab", messaging_urls=["nats://localhost:4222"])
+        with pytest.raises(ValueError, match="Invalid event name"):
+            await rt.enqueue_event("bad.event", {})
+
+    @pytest.mark.asyncio
     async def test_enqueue_correct_payload(self):
         rt = DeviceRuntime(device_id="dev-1", tenant="lab", messaging_urls=["nats://localhost:4222"])
         await rt.enqueue_event("readComplete", {"plate_id": "P1"})

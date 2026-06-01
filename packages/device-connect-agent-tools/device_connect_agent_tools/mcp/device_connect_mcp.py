@@ -399,7 +399,7 @@ class DeviceConnectMCP:
         events = []
         for name, meta in self._event_metadata.items():
             events.append(EventDef(
-                name=f"event/{meta['name']}",
+                name=meta["name"],
                 description=meta["description"],
                 payload_schema=meta.get("payload_schema"),
             ))

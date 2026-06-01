@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 import warnings
@@ -946,6 +947,47 @@ def broadcast(
 # selector (``correlation:<id>``). Kept short so the selector reads
 # naturally; the parser matches an exact prefix.
 _CORRELATION_PREFIX = "correlation:"
+_EVENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _is_safe_event_name(name: str) -> bool:
+    """Return True for event names safe to use as one NATS subject token."""
+    return bool(_EVENT_NAME_PATTERN.fullmatch(name))
+
+
+def _invalid_event_name(name: str) -> dict[str, str]:
+    return _error(
+        "invalid_event_name",
+        "invalid event name "
+        f"{name!r}; event names used in subscriptions must match "
+        "^[A-Za-z0-9_-]+$",
+    )
+
+
+def _is_glob_name_match(name: str) -> bool:
+    return any(ch in name for ch in "*?[")
+
+
+def _event_name_from_subject(subject: str) -> str | None:
+    marker = ".event."
+    if marker not in subject:
+        return None
+    event_tail = subject.split(marker, 1)[1]
+    return event_tail.split(".", 1)[0] if event_tail else None
+
+
+def _message_event_name(subject: str, payload: dict[str, Any]) -> str | None:
+    event_name = payload.get("event_name")
+    if isinstance(event_name, str) and event_name:
+        return (
+            event_name.split("/", 1)[1]
+            if event_name.startswith("event/")
+            else event_name
+        )
+    method = payload.get("method")
+    if isinstance(method, str) and method:
+        return method.split("/", 1)[1] if method.startswith("event/") else method
+    return _event_name_from_subject(subject)
 
 
 class Subscription:
@@ -968,9 +1010,15 @@ class Subscription:
                 process(reply)
     """
 
-    def __init__(self, conn: Any, inbox_names: list[str]):
+    def __init__(
+        self,
+        conn: Any,
+        inbox_names: list[str],
+        event_name_filter: set[str] | None = None,
+    ):
         self._conn = conn
         self._inbox_names = list(inbox_names)
+        self._event_name_filter = event_name_filter
         self._closed = False
         self._cursor = 0  # index into the concatenated message stream
 
@@ -999,6 +1047,10 @@ class Subscription:
             for subject, payload in buf[:n]:
                 if not isinstance(payload, dict):
                     payload = {"raw": payload}
+                if self._event_name_filter is not None:
+                    event_name = _message_event_name(subject, payload)
+                    if event_name not in self._event_name_filter:
+                        continue
                 out.append({**payload, "_subject": subject})
             self._conn._inbox[name] = buf[n:]
         if max_messages is not None:
@@ -1064,18 +1116,116 @@ def _correlation_subjects(conn: Any, correlation_id: str) -> list[str]:
     ]
 
 
-def _event_subjects_for_selector(selector: str) -> tuple[list[str] | None, dict[str, Any] | None]:
-    """Resolve an event-scoped selector to per-device subjects.
+def _event_names_for_filter(selector: str) -> tuple[list[str] | None, dict[str, Any] | None]:
+    """Resolve top-level ``event(...)`` to event names for live wildcard subs."""
+    try:
+        sel = parse_selector(selector)
+    except SelectorParseError as e:
+        return None, _empty_envelope(error=_error("selector_parse_error", str(e)))
+    if sel.scope != Scope.EVENT_ONLY:
+        return None, _empty_envelope(
+            scope=sel.scope.value,
+            error=_error(
+                "invalid_subscribe_scope",
+                "top-level live event subscriptions require event(...) scope; "
+                f"got scope={sel.scope.value!r}",
+            ),
+        )
 
-    Returns ``(subjects, None)`` on success or ``(None, error_envelope)``
-    if the selector failed to parse or used a non-event scope.
-    """
     rows: list[dict] = []
     offset = 0
     while True:
         page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
         if "error" in page:
             return None, page
+        rows.extend(page["results"])
+        if page["next_offset"] is None:
+            break
+        offset = page["next_offset"]
+
+    names = sorted({
+        row.get("name") for row in rows
+        if row.get("name")
+    })
+    return names, None
+
+
+def _event_subjects_for_selector(
+    selector: str,
+) -> tuple[list[str] | None, dict[str, Any] | None, set[str] | None]:
+    """Resolve an event-scoped selector to per-device subjects.
+
+    Returns ``(subjects, None, event_name_filter)`` on success or
+    ``(None, error_envelope, None)`` if the selector failed to parse or used
+    a non-event scope.
+    """
+    try:
+        sel = parse_selector(selector)
+    except SelectorParseError as e:
+        return (
+            None,
+            _empty_envelope(error=_error("selector_parse_error", str(e))),
+            None,
+        )
+
+    event_name_match = sel.event.name_match if sel.event is not None else None
+    if (
+        event_name_match
+        and not _is_glob_name_match(event_name_match)
+        and not _is_safe_event_name(event_name_match)
+    ):
+        return None, _empty_envelope(error=_invalid_event_name(event_name_match)), None
+
+    if sel.scope == Scope.EVENT_ONLY:
+        conn = get_connection()
+        if sel.event is not None and sel.event.key_filters:
+            rows: list[dict] = []
+            offset = 0
+            while True:
+                page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
+                if "error" in page:
+                    return None, page, None
+                rows.extend(page["results"])
+                if page["next_offset"] is None:
+                    break
+                offset = page["next_offset"]
+
+            subjects: list[str] = []
+            seen: set[str] = set()
+            for row in rows:
+                device_id = row.get("device_id") or ""
+                event_name = row.get("name") or ""
+                if not device_id or not event_name:
+                    continue
+                if not _is_safe_event_name(event_name):
+                    return None, _empty_envelope(error=_invalid_event_name(event_name)), None
+                subj = f"device-connect.{conn.zone}.{device_id}.event.{event_name}"
+                if subj not in seen:
+                    seen.add(subj)
+                    subjects.append(subj)
+            return subjects, None, None
+
+        if event_name_match and not _is_glob_name_match(event_name_match):
+            return [
+                f"device-connect.{conn.zone}.*.event.>",
+            ], None, {event_name_match}
+        names, error = _event_names_for_filter(selector)
+        if error is not None:
+            return None, error, None
+        for name in names or []:
+            if not _is_safe_event_name(name):
+                return None, _empty_envelope(error=_invalid_event_name(name)), None
+        return [
+            f"device-connect.{conn.zone}.*.event.{name}"
+            for name in (names or [])
+        ], None, None
+
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page = discover(selector, offset=offset, limit=DISCOVER_HARD_LIMIT)
+        if "error" in page:
+            return None, page, None
         if page["scope"] not in (Scope.DEVICE_EVENT.value, Scope.EVENT_ONLY.value):
             return None, _empty_envelope(
                 scope=page["scope"],
@@ -1086,7 +1236,7 @@ def _event_subjects_for_selector(selector: str) -> tuple[list[str] | None, dict[
                     "'correlation:<id>'; got "
                     f"scope={page['scope']!r}",
                 ),
-            )
+            ), None
         rows.extend(page["results"])
         if page["next_offset"] is None:
             break
@@ -1100,11 +1250,13 @@ def _event_subjects_for_selector(selector: str) -> tuple[list[str] | None, dict[
         event_name = row.get("name") or ""
         if not device_id or not event_name:
             continue
+        if not _is_safe_event_name(event_name):
+            return None, _empty_envelope(error=_invalid_event_name(event_name)), None
         subj = f"device-connect.{conn.zone}.{device_id}.event.{event_name}"
         if subj not in seen:
             seen.add(subj)
             subjects.append(subj)
-    return subjects, None
+    return subjects, None, None
 
 
 def subscribe(selector: str) -> Subscription:
@@ -1113,8 +1265,11 @@ def subscribe(selector: str) -> Subscription:
     Args:
         selector: One of:
             - ``"correlation:<id>"`` for broadcast replies of a prior call.
-            - An event-scoped selector (``event(<name>)`` or
-              ``device(...).event(<name>)``) for live event streams.
+            - ``event(<name>)`` for live event streams. Literal event names
+              subscribe with an event wildcard and client-side filtering so
+              devices that join later and emit that event name are included.
+            - ``device(...).event(...)`` for a snapshot event stream over the
+              devices resolved when the subscription is created.
 
     Returns:
         A :class:`Subscription` handle. Iterate with ``sub.iter(timeout)``
@@ -1130,6 +1285,7 @@ def subscribe(selector: str) -> Subscription:
         raise ValueError("subscribe selector must be a non-empty string")
 
     conn = get_connection()
+    event_name_filter: set[str] | None = None
     if selector.startswith(_CORRELATION_PREFIX):
         correlation_id = selector[len(_CORRELATION_PREFIX):].strip()
         if not correlation_id:
@@ -1139,10 +1295,17 @@ def subscribe(selector: str) -> Subscription:
         subjects = _correlation_subjects(conn, correlation_id)
         inbox_prefix = f"sub-corr-{correlation_id}-{uuid.uuid4().hex[:8]}"
     else:
-        subjects, error_envelope = _event_subjects_for_selector(selector)
+        subjects, error_envelope, event_name_filter = _event_subjects_for_selector(
+            selector
+        )
         if error_envelope is not None:
             err = error_envelope.get("error")
-            msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+            if isinstance(err, dict):
+                code = err.get("code")
+                message = err.get("message", str(err))
+                msg = f"{code}: {message}" if code else message
+            else:
+                msg = str(err)
             raise ValueError(msg)
         if not subjects:
             # Nothing to subscribe to. Return an idle Subscription so the
@@ -1156,7 +1319,11 @@ def subscribe(selector: str) -> Subscription:
         name = f"{inbox_prefix}-{i}"
         conn.subscribe_buffered(subj, name=name)
         inbox_names.append(name)
-    return Subscription(conn, inbox_names=inbox_names)
+    return Subscription(
+        conn,
+        inbox_names=inbox_names,
+        event_name_filter=event_name_filter,
+    )
 
 
 def await_replies(
