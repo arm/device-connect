@@ -37,9 +37,14 @@ ETCD_HOST = os.environ.get("ETCD_HOST", "localhost")
 ETCD_PORT = int(os.environ.get("ETCD_PORT", "2379"))
 
 # Admin credentials
+# Treat an empty ADMIN_PASS the same as unset: generate a password AND flag it
+# as generated so it gets logged. Keying ADMIN_PASS_GENERATED off membership in
+# os.environ alone would silently generate a password (because "" is falsy) but
+# never log it, locking the operator out.
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASS = os.environ.get("ADMIN_PASS") or secrets.token_urlsafe(16)
-ADMIN_PASS_GENERATED = "ADMIN_PASS" not in os.environ
+_admin_pass = os.environ.get("ADMIN_PASS") or None
+ADMIN_PASS = _admin_pass or secrets.token_urlsafe(16)
+ADMIN_PASS_GENERATED = _admin_pass is None
 
 # Paths
 SECURITY_INFRA_DIR = Path(os.environ.get(
