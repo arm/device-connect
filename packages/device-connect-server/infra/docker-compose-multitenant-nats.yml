@@ -110,13 +110,14 @@ services:
       NATS_CONTAINER: dc-nats
       ETCD_HOST: etcd
       ETCD_PORT: "2379"
-      ADMIN_USER: ${ADMIN_USER:-admin}
-      # ADMIN_PASS is injected from infra/.env via env_file below (NOT the
-      # compose-level .env, which is interpolation-only and never reaches the
-      # container). If unset there, the portal auto-generates one and logs it.
+      # Admin creds (ADMIN_USER, ADMIN_PASS) come from infra/.env via env_file
+      # below -- deliberately NOT listed here, since an environment: entry would
+      # override env_file. The compose-level .env is interpolation-only and
+      # never reaches the container. If ADMIN_PASS is unset the portal
+      # auto-generates one and logs it; ADMIN_USER defaults to "admin".
       SECURITY_INFRA_DIR: /app/security_infra
       CREDS_DIR: /root/.device-connect/credentials
-    # Inject infra/.env into the container so ADMIN_PASS (and any other deploy
+    # Inject infra/.env into the container so admin creds (and any other deploy
     # secrets) reach the portal. Optional: omit the file to use inline env vars
     # and let the portal auto-generate the admin password.
     env_file:
