@@ -124,7 +124,7 @@ services:
     # is absent, ADMIN_USER falls back to "admin" and the portal auto-generates
     # and logs the admin password.
     env_file:
-      - path: .env
+      - path: .env  # NOTE: requires a Docker Compose version that supports env_file objects + `required`; otherwise create infra/.env
         required: false
     volumes:
       - ~/.device-connect/credentials:/root/.device-connect/credentials
