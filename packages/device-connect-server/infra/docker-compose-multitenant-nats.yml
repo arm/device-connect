@@ -110,10 +110,22 @@ services:
       NATS_CONTAINER: dc-nats
       ETCD_HOST: etcd
       ETCD_PORT: "2379"
-      ADMIN_USER: ${ADMIN_USER:-admin}
-      # ADMIN_PASS: set via env var or .env file; auto-generated if omitted
+      # Admin creds (ADMIN_USER, ADMIN_PASS) come from infra/.env via env_file
+      # below -- deliberately NOT listed here, since an environment: entry would
+      # override env_file. The compose-level .env is interpolation-only and
+      # never reaches the container. If ADMIN_PASS is unset the portal
+      # auto-generates one and logs it; ADMIN_USER defaults to "admin".
       SECURITY_INFRA_DIR: /app/security_infra
       CREDS_DIR: /root/.device-connect/credentials
+    # Inject infra/.env into the container so admin creds (and any other deploy
+    # secrets) reach the portal. This is the ONLY path that delivers ADMIN_USER/
+    # ADMIN_PASS to the container -- host env vars (e.g. ADMIN_PASS=... docker
+    # compose up) are not forwarded. Optional (required: false): if infra/.env
+    # is absent, ADMIN_USER falls back to "admin" and the portal auto-generates
+    # and logs the admin password.
+    env_file:
+      - path: .env  # NOTE: requires a Docker Compose version that supports env_file objects + `required`; otherwise create infra/.env
+        required: false
     volumes:
       - ~/.device-connect/credentials:/root/.device-connect/credentials
       - ../security_infra:/app/security_infra
