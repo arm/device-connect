@@ -238,7 +238,18 @@ class DeviceConnection:
         self._inbox: Dict[str, List[Dict[str, Any]]] = {}
         self._sync_subs: Dict[str, Any] = {}
 
-        # D2D mode: discover devices via presence instead of registry
+        # D2D mode: discover devices via presence instead of a registry service.
+        #
+        # This mirrors device_connect_agent_tools.mcp.bridge._is_d2d_mode so the
+        # connect() path and the MCP bridge agree: "auto" (the default) means D2D
+        # whenever the backend is Zenoh — INCLUDING when an explicit ZENOH_CONNECT
+        # endpoint is supplied.  Previously an explicit endpoint silently forced
+        # registry mode; against a zero-infra device (no registry to answer
+        # queries) that just timed out and returned [], which is the exact
+        # failure seen when pinning a direct unicast link to a peer on a
+        # multi-homed / Wi-Fi network where multicast scouting is unreliable.
+        # Opt into the registry path explicitly with
+        # DEVICE_CONNECT_DISCOVERY_MODE=infra.
         no_explicit_urls = (
             not nats_url
             and not os.getenv("ZENOH_CONNECT")
@@ -246,15 +257,20 @@ class DeviceConnection:
             and not os.getenv("NATS_URL")
             and not os.getenv("NATS_URLS")
         )
-        self._d2d_mode = (
-            os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() in ("d2d", "p2p")
-            or (self._backend == "zenoh" and no_explicit_urls)
-        )
+        discovery_mode = os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower()
+        if discovery_mode in ("d2d", "p2p"):
+            self._d2d_mode = True
+        elif discovery_mode == "infra":
+            self._d2d_mode = False
+        else:  # "auto" / unset
+            self._d2d_mode = self._backend == "zenoh"
         self._d2d_collector = None  # lazy-initialized PresenceCollector
 
-        # In D2D mode with Zenoh and no explicit URLs, use empty servers (multicast scouting).
-        # When DEVICE_CONNECT_DISCOVERY_MODE=d2d is forced alongside a router URL (ZENOH_CONNECT),
-        # keep the router URL so we can still communicate with devices connected to it.
+        # In D2D mode with Zenoh and no explicit URLs, use empty servers (multicast
+        # scouting).  When an explicit endpoint is given (ZENOH_CONNECT — e.g. a
+        # direct unicast link to a peer on a network where multicast is blocked),
+        # keep it so we connect straight to that peer while still discovering it
+        # via presence.
         if self._d2d_mode and self._backend == "zenoh" and no_explicit_urls:
             self._servers = []
 

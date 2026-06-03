@@ -340,7 +340,8 @@ connect(
 
 | Variable | Description |
 |---|---|
-| `ZENOH_CONNECT` | Zenoh endpoint (e.g., `tcp/localhost:7447`) |
+| `ZENOH_CONNECT` | Zenoh endpoint (e.g., `tcp/localhost:7447`). Keeps D2D presence discovery active — use a direct unicast link to a peer when multicast is blocked |
+| `ZENOH_MULTICAST_INTERFACE` | Pin multicast scouting to a NIC (name or IP) on multi-homed hosts where `auto` scouts the wrong interface |
 | `MESSAGING_BACKEND` | `zenoh` (default), `nats`, or `mqtt` |
 | `MESSAGING_URLS` | Broker URLs, comma-separated (generic) |
 | `NATS_URL` | NATS broker URL (when using NATS backend) |
@@ -348,7 +349,7 @@ connect(
 | `NATS_JWT` + `NATS_NKEY_SEED` | Direct JWT auth |
 | `NATS_TLS_CA_FILE` | CA certificate for TLS |
 | `TENANT` | Device Connect zone/namespace (default: `"default"`) |
-| `DEVICE_CONNECT_DISCOVERY_MODE` | Set to `d2d` to skip registry and discover via presence |
+| `DEVICE_CONNECT_DISCOVERY_MODE` | `auto` (default — D2D when backend is Zenoh), `d2d`/`p2p` to force presence discovery, or `infra` to force the registry service |
 
 Resolution order: explicit parameter > environment variable > auto-discovery.
 
