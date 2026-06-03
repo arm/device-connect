@@ -68,6 +68,16 @@ dc-portalctl auth login
 dc-portalctl auth me
 ```
 
+> ⚠️ **Use the scheme the portal actually terminates TLS on — usually
+> `https`.** If the portal sits behind a TLS-terminating proxy (e.g. nginx)
+> that 301-redirects `http://` → `https://`, an `http://`
+> `DEVICE_CONNECT_PORTAL_URL` breaks `auth login`: the redirect downgrades the
+> CLI's `POST /api/agent/v1/auth/cli/init` to a `GET`, and the POST-only route
+> answers **HTTP 405 Method Not Allowed** (it is *not* a missing feature). The
+> substituted Tenant-facts value above should already carry the
+> externally-correct scheme; if it shows `http://` and login 405s, set
+> `DEVICE_CONNECT_PORTAL_URL` to the `https://` URL and re-run.
+
 **If `dc-portalctl: command not found` after a clean install,** your PyPI
 release is older than this playbook — only the server-side `dc-portal` entry
 point landed. Install editable from source as a fallback:
@@ -631,7 +641,8 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 |---|---|---|
 | `dc-portalctl: command not found` after a clean install | PyPI release of `device-connect-server` is missing the CLI | Install editable from source — see Section 1 |
 | `SSL: CERTIFICATE_VERIFY_FAILED` on first CLI call | No system trust store — typical of macOS python.org framework builds, where certificates aren't installed unless you run the bundled `Install Certificates.command` | Install `certifi` and export `SSL_CERT_FILE` — see Section 1 |
-| Connect attempts hang / time out | URL scheme or port doesn't match the deployment (portals can be HTTP:8080 or HTTPS:443) | Use `{{ portal_url }}` from "Tenant facts" verbatim — don't guess scheme/port |
+| `dc-portalctl auth login` fails immediately with **HTTP 405** (`Method Not Allowed`) | `DEVICE_CONNECT_PORTAL_URL` is `http://` but the portal sits behind a TLS proxy that 301-redirects to `https://`; the redirect downgrades the CLI's `POST /api/agent/v1/auth/cli/init` to a `GET`, which the POST-only route rejects | Set `DEVICE_CONNECT_PORTAL_URL` to the `https://` portal URL and re-run `auth login` — see the scheme callout in Section 1 |
+| Connect attempts hang / time out | URL scheme or port doesn't match the deployment (portals can be HTTP:8080 or HTTPS:443) | Start from `{{ portal_url }}` in "Tenant facts", but match the scheme the portal actually terminates TLS on — if it is fronted by a proxy that redirects `http`→`https`, use the `https://` URL (see the 405-on-login row above) |
 | `HTTP 401 invalid_token` on a previously-working setup | Cached token expired or was revoked | Re-run `dc-portalctl auth login` |
 | `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
 | Device retries `nkeys library required for JWT auth` forever | `nkeys` import is failing — almost always because its `pynacl` transitive can't load (prebuilt wheel incompatible with the host libc) | Reinstall `device-connect-edge` (`nkeys` is already a required dep — `pip install --upgrade --force-reinstall device-connect-edge`); on glibc < 2.34 rebuild `pynacl` from source per Section 5. `pip install nkeys` only helps if deps were originally installed with `--no-deps` |
