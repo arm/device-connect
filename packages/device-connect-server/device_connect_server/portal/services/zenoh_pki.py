@@ -231,6 +231,25 @@ async def generate_client_cert(
     return client_cert, client_key
 
 
+def delete_client_cert(name: str) -> None:
+    """Remove a client certificate's key/cert (and any stray CSR).
+
+    Idempotent: missing files are ignored. Used by device revocation so a
+    revoked device's key material no longer lingers on disk alongside the
+    ACL entry removal.
+    """
+    d = _pki_dir()
+    for fname in (f"{name}-cert.pem", f"{name}-key.pem", f"{name}.csr"):
+        p = d / fname
+        try:
+            p.unlink()
+            logger.info("Deleted client cert file: %s", p)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.warning("Could not delete %s", p)
+
+
 async def get_ca_fingerprint() -> str:
     """Return the SHA256 fingerprint of the CA certificate."""
     d = _pki_dir()

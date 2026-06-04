@@ -202,6 +202,42 @@ def add_devices_to_tenant(tenant: str, device_cns: list[str]) -> dict:
     return cfg
 
 
+def remove_devices_from_tenant(tenant: str, device_cns: list[str]) -> dict:
+    """Remove device CNs from a tenant's ACL subject group.
+
+    Strips the CNs from the ``tenant-{tenant}`` subject. When that empties
+    the subject, the now-dangling subject, its rule, and any policy that
+    references either are pruned too, so a revoked device's certificate is
+    no longer authorized once the router reloads. Idempotent: unknown
+    tenants/CNs are a no-op.
+    """
+    cfg = load_config()
+    acl = cfg.get("access_control", {})
+
+    rule_id = subject_id = f"tenant-{tenant}"
+
+    subject = next((s for s in acl.get("subjects", []) if s.get("id") == subject_id), None)
+    if subject is None:
+        return cfg  # nothing to remove
+
+    remaining = [cn for cn in subject.get("cert_common_names", []) if cn not in set(device_cns)]
+    subject["cert_common_names"] = remaining
+
+    if not remaining:
+        # Drop the empty subject, its rule, and any policy binding either.
+        acl["subjects"] = [s for s in acl.get("subjects", []) if s.get("id") != subject_id]
+        acl["rules"] = [r for r in acl.get("rules", []) if r.get("id") != rule_id]
+        acl["policies"] = [
+            p for p in acl.get("policies", [])
+            if subject_id not in p.get("subjects", []) and rule_id not in p.get("rules", [])
+        ]
+
+    cfg["access_control"] = acl
+    save_config(cfg)
+    logger.info("Removed %d device(s) from tenant %s ACL", len(device_cns), tenant)
+    return cfg
+
+
 def get_tenant_cns(tenant: str) -> list[str]:
     """Get the list of device CNs for a tenant."""
     cfg = load_config()

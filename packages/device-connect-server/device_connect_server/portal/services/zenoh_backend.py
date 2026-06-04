@@ -128,6 +128,18 @@ class ZenohBackend(MessagingBackendService):
 
         return cred_path
 
+    async def remove_device(self, tenant: str, device_name: str) -> None:
+        """Revoke a device: drop its CN from the ACL and delete its key material.
+
+        The revoke flow calls this and then ``reload_broker()``; the router
+        restart is what makes the ACL removal take effect (Zenoh ACL is not
+        hot-reloadable). After reload the revoked certificate is no longer
+        authorized for the tenant namespace. The credential JSON file is
+        removed by the caller (the revoke view).
+        """
+        zenoh_acl.remove_devices_from_tenant(tenant, [device_name])
+        zenoh_pki.delete_client_cert(device_name)
+
     async def reload_broker(self) -> dict:
         return await zenoh_admin.reload_zenoh()
 

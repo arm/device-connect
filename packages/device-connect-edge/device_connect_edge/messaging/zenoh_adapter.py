@@ -196,20 +196,34 @@ class ZenohAdapter(MessagingClient):
             if not endpoints:
                 peer_mode = True
 
+            # Connect as a Zenoh *client* when targeting a router, and only as
+            # a *peer* for brokerless D2D. This is security-critical for
+            # router deployments: a peer participates in gossip/scouting and
+            # can form DIRECT peer-to-peer links with other nodes, which
+            # bypass the router entirely -- and the router is where the mTLS
+            # access-control (tenant isolation) is enforced. Leaving mode
+            # unset defaults to "peer", so two devices (or a device and the
+            # registry) would peer up directly and never have their traffic
+            # ACL-checked. A client only ever talks to its configured
+            # router(s), so all traffic is brokered and policy-enforced.
+            config_dict["mode"] = "peer" if peer_mode else "client"
+
             if endpoints:
                 config_dict["connect"] = {"endpoints": endpoints}
 
             if listen_endpoints:
                 config_dict["listen"] = {"endpoints": listen_endpoints}
 
-            # Scouting config — enable multicast + gossip in peer mode
+            # Scouting/gossip only make sense for peer (D2D) mode; a client
+            # discovers nothing and must not autoconnect to peers (that would
+            # re-introduce the ACL-bypassing direct links described above).
             config_dict["scouting"] = {
                 "multicast": {
                     "enabled": peer_mode,
                     "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
                 },
                 "gossip": {
-                    "enabled": True,
+                    "enabled": peer_mode,
                     "multihop": os.getenv("ZENOH_GOSSIP_MULTIHOP", "").lower() in ("true", "1", "yes"),
                     "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
                 },

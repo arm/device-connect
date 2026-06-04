@@ -193,6 +193,9 @@ class TestZenohClientConnect:
         call_args = mock_zenoh.Config.from_json5.call_args[0][0]
         config_dict = json.loads(call_args)
         assert config_dict["scouting"]["multicast"]["enabled"] is True
+        # Brokerless D2D: peer mode + gossip discovery.
+        assert config_dict["mode"] == "peer"
+        assert config_dict["scouting"]["gossip"]["enabled"] is True
         assert config_dict["scouting"]["gossip"]["enabled"] is True
         assert config_dict["scouting"]["gossip"]["multihop"] is False
         # Verify d2d_mode flag is set
@@ -214,6 +217,11 @@ class TestZenohClientConnect:
         call_args = mock_zenoh.Config.from_json5.call_args[0][0]
         config_dict = json.loads(call_args)
         assert config_dict["scouting"]["multicast"]["enabled"] is False
+        # Router deployment: client mode, no gossip/peer autoconnect, so ALL
+        # traffic is brokered through the router where the ACL is enforced.
+        # (A peer could form direct links that bypass tenant isolation.)
+        assert config_dict["mode"] == "client"
+        assert config_dict["scouting"]["gossip"]["enabled"] is False
 
     @pytest.mark.asyncio
     @patch("device_connect_edge.messaging.zenoh_adapter.zenoh")
