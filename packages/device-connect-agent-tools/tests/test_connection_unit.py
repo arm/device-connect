@@ -91,6 +91,59 @@ class TestDeviceConnectConnectionConfig:
         conn.close()
 
 
+# ── D2D vs registry mode selection ──────────────────────────────
+
+
+class TestD2DModeSelection:
+    """DeviceConnection should mirror the MCP bridge's _is_d2d_mode logic.
+
+    Regression for the footgun where an explicit ZENOH_CONNECT endpoint
+    silently dropped out of D2D presence discovery into registry mode —
+    against a zero-infra device this returned [] after a 30s timeout.
+    """
+
+    def _make_conn(self, env, backend="zenoh"):
+        with patch.object(conn_mod, "_auto_discover_tls", return_value=None), \
+             patch.object(conn_mod, "_auto_discover_credentials", return_value=None), \
+             patch("device_connect_agent_tools.connection.MessagingConfig") as MockConfig, \
+             patch.dict(os.environ, env, clear=True):
+            mock_cfg = MagicMock()
+            mock_cfg.backend = backend
+            mock_cfg.servers = (
+                [os.environ["ZENOH_CONNECT"]] if env.get("ZENOH_CONNECT") else []
+            )
+            mock_cfg.credentials = None
+            mock_cfg.tls_config = None
+            MockConfig.return_value = mock_cfg
+            return conn_mod.DeviceConnection()
+
+    def test_zenoh_no_urls_is_d2d(self):
+        conn = self._make_conn({})
+        assert conn._d2d_mode is True
+        assert conn._servers == []  # blanked for multicast scouting
+        conn.close()
+
+    def test_zenoh_with_explicit_connect_stays_d2d(self):
+        # The footgun: ZENOH_CONNECT alone must NOT drop out of D2D.
+        conn = self._make_conn({"ZENOH_CONNECT": "tcp/192.168.1.119:7447"})
+        assert conn._d2d_mode is True
+        # Unicast endpoint is kept so we connect straight to the peer.
+        assert conn._servers == ["tcp/192.168.1.119:7447"]
+        conn.close()
+
+    def test_infra_mode_opts_out_of_d2d(self):
+        conn = self._make_conn(
+            {"ZENOH_CONNECT": "tcp/router:7447", "DEVICE_CONNECT_DISCOVERY_MODE": "infra"}
+        )
+        assert conn._d2d_mode is False
+        conn.close()
+
+    def test_explicit_d2d_mode_forces_d2d(self):
+        conn = self._make_conn({"DEVICE_CONNECT_DISCOVERY_MODE": "d2d"})
+        assert conn._d2d_mode is True
+        conn.close()
+
+
 # ── Auto-discovery helpers ───────────────────────────────────────
 
 

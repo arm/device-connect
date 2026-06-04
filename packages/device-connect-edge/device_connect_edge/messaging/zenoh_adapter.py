@@ -166,6 +166,10 @@ class ZenohAdapter(MessagingClient):
             **kwargs: Additional options:
                 - peer_mode: bool — force peer mode with scouting (default: False)
                 - listen: list[str] — endpoints to listen on
+                - multicast_interface: str — network interface name or IP to pin
+                  multicast scouting to (also via ZENOH_MULTICAST_INTERFACE env).
+                  Use on multi-homed hosts where interface="auto" scouts on the
+                  wrong NIC.
         """
         self._reconnect_cb = reconnect_cb
         self._disconnect_cb = disconnect_cb
@@ -201,11 +205,29 @@ class ZenohAdapter(MessagingClient):
                 config_dict["listen"] = {"endpoints": listen_endpoints}
 
             # Scouting config — enable multicast + gossip in peer mode
+            multicast_cfg: Dict[str, Any] = {
+                "enabled": peer_mode,
+                "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
+            }
+            # Pin the multicast scout to a specific network interface.  On
+            # multi-homed hosts — robots with a separate internal motor-control
+            # NIC, plus docker0 / VPN (utun) / Apple AWDL interfaces — Zenoh's
+            # default interface="auto" can bind the scout socket to the wrong
+            # NIC, so two peers on the same LAN intermittently never form a
+            # session (discovery returns [] and RPC reports "no responders").
+            # Pinning to the LAN interface makes D2D discovery deterministic.
+            # Accepts an interface name (e.g. "wlan0") or a local IP address.
+            multicast_interface = kwargs.get("multicast_interface") or os.getenv(
+                "ZENOH_MULTICAST_INTERFACE"
+            )
+            if multicast_interface:
+                multicast_cfg["interface"] = multicast_interface
+                self._logger.info(
+                    "Zenoh multicast scouting pinned to interface: %s",
+                    multicast_interface,
+                )
             config_dict["scouting"] = {
-                "multicast": {
-                    "enabled": peer_mode,
-                    "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
-                },
+                "multicast": multicast_cfg,
                 "gossip": {
                     "enabled": True,
                     "multihop": os.getenv("ZENOH_GOSSIP_MULTIHOP", "").lower() in ("true", "1", "yes"),

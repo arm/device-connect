@@ -10,6 +10,7 @@ The Zenoh Python SDK is synchronous, so mocks use MagicMock (not AsyncMock).
 
 import asyncio
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -197,6 +198,43 @@ class TestZenohClientConnect:
         assert config_dict["scouting"]["gossip"]["multihop"] is False
         # Verify d2d_mode flag is set
         assert adapter._d2d_mode is True
+        # No interface pinned by default -> let Zenoh auto-select
+        assert "interface" not in config_dict["scouting"]["multicast"]
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_edge.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_multicast_interface_kwarg_pins_scout(self, mock_zenoh):
+        session = _make_mock_session()
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+
+        from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(servers=["zenoh://"], multicast_interface="wlan0")
+
+        call_args = mock_zenoh.Config.from_json5.call_args[0][0]
+        config_dict = json.loads(call_args)
+        assert config_dict["scouting"]["multicast"]["interface"] == "wlan0"
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_edge.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_multicast_interface_env_pins_scout(self, mock_zenoh):
+        session = _make_mock_session()
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+
+        from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        with patch.dict(os.environ, {"ZENOH_MULTICAST_INTERFACE": "eth1"}):
+            await adapter.connect(servers=["zenoh://"])
+
+        call_args = mock_zenoh.Config.from_json5.call_args[0][0]
+        config_dict = json.loads(call_args)
+        assert config_dict["scouting"]["multicast"]["interface"] == "eth1"
 
     @pytest.mark.asyncio
     @patch("device_connect_edge.messaging.zenoh_adapter.zenoh")

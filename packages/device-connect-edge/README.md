@@ -162,6 +162,28 @@ DEVICE_CONNECT_DISCOVERY_MODE=d2d ZENOH_CONNECT=tcp/localhost:7447 DEVICE_CONNEC
 
 **How it works:** Each device announces its presence (capabilities, identity, status) via `device-connect.{tenant}.{device_id}.presence` messages. Other devices subscribe to a wildcard and maintain an in-memory peer table. Device-to-device RPC works identically to infrastructure mode.
 
+### Multi-homed hosts & unreliable multicast
+
+D2D discovery relies on Zenoh UDP multicast scouting, which can fail on real-world networks for two reasons:
+
+- **Multi-homed hosts.** Robots typically carry several interfaces (a private motor-control NIC such as `eth0` 192.168.123.x, plus `docker0`, VPN `utun*`, or Apple `awdl0`). Zenoh's default `interface="auto"` may bind the scout to the wrong NIC, so two peers on the same LAN never form a session — discovery returns `[]` and RPC reports `no responders`. Pin the scout to the LAN interface:
+
+  ```bash
+  # name or local IP both work
+  ZENOH_MULTICAST_INTERFACE=wlan0 DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
+  ```
+
+- **Multicast blocked entirely** (Wi-Fi AP/client isolation, managed switches). Bypass multicast with a direct unicast link — the device listens on a fixed TCP port and the agent connects straight to it:
+
+  ```bash
+  # Device (dog):
+  ZENOH_LISTEN=tcp/0.0.0.0:7447 DEVICE_CONNECT_ALLOW_INSECURE=true python my_device.py
+  # Agent (user): just point at the device — still discovers via D2D presence
+  ZENOH_CONNECT=tcp/<device-ip>:7447 DEVICE_CONNECT_ALLOW_INSECURE=true python my_agent.py
+  ```
+
+  > As of this release, setting `ZENOH_CONNECT` on an agent keeps D2D presence discovery active. (Previously it silently fell back to registry mode and returned `[]` against a registry-less device unless you also set `DEVICE_CONNECT_DISCOVERY_MODE=d2d`.) Opt into the registry path explicitly with `DEVICE_CONNECT_DISCOVERY_MODE=infra`.
+
 **Trade-offs vs full infrastructure:**
 
 | | Full Infrastructure | D2D Mode |
