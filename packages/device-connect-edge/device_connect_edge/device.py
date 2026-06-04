@@ -104,6 +104,26 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _resolve_credentials_file_env(log: Optional[logging.Logger] = None) -> Optional[str]:
+    """Resolve the device credentials-file path from the environment.
+
+    ``MESSAGING_CREDENTIALS_FILE`` is the backend-neutral name. The older
+    ``NATS_CREDENTIALS_FILE`` is still honored as a deprecated alias so existing
+    NATS deployments keep working; a warning is emitted when only the old name
+    is set. Mirrors the MESSAGING_TLS_* / NATS_TLS_* precedence used elsewhere.
+    """
+    new = os.getenv("MESSAGING_CREDENTIALS_FILE")
+    if new:
+        return new
+    old = os.getenv("NATS_CREDENTIALS_FILE")
+    if old:
+        (log or logger).warning(
+            "NATS_CREDENTIALS_FILE is deprecated; set MESSAGING_CREDENTIALS_FILE "
+            "instead (the old name still works for now)."
+        )
+    return old
+
+
 # Registration knobs. At fleet scale a 2s request timeout combined with N
 # phones starting in lockstep produces congestion collapse on the
 # registry: every queued-but-late reply triggers a retry that re-enters
@@ -427,9 +447,12 @@ class DeviceRuntime:
         # Merge deprecated alias
         credentials_file = credentials_file or nats_credentials_file
 
-        # Auto-read credentials file from env var if not explicitly provided
+        # Auto-read credentials file from env var if not explicitly provided.
+        # MESSAGING_CREDENTIALS_FILE is the backend-neutral name; the older
+        # NATS_CREDENTIALS_FILE is still honored as a deprecated alias (mirrors
+        # the MESSAGING_TLS_* / NATS_TLS_* precedence elsewhere).
         if not credentials_file:
-            credentials_file = os.getenv("NATS_CREDENTIALS_FILE")
+            credentials_file = _resolve_credentials_file_env(self._logger)
 
         # Load credentials from file if provided
         creds_urls = None
@@ -519,7 +542,13 @@ class DeviceRuntime:
             self.messaging_auth = auth_dict if auth_dict else None
 
         # Build TLS configuration
-        # Env vars take precedence over credentials file for easy overrides
+        # Env vars take precedence over credentials file for easy overrides.
+        # Credentials may carry the cert material in one of two shapes:
+        #   - file paths: ca_file / cert_file / key_file
+        #   - inline PEM: ca_pem / cert_pem / key_pem (self-contained creds, so
+        #     a single downloaded *.creds.json works on any host without also
+        #     shipping the PEM files). The Zenoh adapter feeds inline PEM to the
+        #     router via base64 config fields; nothing touches the local disk.
         if messaging_tls:
             self.messaging_tls = messaging_tls
         else:
@@ -534,6 +563,17 @@ class DeviceRuntime:
                 tls_dict["cert_file"] = cert
             if key:
                 tls_dict["key_file"] = key
+
+            # Inline PEM material — only used when no corresponding file path
+            # was supplied (env/file paths win so operators can still override).
+            for pem_key, file_key in (
+                ("ca_pem", "ca_file"),
+                ("cert_pem", "cert_file"),
+                ("key_pem", "key_file"),
+            ):
+                pem = creds_tls_config.get(pem_key)
+                if pem and file_key not in tls_dict:
+                    tls_dict[pem_key] = pem
 
             self.messaging_tls = tls_dict if tls_dict else None
 
@@ -776,7 +816,7 @@ class DeviceRuntime:
         warnings = []
 
         # Check 0: No credentials configured at all (most common error)
-        if not self.nats_jwt and not os.getenv("NATS_CREDENTIALS_FILE"):
+        if not self.nats_jwt and not _resolve_credentials_file_env(self._logger):
             issues.append(
                 "No authentication credentials configured.\n"
                 "  NATS server requires authentication but no credentials were provided.\n\n"
@@ -784,12 +824,12 @@ class DeviceRuntime:
                 "    - DEVICE_ID (must match your device credentials)\n"
                 "    - NATS_URL (must use tls:// for secure connections)\n"
                 "    - MESSAGING_TLS_CA_FILE (path to CA certificate)\n"
-                "    - NATS_CREDENTIALS_FILE (path to device credentials)\n\n"
+                "    - MESSAGING_CREDENTIALS_FILE (path to device credentials)\n\n"
                 "  Quick fix:\n"
                 "    export DEVICE_ID=camera-001\n"
                 "    export NATS_URL=tls://localhost:4222\n"
                 "    export MESSAGING_TLS_CA_FILE=security_infra/certs/ca-cert.pem\n"
-                "    export NATS_CREDENTIALS_FILE=security_infra/credentials/camera-001.creds"
+                "    export MESSAGING_CREDENTIALS_FILE=security_infra/credentials/camera-001.creds"
             )
 
         # Check 1: TLS URL without CA file
@@ -823,11 +863,11 @@ class DeviceRuntime:
             )
 
         # Check 5: Validate required environment variables are set for common scenarios
-        if os.getenv("NATS_CREDENTIALS_FILE"):
+        if _resolve_credentials_file_env(self._logger):
             # User is trying to use credentials file
             if not self.nats_jwt or not self.nats_nkey_seed:
                 issues.append(
-                    "NATS_CREDENTIALS_FILE is set but credentials were not loaded.\n"
+                    "MESSAGING_CREDENTIALS_FILE is set but credentials were not loaded.\n"
                     "  Make sure the file exists and is valid."
                 )
 
@@ -850,13 +890,13 @@ class DeviceRuntime:
                 f"Current configuration:\n"
                 f"  DEVICE_ID={self.device_id}\n"
                 f"  NATS_URL={os.getenv('NATS_URL', 'not set')}\n"
-                f"  NATS_CREDENTIALS_FILE={os.getenv('NATS_CREDENTIALS_FILE', 'not set')}\n"
+                f"  MESSAGING_CREDENTIALS_FILE={_resolve_credentials_file_env(self._logger) or 'not set'}\n"
                 f"  MESSAGING_TLS_CA_FILE={os.getenv('MESSAGING_TLS_CA_FILE') or os.getenv('NATS_TLS_CA_FILE', 'not set')}\n\n"
                 f"Example correct configuration:\n"
                 f"  export DEVICE_ID=camera-001\n"
                 f"  export NATS_URL=tls://localhost:4222\n"
                 f"  export MESSAGING_TLS_CA_FILE=security_infra/certs/ca-cert.pem\n"
-                f"  export NATS_CREDENTIALS_FILE=security_infra/credentials/camera-001.creds\n"
+                f"  export MESSAGING_CREDENTIALS_FILE=security_infra/credentials/camera-001.creds\n"
                 f"{'='*70}\n"
             )
             raise ValueError(error_msg)
@@ -1581,7 +1621,7 @@ class DeviceRuntime:
                         f"  export MESSAGING_TLS_CERT_FILE=security_infra/<device-id>-cert.pem\n"
                         f"  export MESSAGING_TLS_KEY_FILE=security_infra/<device-id>-key.pem\n\n"
                         f"To fix (NATS JWT):\n"
-                        f"  export NATS_CREDENTIALS_FILE=~/.device-connect/credentials/<device-id>.creds.json\n"
+                        f"  export MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/<device-id>.creds.json\n"
                         f"{'='*70}\n"
                     )
                     # Don't retry authorization errors indefinitely during startup

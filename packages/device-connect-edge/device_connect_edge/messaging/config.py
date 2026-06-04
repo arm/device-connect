@@ -97,15 +97,17 @@ class MessagingConfig:
 
         For NATS JWT:
             - NATS_JWT and NATS_NKEY_SEED
-            - Or NATS_CREDENTIALS_FILE (JSON or .creds format)
+            - Or MESSAGING_CREDENTIALS_FILE (JSON or .creds format).
+              NATS_CREDENTIALS_FILE is honored as a deprecated alias.
 
         For MQTT:
             - MESSAGING_USERNAME and MESSAGING_PASSWORD
         """
         credentials = {}
 
-        # Check for credentials file first
-        creds_file = os.getenv("NATS_CREDENTIALS_FILE")
+        # Check for credentials file first. MESSAGING_CREDENTIALS_FILE is the
+        # backend-neutral name; NATS_CREDENTIALS_FILE remains a deprecated alias.
+        creds_file = os.getenv("MESSAGING_CREDENTIALS_FILE") or os.getenv("NATS_CREDENTIALS_FILE")
         if creds_file and os.path.exists(creds_file):
             return MessagingConfig._load_credentials_file(creds_file)
 

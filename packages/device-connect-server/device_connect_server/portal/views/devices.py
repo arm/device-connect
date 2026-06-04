@@ -5,6 +5,7 @@
 """Device management views: create, list, download credentials and bundles."""
 
 import html as _html
+import json
 
 import aiohttp_jinja2
 from aiohttp import web
@@ -166,12 +167,16 @@ async def download_credential(request: web.Request):
         if cred_tenant != tenant:
             raise web.HTTPForbidden(text="Access denied: credential belongs to another tenant")
 
-    cred_path = credentials.get_credential(filename)
-    if not cred_path:
+    if cred_data is None:
         raise web.HTTPNotFound(text=f"Credential file not found: {filename}")
 
-    return web.FileResponse(
-        cred_path,
+    # Serve a self-contained credential: inline any referenced TLS PEM files so
+    # the download works on a host that isn't the portal (mTLS / Zenoh). NATS
+    # JWT credentials are returned unchanged.
+    body = json.dumps(credentials.inline_tls_material(cred_data), indent=2)
+    return web.Response(
+        body=body,
+        content_type="application/json",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
@@ -679,8 +684,13 @@ async def download_agent_creds(request: web.Request):
                 text="Agent credential created but file not found",
             )
 
-    return web.FileResponse(
-        cred_path,
+    cred_data = credentials.get_credential_data(filename)
+    if cred_data is None:
+        raise web.HTTPInternalServerError(text="Agent credential unreadable")
+    body = json.dumps(credentials.inline_tls_material(cred_data), indent=2)
+    return web.Response(
+        body=body,
+        content_type="application/json",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
         },

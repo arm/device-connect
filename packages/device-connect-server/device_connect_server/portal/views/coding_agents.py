@@ -13,8 +13,33 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from ..services import tokens as tokens_svc
+from ..services.backend import get_backend
 
 logger = logging.getLogger(__name__)
+
+
+def _backend_context() -> dict:
+    """Facts about the active messaging backend, for templating AGENTS.md.
+
+    Lets the playbook render backend-correct connection instructions (Zenoh
+    mTLS vs NATS JWT) instead of hard-coding NATS.
+    """
+    try:
+        backend = get_backend()
+        name = backend.backend_name()
+        port = str(backend.broker_display_info().get("port", "")) or _default_port(name)
+    except Exception:  # never block the download on backend resolution
+        name, port = "nats", "4222"
+    return {
+        "backend": name,
+        "broker_port": port,
+        # Backend-neutral credentials-file env var (replaces NATS_CREDENTIALS_FILE).
+        "creds_env": "MESSAGING_CREDENTIALS_FILE",
+    }
+
+
+def _default_port(backend: str) -> str:
+    return {"zenoh": "7447", "mqtt": "1883"}.get(backend, "4222")
 
 
 # Scopes a non-admin user may grant on a token they mint themselves.
@@ -92,6 +117,7 @@ async def download_agents_md(request: web.Request) -> web.Response:
             "portal_url": _portal_url(request),
             "public_host": _public_host(request),
             "example_device_id": f"{tenant}-cam-001",
+            **_backend_context(),
         },
     )
     return web.Response(

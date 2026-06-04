@@ -157,10 +157,12 @@ class ZenohAdapter(MessagingClient):
                 - ["zenoh+tls://host:7447"]  — TLS connection
                 - ["tls/host:7447"]  — native Zenoh TLS format
             credentials: Not used for Zenoh (auth is via TLS certs)
-            tls_config: TLS configuration
-                - ca_file: Path to CA certificate
-                - cert_file: Path to client certificate (mTLS)
-                - key_file: Path to client key (mTLS)
+            tls_config: TLS configuration. Each of CA / cert / key may be given
+                either as a file path or as inline PEM text:
+                - ca_file / ca_pem: CA certificate
+                - cert_file / cert_pem: client certificate (mTLS)
+                - key_file / key_pem: client key (mTLS)
+                Inline PEM is passed to Zenoh via its base64 config fields.
             reconnect_cb: Callback when reconnected
             disconnect_cb: Callback when disconnected
             **kwargs: Additional options:
@@ -215,13 +217,44 @@ class ZenohAdapter(MessagingClient):
 
             # TLS configuration
             if tls_config:
+                # Zenoh 1.x renamed the connect-side TLS fields:
+                # client_certificate/client_private_key -> connect_certificate/
+                # connect_private_key, and mutual TLS is gated on enable_mtls.
+                #
+                # Each of CA / cert / key may be provided either as a file path
+                # (*_file) or as inline PEM text (*_pem). Inline PEM is fed to
+                # Zenoh via its native base64 config fields
+                # (root_ca_certificate_base64 / connect_certificate_base64 /
+                # connect_private_key_base64), so a self-contained creds.json
+                # connects without writing any cert material to local disk.
+                import base64
+
+                def _b64(pem: str) -> str:
+                    return base64.b64encode(
+                        pem.encode() if isinstance(pem, str) else pem
+                    ).decode()
+
                 tls_dict: Dict[str, Any] = {}
+                # CA
                 if tls_config.get("ca_file"):
                     tls_dict["root_ca_certificate"] = tls_config["ca_file"]
+                elif tls_config.get("ca_pem"):
+                    tls_dict["root_ca_certificate_base64"] = _b64(tls_config["ca_pem"])
+                # Client certificate (mTLS)
                 if tls_config.get("cert_file"):
-                    tls_dict["client_certificate"] = tls_config["cert_file"]
+                    tls_dict["connect_certificate"] = tls_config["cert_file"]
+                elif tls_config.get("cert_pem"):
+                    tls_dict["connect_certificate_base64"] = _b64(tls_config["cert_pem"])
+                # Client private key (mTLS)
                 if tls_config.get("key_file"):
-                    tls_dict["client_private_key"] = tls_config["key_file"]
+                    tls_dict["connect_private_key"] = tls_config["key_file"]
+                elif tls_config.get("key_pem"):
+                    tls_dict["connect_private_key_base64"] = _b64(tls_config["key_pem"])
+
+                has_cert = "connect_certificate" in tls_dict or "connect_certificate_base64" in tls_dict
+                has_key = "connect_private_key" in tls_dict or "connect_private_key_base64" in tls_dict
+                if has_cert and has_key:
+                    tls_dict["enable_mtls"] = True
                 if tls_dict:
                     config_dict.setdefault("transport", {}).setdefault("link", {})["tls"] = tls_dict
                     self._logger.info("TLS enabled for secure connection")

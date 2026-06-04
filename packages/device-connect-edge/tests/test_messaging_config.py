@@ -177,3 +177,22 @@ class TestCredentialsFile:
             config = MessagingConfig()
             assert config.credentials["jwt"] == "eyJhbGciOiJIUzI1NiJ9"
             assert config.credentials["nkey_seed"] == "SUACX123"
+
+    def test_messaging_credentials_file_env(self, tmp_path):
+        """The backend-neutral MESSAGING_CREDENTIALS_FILE is honored."""
+        creds_file = tmp_path / "creds.json"
+        creds_file.write_text('{"nats": {"jwt": "new-jwt", "nkey_seed": "new-seed"}}')
+        with patch.dict(os.environ, {"MESSAGING_CREDENTIALS_FILE": str(creds_file)}, clear=True):
+            config = MessagingConfig()
+            assert config.credentials["jwt"] == "new-jwt"
+
+    def test_messaging_credentials_file_takes_precedence(self, tmp_path):
+        """MESSAGING_CREDENTIALS_FILE wins over the deprecated NATS_CREDENTIALS_FILE."""
+        new = tmp_path / "new.json"
+        new.write_text('{"nats": {"jwt": "from-new", "nkey_seed": "s"}}')
+        old = tmp_path / "old.json"
+        old.write_text('{"nats": {"jwt": "from-old", "nkey_seed": "s"}}')
+        env = {"MESSAGING_CREDENTIALS_FILE": str(new), "NATS_CREDENTIALS_FILE": str(old)}
+        with patch.dict(os.environ, env, clear=True):
+            config = MessagingConfig()
+            assert config.credentials["jwt"] == "from-new"

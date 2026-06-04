@@ -238,9 +238,43 @@ class TestZenohClientConnect:
         call_args = mock_zenoh.Config.from_json5.call_args[0][0]
         config_dict = json.loads(call_args)
         tls = config_dict["transport"]["link"]["tls"]
+        # Zenoh 1.x connect-side field names (client_* -> connect_*), with mTLS.
         assert tls["root_ca_certificate"] == "/certs/ca.pem"
-        assert tls["client_certificate"] == "/certs/device.pem"
-        assert tls["client_private_key"] == "/certs/device.key"
+        assert tls["connect_certificate"] == "/certs/device.pem"
+        assert tls["connect_private_key"] == "/certs/device.key"
+        assert tls["enable_mtls"] is True
+
+    @pytest.mark.asyncio
+    @patch("device_connect_edge.messaging.zenoh_adapter.zenoh")
+    @patch("device_connect_edge.messaging.zenoh_adapter._ZENOH_AVAILABLE", True)
+    async def test_connect_with_inline_pem_tls(self, mock_zenoh):
+        """Inline PEM material is passed to Zenoh via its base64 config fields."""
+        import base64
+
+        session = _make_mock_session()
+        mock_zenoh.open = MagicMock(return_value=session)
+        mock_zenoh.Config.from_json5 = MagicMock(return_value=MagicMock())
+
+        from device_connect_edge.messaging.zenoh_adapter import ZenohAdapter
+
+        adapter = ZenohAdapter()
+        await adapter.connect(
+            servers=["tls/router:7447"],
+            tls_config={
+                "ca_pem": "CA-PEM-TEXT",
+                "cert_pem": "CERT-PEM-TEXT",
+                "key_pem": "KEY-PEM-TEXT",
+            },
+        )
+
+        call_args = mock_zenoh.Config.from_json5.call_args[0][0]
+        tls = json.loads(call_args)["transport"]["link"]["tls"]
+        assert tls["root_ca_certificate_base64"] == base64.b64encode(b"CA-PEM-TEXT").decode()
+        assert tls["connect_certificate_base64"] == base64.b64encode(b"CERT-PEM-TEXT").decode()
+        assert tls["connect_private_key_base64"] == base64.b64encode(b"KEY-PEM-TEXT").decode()
+        assert tls["enable_mtls"] is True
+        # No on-disk path fields when using inline PEM.
+        assert "connect_certificate" not in tls and "connect_private_key" not in tls
 
     @pytest.mark.asyncio
     @patch("device_connect_edge.messaging.zenoh_adapter.zenoh")

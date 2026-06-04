@@ -17,8 +17,18 @@ from .. import config
 
 logger = logging.getLogger(__name__)
 
-# Default Zenoh message types to allow
-_ALL_MESSAGES = ["put", "get", "declare_subscriber", "declare_queryable"]
+# Default Zenoh message types to allow. Zenoh 1.x renamed the ACL message
+# verbs: the former "get" is now "query" (with "reply" for the response side).
+# Covers pub/sub (put/delete/declare_subscriber) and RPC
+# (query/reply/declare_queryable) as used by the edge Zenoh adapter.
+_ALL_MESSAGES = [
+    "put",
+    "delete",
+    "query",
+    "reply",
+    "declare_subscriber",
+    "declare_queryable",
+]
 _ALL_FLOWS = ["ingress", "egress"]
 
 
@@ -60,55 +70,57 @@ def generate_config(host: str, port: str = "7447") -> dict:
         "transport": {
             "link": {
                 "tls": {
-                    "server_certificate": "/certs/zenoh-cert.pem",
-                    "server_private_key": "/certs/zenoh-key.pem",
+                    "listen_certificate": "/certs/zenoh-cert.pem",
+                    "listen_private_key": "/certs/zenoh-key.pem",
                     "root_ca_certificate": "/certs/ca.pem",
-                    "client_auth": True,
+                    "enable_mtls": True,
                 },
             },
         },
-        "plugins": {
-            "access_control": {
-                "enabled": True,
-                "default_permission": "deny",
-                "rules": [
-                    {
-                        "id": "privileged",
-                        "messages": _ALL_MESSAGES,
-                        "flows": _ALL_FLOWS,
-                        "key_exprs": ["device-connect/**"],
-                        "permission": "allow",
-                    },
-                    {
-                        "id": "inbox",
-                        "messages": _ALL_MESSAGES,
-                        "flows": _ALL_FLOWS,
-                        "key_exprs": ["@/**"],
-                        "permission": "allow",
-                    },
-                ],
-                "subjects": [
-                    {
-                        "id": "privileged",
-                        "cert_common_names": ["registry", "facilitator"],
-                    },
-                    {
-                        "id": "all-clients",
-                        "cert_common_names": ["*"],
-                    },
-                ],
-                "policies": [
-                    {
-                        "rules": ["privileged"],
-                        "subjects": ["privileged"],
-                    },
-                    {
-                        "id": "inbox-policy",
-                        "rules": ["inbox"],
-                        "subjects": ["all-clients"],
-                    },
-                ],
-            },
+        # Zenoh 1.x exposes access control as a core config field (top-level
+        # "access_control"), not a loadable plugin. Nesting it under "plugins"
+        # makes zenohd look for libzenoh_plugin_access_control.so (absent from
+        # the official image) and silently run with ACL disabled.
+        "access_control": {
+            "enabled": True,
+            "default_permission": "deny",
+            "rules": [
+                {
+                    "id": "privileged",
+                    "messages": _ALL_MESSAGES,
+                    "flows": _ALL_FLOWS,
+                    "key_exprs": ["device-connect/**"],
+                    "permission": "allow",
+                },
+                {
+                    "id": "inbox",
+                    "messages": _ALL_MESSAGES,
+                    "flows": _ALL_FLOWS,
+                    "key_exprs": ["@/**"],
+                    "permission": "allow",
+                },
+            ],
+            "subjects": [
+                {
+                    "id": "privileged",
+                    "cert_common_names": ["registry", "facilitator"],
+                },
+                {
+                    "id": "all-clients",
+                    "cert_common_names": ["*"],
+                },
+            ],
+            "policies": [
+                {
+                    "rules": ["privileged"],
+                    "subjects": ["privileged"],
+                },
+                {
+                    "id": "inbox-policy",
+                    "rules": ["inbox"],
+                    "subjects": ["all-clients"],
+                },
+            ],
         },
     }
 
@@ -127,7 +139,7 @@ def add_tenant_rule(tenant: str, device_cns: list[str]) -> dict:
     Returns the updated config.
     """
     cfg = load_config()
-    acl = cfg.get("plugins", {}).get("access_control", {})
+    acl = cfg.get("access_control", {})
 
     rule_id = f"tenant-{tenant}"
     subject_id = f"tenant-{tenant}"
@@ -159,7 +171,7 @@ def add_tenant_rule(tenant: str, device_cns: list[str]) -> dict:
         "subjects": [subject_id],
     })
 
-    cfg.setdefault("plugins", {})["access_control"] = acl
+    cfg["access_control"] = acl
     save_config(cfg)
     logger.info("Added tenant ACL rule: %s (%d devices)", tenant, len(device_cns))
     return cfg
@@ -171,7 +183,7 @@ def add_devices_to_tenant(tenant: str, device_cns: list[str]) -> dict:
     Returns the updated config.
     """
     cfg = load_config()
-    acl = cfg.get("plugins", {}).get("access_control", {})
+    acl = cfg.get("access_control", {})
 
     subject_id = f"tenant-{tenant}"
     for subject in acl.get("subjects", []):
@@ -184,7 +196,7 @@ def add_devices_to_tenant(tenant: str, device_cns: list[str]) -> dict:
         # Subject group doesn't exist — create the full tenant rule
         return add_tenant_rule(tenant, device_cns)
 
-    cfg["plugins"]["access_control"] = acl
+    cfg["access_control"] = acl
     save_config(cfg)
     logger.info("Added %d device(s) to tenant %s ACL", len(device_cns), tenant)
     return cfg
@@ -193,7 +205,7 @@ def add_devices_to_tenant(tenant: str, device_cns: list[str]) -> dict:
 def get_tenant_cns(tenant: str) -> list[str]:
     """Get the list of device CNs for a tenant."""
     cfg = load_config()
-    acl = cfg.get("plugins", {}).get("access_control", {})
+    acl = cfg.get("access_control", {})
     subject_id = f"tenant-{tenant}"
     for subject in acl.get("subjects", []):
         if subject["id"] == subject_id:
@@ -207,7 +219,7 @@ def list_tenant_rules() -> dict[str, list[str]]:
     Returns dict: tenant_name -> [device_cn, ...].
     """
     cfg = load_config()
-    acl = cfg.get("plugins", {}).get("access_control", {})
+    acl = cfg.get("access_control", {})
     tenants = {}
     for subject in acl.get("subjects", []):
         sid = subject["id"]

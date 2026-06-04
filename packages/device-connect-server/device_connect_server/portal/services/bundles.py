@@ -30,11 +30,24 @@ def create_bundle(tenant: str, public_host: str = "") -> bytes:
     creds_list = credentials.list_credentials(tenant=tenant)
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add credential files
+        # Add credential files, inlining referenced TLS PEM material so each
+        # *.creds.json is self-contained and works without the sibling
+        # certs/ files. The certs/ directory is still shipped below for
+        # operators who prefer file-path TLS (MESSAGING_TLS_*_FILE).
         for cred in creds_list:
             cred_path = Path(cred["path"])
-            if cred_path.exists():
+            if not cred_path.exists():
+                continue
+            try:
+                data = json.loads(cred_path.read_text())
+            except (json.JSONDecodeError, OSError):
                 zf.write(cred_path, f"{tenant}/credentials/{cred['filename']}")
+                continue
+            inlined = credentials.inline_tls_material(data)
+            zf.writestr(
+                f"{tenant}/credentials/{cred['filename']}",
+                json.dumps(inlined, indent=2),
+            )
 
         # For Zenoh: include TLS cert files referenced in credentials
         if backend_name == "zenoh":

@@ -26,8 +26,11 @@ services:
     volumes:
       - ../security_infra:/certs:ro
       - ../security_infra/zenoh-config.json5:/config/zenoh-config.json5:ro
+    # The eclipse/zenoh image is BusyBox/Alpine-based: no bash (so no
+    # /dev/tcp) and its nc has no -z flag. Probe the TLS port by opening a
+    # short-lived connection with BusyBox nc instead.
     healthcheck:
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/7447' || exit 1"]
+      test: ["CMD-SHELL", "echo | nc -w2 127.0.0.1 7447 || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -68,6 +71,14 @@ services:
       context: ../../..
       dockerfile: packages/device-connect-server/device_connect_server/registry/service/Dockerfile
     container_name: dc-registry
+    # The privileged mTLS client key (registry-key.pem) is generated mode 0600
+    # owned by root on the shared security_infra mount. The image's default
+    # non-root user can't read it, so the Zenoh TLS link silently never
+    # establishes (open() returns optimistically and retries forever) and the
+    # registry's queryables never reach the router -> every device registration
+    # gets "no responders". Run as root, like the zenoh container, so it can
+    # read the key without weakening the 0600 perms.
+    user: "0:0"
     environment:
       TENANTS: ${DC_TENANTS:-default}
       MESSAGING_BACKEND: zenoh
