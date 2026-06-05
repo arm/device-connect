@@ -2,39 +2,52 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Zenoh router lifecycle — config reload via Docker container restart."""
+"""Zenoh router lifecycle — config reload requested via a signal file.
 
-import asyncio
+The Zenoh ACL cannot be hot-reloaded (it is read once at startup), so a
+config change requires restarting the router. Rather than give the
+web-facing portal access to the Docker socket (a host-takeover lever),
+the portal only *requests* a reload by writing a token to a shared
+signal file. A tiny privileged ``zenoh-reloader`` sidecar — the only
+thing in the stack with the Docker socket — watches that file, debounces
+bursts, and restarts the one named router container. The portal holds no
+Docker access at all.
+"""
+
 import logging
-
-from .. import config
+import os
+import time
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+#: Shared file the portal touches to request a router restart. The
+#: ``zenoh-reloader`` sidecar watches this path on a shared volume.
+RELOAD_SIGNAL_PATH = os.environ.get("ZENOH_RELOAD_SIGNAL", "/reload/request")
+
 
 async def reload_zenoh() -> dict:
-    """Restart the Zenoh router container to pick up config changes.
+    """Request a Zenoh router reload by bumping the shared signal file.
 
-    Returns status dict with {success, message}.
+    Non-blocking: the sidecar performs the (debounced) restart
+    asynchronously. The ACL change takes effect once the router has
+    restarted. Returns ``{success, message}``.
     """
-    container = config.ZENOH_CONTAINER
+    signal = Path(RELOAD_SIGNAL_PATH)
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "restart", container,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-        if proc.returncode == 0:
-            logger.info("Restarted Zenoh container: %s", container)
-            return {
-                "success": True,
-                "message": f"Zenoh container '{container}' restarted with updated config",
-            }
-        else:
-            msg = stderr.decode().strip()
-            return {"success": False, "message": f"Container restart failed: {msg}"}
-    except FileNotFoundError:
-        return {"success": False, "message": "docker CLI not available"}
-    except asyncio.TimeoutError:
-        return {"success": False, "message": "Timeout restarting container"}
+        signal.parent.mkdir(parents=True, exist_ok=True)
+        # A strictly increasing token; the sidecar restarts when it
+        # changes. ns precision avoids collisions on rapid successive
+        # requests (which the sidecar coalesces into one restart).
+        signal.write_text(str(time.time_ns()))
+        logger.info("Requested Zenoh reload via %s", signal)
+        return {
+            "success": True,
+            "message": "Zenoh reload requested; the reloader sidecar will "
+                       "restart the router (debounced).",
+        }
+    except OSError as e:
+        return {
+            "success": False,
+            "message": f"Could not write reload signal {signal}: {e}",
+        }

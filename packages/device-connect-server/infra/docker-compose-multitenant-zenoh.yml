@@ -24,7 +24,14 @@ services:
     ports:
       - "7447:7447"
     volumes:
-      - ../security_infra:/certs:ro
+      # Per-file mounts (not the whole security_infra dir) so the CA *private*
+      # key (ca-key.pem) and every tenant's device keys stay out of the
+      # router container. It only needs the root CA cert + its own server
+      # keypair. Requires bootstrap to have generated these files first (as the
+      # README/compose prerequisites already state).
+      - ../security_infra/ca.pem:/certs/ca.pem:ro
+      - ../security_infra/zenoh-cert.pem:/certs/zenoh-cert.pem:ro
+      - ../security_infra/zenoh-key.pem:/certs/zenoh-key.pem:ro
       - ../security_infra/zenoh-config.json5:/config/zenoh-config.json5:ro
     # The eclipse/zenoh image is BusyBox/Alpine-based: no bash (so no
     # /dev/tcp) and its nc has no -z flag. Probe the TLS port by opening a
@@ -37,6 +44,45 @@ services:
       start_period: 5s
     networks:
       - dc-net
+    restart: unless-stopped
+
+  # Least-privilege reload broker. This is the ONLY container with the Docker
+  # socket; its sole job is to restart the router when the portal requests a
+  # reload (Zenoh ACL can't hot-reload). It debounces bursts (many
+  # provisions/revokes -> one restart) and has no network access at all.
+  zenoh-reloader:
+    image: docker:27-cli
+    container_name: dc-zenoh-reloader
+    environment:
+      ZENOH_CONTAINER: dc-zenoh
+      ZENOH_RELOAD_SIGNAL: /reload/request
+      RELOAD_DEBOUNCE: "2"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - reload-signal:/reload
+    network_mode: none
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        SIGNAL="$${ZENOH_RELOAD_SIGNAL:-/reload/request}"
+        DEBOUNCE="$${RELOAD_DEBOUNCE:-2}"
+        CONTAINER="$${ZENOH_CONTAINER:-dc-zenoh}"
+        LAST=""
+        [ -f "$$SIGNAL" ] && LAST="$$(cat "$$SIGNAL")"
+        echo "zenoh-reloader: watching $$SIGNAL (debounce $${DEBOUNCE}s) target $$CONTAINER"
+        while true; do
+          if [ -f "$$SIGNAL" ]; then
+            CUR="$$(cat "$$SIGNAL")"
+            if [ "$$CUR" != "$$LAST" ]; then
+              sleep "$$DEBOUNCE"
+              CUR="$$(cat "$$SIGNAL")"
+              echo "zenoh-reloader: reload ($$CUR) -> restarting $$CONTAINER"
+              docker restart "$$CONTAINER" >/dev/null 2>&1 && echo "  restarted" || echo "  restart FAILED"
+              LAST="$$CUR"
+            fi
+          fi
+          sleep 1
+        done
     restart: unless-stopped
 
   etcd:
@@ -72,12 +118,13 @@ services:
       dockerfile: packages/device-connect-server/device_connect_server/registry/service/Dockerfile
     container_name: dc-registry
     # The privileged mTLS client key (registry-key.pem) is generated mode 0600
-    # owned by root on the shared security_infra mount. The image's default
-    # non-root user can't read it, so the Zenoh TLS link silently never
-    # establishes (open() returns optimistically and retries forever) and the
-    # registry's queryables never reach the router -> every device registration
-    # gets "no responders". Run as root, like the zenoh container, so it can
-    # read the key without weakening the 0600 perms.
+    # owned by root. The image's default non-root user can't read it, so the
+    # Zenoh TLS link silently never establishes (open() returns optimistically
+    # and retries forever) and the registry's queryables never reach the
+    # router -> every device registration gets "no responders". Run as root so
+    # it can read the key without weakening the 0600 perms. Scope is limited by
+    # the per-file mounts below: even as root the registry sees only the CA
+    # cert + its own keypair, never the CA private key or other devices' keys.
     user: "0:0"
     environment:
       TENANTS: ${DC_TENANTS:-default}
@@ -89,7 +136,11 @@ services:
       ETCD_HOST: etcd
       ETCD_PORT: "2379"
     volumes:
-      - ../security_infra:/certs:ro
+      # Per-file mounts: the registry needs only the root CA cert and its own
+      # client keypair, never the CA private key or any other device's keys.
+      - ../security_infra/ca.pem:/certs/ca.pem:ro
+      - ../security_infra/registry-cert.pem:/certs/registry-cert.pem:ro
+      - ../security_infra/registry-key.pem:/certs/registry-key.pem:ro
       - ~/.device-connect/credentials:/app/credentials:ro
     depends_on:
       zenoh:
@@ -118,10 +169,14 @@ services:
       # ADMIN_PASS: set via env var or .env file; auto-generated if omitted
       SECURITY_INFRA_DIR: /app/security_infra
       CREDS_DIR: /root/.device-connect/credentials
+      ZENOH_RELOAD_SIGNAL: /reload/request
     volumes:
       - ~/.device-connect/credentials:/root/.device-connect/credentials
       - ../security_infra:/app/security_infra
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # The portal no longer holds the Docker socket (host-takeover lever).
+      # It requests a router reload by bumping this shared signal file; the
+      # privileged zenoh-reloader sidecar performs the actual restart.
+      - reload-signal:/reload
     depends_on:
       zenoh:
         condition: service_healthy
@@ -133,6 +188,9 @@ services:
 
 volumes:
   etcd-data:
+  # Shared between the portal (writer) and the zenoh-reloader sidecar (reader)
+  # to carry reload requests without giving the portal the Docker socket.
+  reload-signal:
 
 networks:
   dc-net:
