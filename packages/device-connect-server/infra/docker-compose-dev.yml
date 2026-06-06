@@ -12,7 +12,7 @@
 
 services:
   zenoh:
-    image: eclipse/zenoh:latest
+    image: eclipse/zenoh:1.7.2
     container_name: aif-zenoh
     command: ["--no-multicast-scouting"]
     ports:

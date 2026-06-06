@@ -15,7 +15,10 @@
 
 services:
   zenoh:
-    image: eclipse/zenoh:latest
+    # Pinned: eclipse/zenoh:latest is a moving target and has broken this
+    # stack before (TLS config schema + ACL plugin changes). 1.7.2 is the
+    # validated version.
+    image: eclipse/zenoh:1.7.2
     container_name: dc-zenoh
     command:
       - "--no-multicast-scouting"
@@ -33,11 +36,12 @@ services:
       - ../security_infra/zenoh-cert.pem:/certs/zenoh-cert.pem:ro
       - ../security_infra/zenoh-key.pem:/certs/zenoh-key.pem:ro
       - ../security_infra/zenoh-config.json5:/config/zenoh-config.json5:ro
-    # The eclipse/zenoh image is BusyBox/Alpine-based: no bash (so no
-    # /dev/tcp) and its nc has no -z flag. Probe the TLS port by opening a
-    # short-lived connection with BusyBox nc instead.
+    # Check the listener is bound WITHOUT connecting to the TLS port: an
+    # actual connection (e.g. `echo | nc`) sends bytes the router reads as a
+    # malformed TLS record and logs "InvalidContentType" every interval.
+    # netstat inspects the socket table only -- no connection, no log noise.
     healthcheck:
-      test: ["CMD-SHELL", "echo | nc -w2 127.0.0.1 7447 || exit 1"]
+      test: ["CMD-SHELL", "netstat -ltn 2>/dev/null | grep -q ':7447' || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10

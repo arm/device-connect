@@ -11,6 +11,7 @@ Generates:
 """
 
 import asyncio
+import ipaddress
 import logging
 import os
 import tempfile
@@ -123,9 +124,16 @@ async def generate_server_cert(
     await _run_openssl("genrsa", "-out", str(server_key), "2048")
     os.chmod(server_key, 0o600)
 
-    # Create SAN config
+    # Create SAN config. A bare IP host must go in an IP SAN, not a DNS SAN,
+    # or TLS name verification fails for devices that connect by IP
+    # (e.g. tls/203.0.113.5:7447 against a cert carrying only DNS:203.0.113.5).
+    try:
+        ipaddress.ip_address(hostname)
+        host_san = f"IP:{hostname}"
+    except ValueError:
+        host_san = f"DNS:{hostname}"
     san_entries = [
-        f"DNS:{hostname}",
+        host_san,
         "DNS:localhost",
         "DNS:zenoh",
         "IP:127.0.0.1",
