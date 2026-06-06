@@ -72,7 +72,7 @@ class BridgeConfig:
             BridgeConfig instance
         """
         # Check for credentials file first (simplest config)
-        creds_file = os.getenv("NATS_CREDENTIALS_FILE")
+        creds_file = os.getenv("MESSAGING_CREDENTIALS_FILE") or os.getenv("NATS_CREDENTIALS_FILE")
         if creds_file and creds_file.endswith(".creds.json"):
             return cls.from_credentials_file(creds_file)
 

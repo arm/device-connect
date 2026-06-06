@@ -129,7 +129,7 @@ DEVICE_CONNECT_ALLOW_INSECURE=true python my_sensor.py
 
 ```bash
 # Real hardware (on the device)
-NATS_CREDENTIALS_FILE=~/.device-connect/credentials/dht22-001.creds.json python examples/dht22_sensor/device_driver.py
+MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/dht22-001.creds.json python examples/dht22_sensor/device_driver.py
 ```
 
 ## Device-to-Device Mode (No Infrastructure)
@@ -194,7 +194,7 @@ Pass the file path via environment variable or constructor parameter:
 
 ```bash
 # Via environment variable
-NATS_CREDENTIALS_FILE=~/.device-connect/credentials/sensor-001.creds.json \
+MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/sensor-001.creds.json \
   NATS_URL=nats://localhost:4222 python my_device.py
 ```
 

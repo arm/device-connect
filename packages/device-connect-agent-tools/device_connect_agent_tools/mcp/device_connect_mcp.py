@@ -337,7 +337,7 @@ class DeviceConnectMCP:
             messaging_urls = [u.strip() for u in url.split(",")]
 
         if not credentials_file:
-            credentials_file = os.getenv("NATS_CREDENTIALS_FILE")
+            credentials_file = os.getenv("MESSAGING_CREDENTIALS_FILE") or os.getenv("NATS_CREDENTIALS_FILE")
 
         if not tls_ca_file:
             tls_ca_file = os.getenv("NATS_TLS_CA_FILE")

@@ -320,7 +320,7 @@ STARTER_SCRIPT = '''\
 """Device Connect — starter device script.
 
 Usage:
-    export NATS_CREDENTIALS_FILE=./your-device.creds.json
+    export MESSAGING_CREDENTIALS_FILE=./your-device.creds.json
     export NATS_URL=nats://your-server:4222
     python my_device.py
 
@@ -400,7 +400,7 @@ class MyDeviceDriver(DeviceDriver):
 async def run():
     driver = MyDeviceDriver()
 
-    # device_id and tenant are auto-detected from NATS_CREDENTIALS_FILE
+    # device_id and tenant are auto-detected from MESSAGING_CREDENTIALS_FILE
     device = DeviceRuntime(driver=driver)
 
     loop = asyncio.get_running_loop()
@@ -452,7 +452,7 @@ Usage:
 
     export MESSAGING_BACKEND=nats
     export NATS_URL=nats://<host>:<port>
-    export NATS_CREDENTIALS_FILE=./<your-tenant>-agent.creds.json
+    export MESSAGING_CREDENTIALS_FILE=./<your-tenant>-agent.creds.json
     export DEVICE_CONNECT_ZONE=<your-tenant>
     export OPENAI_API_KEY=<arm-proxy-token>
     export OPENAI_BASE_URL=https://openai-api-proxy.geo.arm.com/api/providers/openai-eu/v1
@@ -1090,17 +1090,17 @@ Each device needs its own credentials file. Assign one credential per terminal:
 
 ```bash
 # Terminal 1 — Soil Sensor
-export NATS_CREDENTIALS_FILE=./{cred1}
+export MESSAGING_CREDENTIALS_FILE=./{cred1}
 export NATS_URL={nats_url}
 python soil_sensor.py
 
 # Terminal 2 — Irrigation Pump
-export NATS_CREDENTIALS_FILE=./{cred2}
+export MESSAGING_CREDENTIALS_FILE=./{cred2}
 export NATS_URL={nats_url}
 python irrigation_pump.py
 
 # Terminal 3 — Greenhouse Controller
-export NATS_CREDENTIALS_FILE=./{cred3}
+export MESSAGING_CREDENTIALS_FILE=./{cred3}
 export NATS_URL={nats_url}
 python greenhouse_ctrl.py
 ```

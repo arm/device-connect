@@ -113,14 +113,14 @@ def _generate_env(tenant: str, backend: str, host: str, port: str) -> str:
             f"export MQTT_URL=mqtt://{host}:{port}",
             "",
             "# Set this to the credentials file for your device:",
-            f"# export MQTT_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
+            f"# export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
         ]
     else:
         lines += [
             f"export NATS_URL=nats://{host}:{port}",
             "",
             "# Set this to the credentials file for your device:",
-            f"# export NATS_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
+            f"# export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
         ]
 
     return "\n".join(lines) + "\n"
@@ -156,7 +156,7 @@ def _generate_readme(tenant: str, backend: str) -> str:
             f"   ```\n\n"
             f"2. Set your device credential:\n"
             f"   ```bash\n"
-            f"   export MQTT_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
+            f"   export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
             f"   ```\n\n"
             f"3. Run your device:\n"
             f"   ```bash\n"
@@ -173,7 +173,7 @@ def _generate_readme(tenant: str, backend: str) -> str:
             f"   ```\n\n"
             f"2. Set your device credential:\n"
             f"   ```bash\n"
-            f"   export NATS_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
+            f"   export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
             f"   ```\n\n"
             f"3. Run your device:\n"
             f"   ```bash\n"

@@ -129,7 +129,7 @@ All settings are via environment variables:
 4. **Download credentials**: download individual `.creds.json` files or a full `.zip` bundle
 5. **Connect a device**: use the connection instructions shown for each device:
    ```bash
-   export NATS_CREDENTIALS_FILE=./myuser-robot-001.creds.json
+   export MESSAGING_CREDENTIALS_FILE=./myuser-robot-001.creds.json
    export NATS_URL=nats://your-host:4222
    export DEVICE_CONNECT_ALLOW_INSECURE=true
    python your_device.py

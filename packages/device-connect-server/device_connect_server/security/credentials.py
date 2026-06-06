@@ -194,7 +194,7 @@ class CredentialsLoader:
         """Load credentials from environment variables.
 
         Checks the following environment variables:
-            - NATS_CREDENTIALS_FILE: Path to credentials file
+            - MESSAGING_CREDENTIALS_FILE (or deprecated NATS_CREDENTIALS_FILE): Path to credentials file
             - NATS_JWT: JWT token
             - NATS_NKEY_SEED: NKey seed
             - NATS_URL / NATS_URLS: Server URL(s)
@@ -209,8 +209,9 @@ class CredentialsLoader:
         """
         result: Dict[str, Any] = {}
 
-        # Try loading from credentials file first
-        creds_file = os.getenv("NATS_CREDENTIALS_FILE")
+        # Try loading from credentials file first. MESSAGING_CREDENTIALS_FILE is
+        # the backend-neutral name; NATS_CREDENTIALS_FILE is a deprecated alias.
+        creds_file = os.getenv("MESSAGING_CREDENTIALS_FILE") or os.getenv("NATS_CREDENTIALS_FILE")
         if creds_file and Path(creds_file).exists():
             try:
                 file_creds = CredentialsLoader.load_from_file(creds_file)

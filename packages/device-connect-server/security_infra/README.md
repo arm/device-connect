@@ -176,7 +176,7 @@ Give each group their zip file. The `tenant-config.env` inside sets the required
 
 ```bash
 source tenant-config.env
-export NATS_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
+export MESSAGING_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
 ```
 
 ## Managing Tenants
@@ -280,7 +280,7 @@ Once a tenant has credentials, each device connects by setting three environment
 ```bash
 export TENANT=alpha
 export NATS_URL=nats://dc.example.com:4222
-export NATS_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
+export MESSAGING_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
 export MESSAGING_BACKEND=nats
 ```
 
