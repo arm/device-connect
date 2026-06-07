@@ -286,6 +286,16 @@ curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
 in place) when the backend supports `remove_device` but the broker rejected
 the call — retry once the backend is healthy. On a soft-success backend
 (no `remove_device`) it returns 200 with a `backend_warning` field.
+{% if is_zenoh %}
+> ⚠️ **On Zenoh, per-device revocation is _soft_.** Every device of a tenant
+> shares one certificate CN (the tenant), so the broker cannot deny a single
+> device. `revoke` deletes the credential and its cert — it can't be
+> re-downloaded and drops off the portal/registry — but a copy **already
+> deployed stays cryptographically valid until the certificate expires** (the
+> response says so in `backend_warning`). For an immediate cutoff, hard-revoke
+> the whole tenant or use short-lived certificates. See the model doc shipped
+> with the server (`docs/zenoh-per-tenant-cn.md`).
+{% endif %}
 
 Either decommission flow disconnects the device on its next {{ broker_label }} reconnect.
 
@@ -436,15 +446,15 @@ from it and selects the `{{ bk }}` backend automatically.
 {% if is_zenoh -%}
 ```bash
 export {{ creds_env }}=./{{ tenant }}-cam-001.creds.json
-export MESSAGING_BACKEND=zenoh
-export ZENOH_CONNECT=tls/{{ public_host }}:{{ broker_port }}
 python my_device.py
 ```
 
-> The downloaded `*.creds.json` already carries the TLS cert/key/CA inline, so
-> nothing else is needed. (Advanced: you can instead point
+> The downloaded `*.creds.json` is **self-contained**: it carries the broker
+> URL **and** the TLS cert/key/CA inline, and the backend is auto-detected — so
+> nothing else is needed. (Overrides: `ZENOH_CONNECT=tls/<host>:{{ broker_port }}`
+> to reach the broker at a different address than the one in the credential, or
 > `MESSAGING_TLS_CA_FILE` / `MESSAGING_TLS_CERT_FILE` / `MESSAGING_TLS_KEY_FILE`
-> at `.pem` files on disk — those env vars override whatever is in the creds.)
+> to use `.pem` files on disk instead of the inlined material.)
 {%- else -%}
 {% if not is_mqtt -%}
 The edge runtime authenticates to NATS with the JWT in `{{ creds_env }}`,
@@ -522,11 +532,9 @@ ssh user@edge-host "python3 -m venv ~/.dc-edge && \
 ssh user@edge-host "tmux new -d -s dc-cam-001 \
     'cd ~/dc && \
      {{ creds_env }}=./{{ tenant }}-cam-001.creds.json \
-{% if is_zenoh -%}
-     MESSAGING_BACKEND=zenoh ZENOH_CONNECT=tls/{{ public_host }}:{{ broker_port }} \
-{%- elif is_mqtt -%}
+{% if is_mqtt -%}
      MQTT_URL=mqtt://{{ public_host }}:{{ broker_port }} \
-{%- else -%}
+{%- elif not is_zenoh -%}
      NATS_URL=nats://{{ public_host }}:{{ broker_port }} \
 {%- endif %}
      ~/.dc-edge/bin/python my_device.py 2>&1 | tee dc-cam-001.log'"
@@ -791,12 +799,9 @@ No module named 'device_connect_edge'`. Pinning to the venv avoids that.
 [Service]
 WorkingDirectory=%h/dc
 Environment={{ creds_env }}=%h/dc/{{ tenant }}-cam-001.creds.json
-{% if is_zenoh -%}
-Environment=MESSAGING_BACKEND=zenoh
-Environment=ZENOH_CONNECT=tls/{{ public_host }}:{{ broker_port }}
-{%- elif is_mqtt -%}
+{% if is_mqtt -%}
 Environment=MQTT_URL=mqtt://{{ public_host }}:{{ broker_port }}
-{%- else -%}
+{%- elif not is_zenoh -%}
 Environment=NATS_URL=nats://{{ public_host }}:{{ broker_port }}
 {%- endif %}
 ExecStart=%h/.dc-edge/bin/python %h/dc/my_device.py
