@@ -179,15 +179,15 @@ id/name, or `*` for all. Matching is **case-sensitive** — lowercase by
 convention.
 
 > **Which keys can you filter on?** Label keys come from each driver's declared
-> `DeviceCapabilities.labels` (plus `location`, auto-mirrored from device
-> status). A device's `device_type` is **only** filterable if the driver also
-> publishes it as a label — it is not auto-exposed, so `device(type:camera)`
-> matches nothing unless the camera driver declared a `type` label. `device(*)`,
-> a bare-id match like `device({{ example_device_id }})`, and any key listed by
-> `discover_labels()` always work — **call `discover_labels()` first** to see the
-> real vocabulary for this fleet instead of guessing keys. (`discover()` returns
-> matches under `results` / `matched`; the deprecated `list_devices()` uses
-> `devices` / `total` — don't mix the two envelopes.)
+> `DeviceCapabilities.labels`, plus two auto-mirrored keys: `location` (from
+> device status) and `type` (from the device's `device_type`). So
+> `device(type:camera)` and `device(location:warehouse1)` work for every device,
+> and a driver that declares its own `type`/`location` label overrides the
+> mirror. Any other key must be declared by the driver — **call
+> `discover_labels()` first** to see the real vocabulary for this fleet instead
+> of guessing keys. (`discover()` returns matches under `results` / `matched`;
+> the deprecated `list_devices()` uses `devices` / `total` — don't mix the two
+> envelopes.)
 
 > The older `describe_fleet()` / `list_devices()` / `get_device_functions()` /
 > `invoke_device()` meta-tools still work but are **deprecated** (they emit

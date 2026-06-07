@@ -190,6 +190,14 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     if legacy_location and (not caps_labels or "location" not in caps_labels):
         merged_labels = {**(caps_labels or {}), "location": legacy_location}
 
+    # Mirror device_type into labels["type"] so the most natural discovery
+    # filter -- discover("device(type:camera)") -- works for every device,
+    # not only those whose driver declared a "type" label. A driver-declared
+    # "type" label (if any) takes precedence.
+    device_type = raw.get("device_type") or identity.get("device_type")
+    if device_type and (not merged_labels or "type" not in merged_labels):
+        merged_labels = {**(merged_labels or {}), "type": device_type}
+
     # NOTE: The raw ``capabilities`` dict is intentionally NOT included in
     # the flattened output.  ``functions`` and ``events`` are extracted to
     # the top level for direct access.  Including both would duplicate data

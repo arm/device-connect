@@ -227,6 +227,21 @@ class TestFlattenDevice:
         assert result["functions"] == []
         assert result["events"] == []
 
+    def test_device_type_mirrored_into_labels_as_type(self):
+        # device_type must be selectable via discover("device(type:...)")
+        # even when the driver declared no labels.
+        raw = {"device_id": "c1", "identity": {"device_type": "controller"},
+               "status": {"location": "lab/rack-1"}, "capabilities": {}}
+        result = conn_mod.flatten_device(raw)
+        assert result["labels"]["type"] == "controller"
+        assert result["labels"]["location"] == "lab/rack-1"
+
+    def test_driver_declared_type_label_wins(self):
+        raw = {"device_id": "c1", "identity": {"device_type": "controller"},
+               "capabilities": {"labels": {"type": "custom"}}}
+        result = conn_mod.flatten_device(raw)
+        assert result["labels"]["type"] == "custom"
+
 
 # ── parse_event_payload: non-dict params (regression for fuzz finding) ─
 
