@@ -1748,12 +1748,12 @@ class DeviceRuntime:
             # Start device routines (@periodic decorated methods)
             await self._driver._start_routines()
 
-        if self._d2d_mode:
-            self._logger.info("D2D mode: skipping registry registration, using presence announcements")
-        else:
-            await self._register(force=True)
-
-        # Subscribe to commands BEFORE capability routines so log order makes sense
+        # Subscribe to commands BEFORE registration so the device is invocable
+        # even while registration is still in flight. Registration can block
+        # for a long time when the registry is briefly unavailable (e.g. a
+        # router restart on a tenant-ACL change) and retries forever; awaiting
+        # it first would leave the device "up" but not listening on its cmd
+        # subject, so every invoke would hit a ghost (-1 / no-responders).
         await self._cmd_subscription()
 
         # Subscribe to fleet broadcasts (best-effort; broadcast is opt-in for
@@ -1762,6 +1762,25 @@ class DeviceRuntime:
             await self._broadcast_subscription()
         except Exception as e:  # pragma: no cover - best effort logging
             self._logger.warning("Broadcast subscription failed: %s", e)
+
+        if self._d2d_mode:
+            self._logger.info("D2D mode: skipping registry registration, using presence announcements")
+        else:
+            # Register in the background so an unavailable registry cannot wedge
+            # startup. Wait briefly for it to complete so the common
+            # (registry-healthy) path preserves the previous "registered before
+            # capability events fire" ordering; if it does not complete in time,
+            # continue startup -- the device already serves commands and
+            # registration keeps retrying in the background.
+            reg_task = self._track_task(asyncio.create_task(self._register(force=True)))
+            try:
+                await asyncio.wait_for(asyncio.shield(reg_task), timeout=_REGISTER_REQUEST_TIMEOUT)
+            except asyncio.TimeoutError:
+                self._logger.warning(
+                    "Registration still pending after %.0fs; continuing startup "
+                    "(device is already serving commands; registration will keep retrying)",
+                    _REGISTER_REQUEST_TIMEOUT,
+                )
 
         # Start capability routines if driver supports them (CapabilityDriverMixin)
         # This must happen after registration so events don't fire before device is registered
