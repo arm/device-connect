@@ -148,3 +148,51 @@ openssl s_client -connect <public-ip>:7447 </dev/null 2>/dev/null \
 
 After this, devices connect with full TLS verification (no
 `verify_name_on_connect` override needed) and the e2e flow works.
+
+---
+
+## Round-3 retest (2026-06-07) — note to the deployment agent
+
+Re-tested live after the latest fixes (agent-tools self-config `b9c5672`,
+public-host advertising `7e0897a`, idempotent bootstrap, server-cert IP SAN).
+
+### Verified working — no action needed
+- Devices launch with the canonical `MESSAGING_CREDENTIALS_FILE` (no
+  `NATS_CREDENTIALS_FILE`, no deprecation warning), connect over mTLS, and
+  register (fleet: 2 registered / 2 online).
+- D2D `invoke_remote` + events + high-temp alert over the router.
+- Portal-mediated `dc-portalctl devices invoke` returns real results.
+- agent-tools self-configures creds + per-backend mTLS from
+  `MESSAGING_CREDENTIALS_FILE` (no explicit `tls_config` needed); `invoke()`
+  returns a real result.
+
+### ACTION NEEDED (deployment-side): set `ZENOH_PUBLIC_HOST`
+Re-downloaded device creds still advertise the **internal** broker host
+(`zenoh+tls://zenoh:7447`), so external devices still need a `ZENOH_CONNECT`
+override to reach the box. The `7e0897a` precedence is
+`ZENOH_PUBLIC_HOST > bootstrap host > ZENOH_HOST`, and it is currently falling
+through to `ZENOH_HOST=zenoh`.
+
+- Set **`ZENOH_PUBLIC_HOST=137.184.86.16`** (the externally-reachable host) in
+  the portal's environment.
+- Re-issue / re-download device credentials so the `zenoh.urls` in each
+  `*.creds.json` advertises the public host. (Cert material is unchanged; this
+  only rewrites the advertised URL.)
+- Verify: a freshly downloaded cred shows
+  `"urls": ["zenoh+tls://137.184.86.16:7447"]`, and a device launched with only
+  `MESSAGING_CREDENTIALS_FILE` (no `ZENOH_CONNECT`) connects and registers.
+
+### NOT deployment issues — code fixes pending on this branch (FYI, do not chase as ops)
+1. **agent-tools tenant resolution.** `connect(zone="default")` has a truthy
+   default, so `zone = zone or os.environ.get("TENANT", ...)` never falls
+   through to `TENANT`, and the creds-file `tenant` is not consulted — external
+   agents hit `device-connect.default.*` unless `zone=` is passed explicitly.
+   Fix is client-side (default `zone=None`; resolve explicit -> creds tenant ->
+   `TENANT` env -> `default`). No deploy action.
+2. **Bus discovery returns an empty roster.** agent-tools `discover()` over the
+   broker returns 0 devices (even addressed by exact id) for the correct
+   tenant, while `invoke()` works and the portal `devices list` shows them.
+   This points at the registry service's bus discovery/`listDevices` handler
+   (the portal HTTP roster is fine). Under investigation; likely a
+   registry-side code fix, not a deploy/config change — flagging so it is not
+   mistaken for a broker outage.
