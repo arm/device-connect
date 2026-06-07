@@ -256,12 +256,11 @@ class DeviceConnection:
     def __init__(
         self,
         nats_url: Optional[str] = None,
-        zone: str = "default",
+        zone: Optional[str] = None,
         credentials: Optional[Dict[str, Any]] = None,
         tls_config: Optional[Dict[str, Any]] = None,
         request_timeout: float = 30.0,
     ):
-        self.zone = zone
         self._request_timeout = request_timeout
 
         # Resolve config: explicit params -> env vars (via MessagingConfig) -> auto-discovery
@@ -281,24 +280,32 @@ class DeviceConnection:
             or os.getenv("NATS_URL") or os.getenv("NATS_URLS")
         )
 
-        # Configure from the messaging credentials file the same way a device
-        # does: MESSAGING_CREDENTIALS_FILE (backend-neutral) or the deprecated
-        # NATS_CREDENTIALS_FILE. This loads per-backend mTLS material -- so
-        # Zenoh works with no explicit tls_config -- and the broker URL, so an
-        # external agent can self-configure from a single downloaded
-        # credential. Explicit params and env URLs/TLS still take precedence.
+        # Read the messaging credentials file once (MESSAGING_CREDENTIALS_FILE,
+        # or the deprecated NATS_CREDENTIALS_FILE). The same *.creds.json a
+        # device uses carries the tenant, per-backend mTLS material, and the
+        # broker URL -- so an external agent self-configures from it the same
+        # way a device does. Explicit params and env URLs/TLS still take
+        # precedence.
+        file_data: Dict[str, Any] = {}
+        creds_file = _resolve_credentials_file_env()
+        if creds_file and Path(creds_file).exists():
+            file_data = _read_creds_file(creds_file)
+
+        # Zone/tenant: explicit arg -> the credential's tenant -> TENANT env ->
+        # "default". A bare "default" parameter default would have masked the
+        # credential's tenant, silently sending external agents to
+        # device-connect.default.* instead of their actual tenant.
+        self.zone = zone or file_data.get("tenant") or os.environ.get("TENANT") or "default"
+
         creds_has_url = False
-        if credentials is None or tls_config is None:
-            creds_file = _resolve_credentials_file_env()
-            if creds_file and Path(creds_file).exists():
-                file_data = _read_creds_file(creds_file)
-                if self._tls_config is None:
-                    self._tls_config = _tls_config_from_creds(file_data, self._backend)
-                if not env_has_urls:
-                    creds_urls = _creds_backend_section(file_data, self._backend).get("urls")
-                    if creds_urls:
-                        self._servers = list(creds_urls)
-                        creds_has_url = True
+        if file_data and (credentials is None or tls_config is None):
+            if self._tls_config is None:
+                self._tls_config = _tls_config_from_creds(file_data, self._backend)
+            if not env_has_urls:
+                creds_urls = _creds_backend_section(file_data, self._backend).get("urls")
+                if creds_urls:
+                    self._servers = list(creds_urls)
+                    creds_has_url = True
 
         # Last resort: well-known-path auto-discovery.
         if self._credentials is None:
@@ -715,7 +722,7 @@ class DeviceConnection:
 
 def connect(
     nats_url: Optional[str] = None,
-    zone: str = "default",
+    zone: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
     tls_config: Optional[Dict[str, Any]] = None,
     request_timeout: float = 30.0,
@@ -735,11 +742,13 @@ def connect(
       - MESSAGING_URLS    — broker URLs (comma-separated)
       - ZENOH_CONNECT     — Zenoh endpoints (auto-selects zenoh backend)
       - NATS_URL          — NATS broker URL (legacy)
-      - TENANT            — Device Connect zone/namespace (default: "default")
+      - TENANT            — Device Connect zone/namespace
 
     Args:
         nats_url: Broker URL (works for any backend despite the name).
-        zone: Device Connect tenant/zone namespace.
+        zone: Device Connect tenant/zone namespace. When omitted, resolved from
+            the credential's ``tenant`` field, then the TENANT env var, then
+            "default".
         credentials: Auth credentials dict.
         tls_config: TLS configuration dict.
         request_timeout: Default timeout for device RPC calls.
@@ -748,7 +757,8 @@ def connect(
     with _lock:
         if _connection is not None:
             return
-        zone = zone or os.environ.get("TENANT", "default")
+        # zone resolution (explicit -> credential tenant -> TENANT env ->
+        # "default") happens in DeviceConnection, which can see the creds file.
         conn = DeviceConnection(
             nats_url=nats_url,
             zone=zone,

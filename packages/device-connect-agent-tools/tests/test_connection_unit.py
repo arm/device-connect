@@ -337,3 +337,46 @@ class TestCredentialsFileConfig:
             assert c._tls_config == {"ca_pem": "EXPLICIT"}
         finally:
             c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def _mk(self, monkeypatch, tmp_path, tenant=None, zone=None):
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("MESSAGING_BACKEND", "zenoh")
+        if tenant is not None:
+            creds = tmp_path / "dev.creds.json"
+            body = {"zenoh": {"tls": {"ca_pem": "CA"}}}
+            if tenant:
+                body["tenant"] = tenant
+            creds.write_text(json.dumps(body))
+            monkeypatch.setenv("MESSAGING_CREDENTIALS_FILE", str(creds))
+        return conn_mod.DeviceConnection(zone=zone)
+
+    def test_zone_resolves_from_credential_tenant(self, tmp_path, monkeypatch):
+        c = self._mk(monkeypatch, tmp_path, tenant="acme")
+        try:
+            assert c.zone == "acme"   # not the old hard "default"
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def test_explicit_zone_wins_over_credential_tenant(self, tmp_path, monkeypatch):
+        c = self._mk(monkeypatch, tmp_path, tenant="acme", zone="beta")
+        try:
+            assert c.zone == "beta"
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def test_zone_falls_back_to_tenant_env_then_default(self, tmp_path, monkeypatch):
+        # creds file present but no tenant field -> TENANT env
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("MESSAGING_BACKEND", "zenoh")
+        monkeypatch.setenv("TENANT", "from-env")
+        c = conn_mod.DeviceConnection()
+        try:
+            assert c.zone == "from-env"
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+        monkeypatch.delenv("TENANT", raising=False)
+        c2 = conn_mod.DeviceConnection()
+        try:
+            assert c2.zone == "default"   # nothing anywhere
+        finally:
+            c2._loop.call_soon_threadsafe(c2._loop.stop)

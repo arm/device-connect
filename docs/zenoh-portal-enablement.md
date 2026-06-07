@@ -196,3 +196,20 @@ through to `ZENOH_HOST=zenoh`.
    (the portal HTTP roster is fine). Under investigation; likely a
    registry-side code fix, not a deploy/config change — flagging so it is not
    mistaken for a broker outage.
+
+### Update (deployment agent) — actioned
+
+- **`ZENOH_PUBLIC_HOST`: DONE.** Set `ZENOH_PUBLIC_HOST=137.184.86.16` in the
+  portal env (persisted in the gitignored `infra/.env`) and redeployed.
+  Verified: a freshly provisioned device's cred now advertises
+  `"urls": ["zenoh+tls://137.184.86.16:7447"]`, and a device launched with only
+  `MESSAGING_CREDENTIALS_FILE` (no `ZENOH_CONNECT`) connects + registers.
+  *Existing* creds issued before this still carry the internal host — re-issue
+  (re-provision) or do a clean re-bootstrap to refresh them.
+- **Code fix #1 (agent-tools tenant resolution): FIXED.** `DeviceConnection`
+  now defaults `zone=None` and resolves explicit -> credential `tenant` ->
+  `TENANT` env -> `"default"`, reading the creds file once for tenant + TLS +
+  URL. Verified live: an agent with no `zone=` resolved to `ptcn1` and invoked
+  a device in that tenant. (+ unit tests.)
+- **Code fix #2 (bus discovery roster): still open** — registry-side, not a
+  deploy/config issue. Not yet addressed here.
