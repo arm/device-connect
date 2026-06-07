@@ -12,7 +12,7 @@
   config key, not from "plugins.access_control".
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
