@@ -91,3 +91,60 @@ dc-portalctl ... fleet verify / portal verification   # "Zenoh ACL Plugin: pass"
 A reference two-device rig (sensor + controller exercising `@rpc`, `@periodic`,
 `@emit`, and D2D `invoke_remote`) is available on request to reproduce the full
 flow.
+
+---
+
+## Post-redeploy finding: the router server cert must be regenerated
+
+After redeploying with the fixes above, devices now correctly present their
+mTLS client certificate (the `pr-52` inline-PEM fix) -- and that surfaced a
+**stale server certificate** on the router:
+
+```
+Failed to connect to Zenoh: Unable to connect to any of [tls/<public-ip>:7447]!
+```
+
+Root cause (confirmed live): the router's server cert was generated **before**
+the IP-SAN fix (`harden(zenoh): IP SAN for IP hosts`, commit 3cca1c1) and cert
+generation is existence-gated, so the redeploy did not regenerate it. It carries
+the public IP as a **DNS** SAN (`DNS:<ip>`) with only `IP:127.0.0.1` as an IP
+SAN. rustls/Zenoh, when connecting to an **IP literal**, matches **IP SANs
+only**, so server-name verification fails and the client cannot connect.
+(Proof: the exact same creds connect with `verify_name_on_connect=false`.)
+
+The cert-generation **code is already correct** (`zenoh_pki.generate_server_cert`
+emits `IP:<host>` for IP-literal hosts) -- only the on-disk cert is stale. The
+CA and all device credentials are unchanged, so only the router's own cert needs
+refreshing.
+
+### Fix: regenerate the server cert (now safe to do via setup re-run)
+
+`bootstrap()` is now idempotent: it **keeps an existing CA** (re-running setup no
+longer rotates the CA, which previously would have invalidated every device
+credential) and **always refreshes the router server cert**. So the supported
+fix is simply to re-run setup, then restart the router:
+
+```
+Admin -> Setup   (or:  POST /api/admin/setup  with the public IP as host)
+# then restart the router container so it reloads the refreshed cert:
+docker restart <zenoh-router-container>     # e.g. dc-zenoh
+```
+
+Equivalent direct call inside the portal container (same CA, server cert only):
+
+```bash
+python -c "import asyncio; from device_connect_server.portal.services import zenoh_pki; \
+  asyncio.run(zenoh_pki.generate_server_cert('<public-ip>'))"
+docker restart <zenoh-router-container>
+```
+
+Verify the SAN is now correct:
+
+```bash
+openssl s_client -connect <public-ip>:7447 </dev/null 2>/dev/null \
+  | openssl x509 -noout -ext subjectAltName
+# expect:  IP Address:<public-ip>   (not DNS:<public-ip>)
+```
+
+After this, devices connect with full TLS verification (no
+`verify_name_on_connect` override needed) and the e2e flow works.
