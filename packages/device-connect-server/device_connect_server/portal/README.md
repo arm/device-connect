@@ -2,6 +2,8 @@
 
 Web-based tenant management portal for multi-tenant Device Connect deployments. Replaces the shell-script workflow (`manage_tenants.sh`, `setup_deployment.sh`) with a self-service UI where users sign up, create devices, and watch them come online.
 
+> **Messaging backends.** The portal is backend-agnostic — it manages tenants and credentials for **NATS** (JWT), **Zenoh** (mTLS + ACL), or **MQTT**, selected via `MESSAGING_BACKEND`. The Quick Start below covers the **NATS** stack; for **Zenoh** use `infra/docker-compose-multitenant-zenoh.yml`, see [Quick Start (Zenoh)](#quick-start-zenoh) below, and read [`docs/zenoh-per-tenant-cn.md`](../../../../docs/zenoh-per-tenant-cn.md) for its authorization model and operational caveats (notably: a tenant change restarts the router, so Zenoh is best treated as single-tenant).
+
 ## Architecture
 
 ```
@@ -66,6 +68,40 @@ On first launch:
 
 Users can now self-register at `/signup`.
 
+## Quick Start (Zenoh)
+
+The Zenoh stack (router with **mTLS + ACL**, etcd, registry, portal, and a
+least-privilege reload sidecar) needs no `nsc` — the portal generates the CA,
+router cert, and per-tenant device certs itself.
+
+```bash
+cd packages/device-connect-server
+
+# Device-facing broker host: the public IP / DNS name external devices and
+# agents reach the broker on. Baked into device credentials + the router cert
+# SAN, so a downloaded *.creds.json works off-box. Put it in infra/.env:
+echo "ZENOH_PUBLIC_HOST=<PUBLIC_HOST_OR_IP>" >> infra/.env
+
+# Start the full stack
+docker compose -f infra/docker-compose-multitenant-zenoh.yml up -d --build
+
+# Bootstrap the PKI/ACL: log in as admin (password from the portal logs) and
+# go to Admin > Setup, enter <PUBLIC_HOST_OR_IP> as the host, "Bootstrap".
+open http://localhost:8080
+```
+
+Notes specific to Zenoh:
+
+- **Tenant isolation** is enforced by the router's mTLS ACL (per-tenant
+  certificate CN). Device provisioning/revocation is **reload-free**; only
+  creating/deleting a tenant restarts the router (the ACL can't hot-reload),
+  which briefly drops all connected devices fleet-wide. See
+  [`docs/zenoh-per-tenant-cn.md`](../../../../docs/zenoh-per-tenant-cn.md).
+- **Per-device revocation is soft** (shared CN) — use short-lived certs or
+  hard tenant revocation for an immediate cutoff.
+- Downloaded `*.creds.json` files are **self-contained** (TLS material inlined)
+  and carry the public broker URL when `ZENOH_PUBLIC_HOST` is set.
+
 ## Local Development (without Docker)
 
 ```bash
@@ -98,9 +134,14 @@ All settings are via environment variables:
 | `PORTAL_PORT` | `8080` | HTTP listen port |
 | `PORTAL_HOST` | `0.0.0.0` | HTTP listen address |
 | `SESSION_SECRET` | (auto-generated) | Secret key for signing session cookies. Set explicitly for stable sessions across restarts. |
+| `MESSAGING_BACKEND` | (auto-detected) | Messaging backend: `nats`, `zenoh`, or `mqtt`. |
 | `NATS_HOST` | `localhost` | NATS server hostname (embedded in generated credentials) |
 | `NATS_PORT` | `4222` | NATS server port |
 | `NATS_CONTAINER` | `dc-nats` | Docker container name for NATS (used by Reload NATS) |
+| `ZENOH_HOST` | `localhost` | Zenoh router hostname the **portal/registry use in-network** (e.g. `zenoh`). |
+| `ZENOH_PORT` | `7447` | Zenoh router port |
+| `ZENOH_PUBLIC_HOST` | (bootstrap host) | **Device-facing** broker host baked into device credentials + the router cert SAN. Set to the public IP/DNS external devices reach; falls back to the bootstrap host, then `ZENOH_HOST`. |
+| `ZENOH_CONTAINER` | `dc-zenoh` | Docker container name for the Zenoh router. |
 | `ETCD_HOST` | `localhost` | etcd server hostname |
 | `ETCD_PORT` | `2379` | etcd server port |
 | `ADMIN_USER` | `admin` | Admin account username (seeded on startup) |
@@ -142,7 +183,7 @@ All settings are via environment variables:
 - Each user account maps to exactly one tenant namespace
 - Tenant namespace: `device-connect.<username>.>`
 - Devices within a tenant can communicate freely
-- Cross-tenant communication is blocked at the NATS JWT level (cryptographic enforcement)
+- Cross-tenant communication is blocked at the broker level — NATS: JWT subject permissions; Zenoh: mTLS ACL on the per-tenant certificate CN; MQTT: broker ACLs (broker-enforced, not just convention)
 - Admin has visibility into all tenants but cannot modify them
 
 ## API Endpoints
@@ -364,3 +405,4 @@ tokens from a controlled host.
 - **bcrypt** — password hashing
 - **etcd** — user account storage + device registry
 - **nsc** — NATS JWT credential generation (called via subprocess)
+- **openssl** — Zenoh PKI: CA, router cert, and per-tenant device certs for mTLS
