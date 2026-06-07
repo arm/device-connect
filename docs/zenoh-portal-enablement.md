@@ -253,3 +253,46 @@ the same `/device-connect/{tenant}/devices/{id}` key scheme.
 `ZENOH_PUBLIC_HOST` is still unset — freshly downloaded creds advertise
 `zenoh+tls://zenoh:7447` (internal). Set `ZENOH_PUBLIC_HOST=<public-ip>` and
 re-issue creds for zero-override external connect.
+
+## Round-5 resolution (2026-06-07) — both items closed
+
+Ran the round-4 repro on the box with the suggested etcd diff. Result: **no
+registry-side divergence — #2 was a client-side tenant bug, already fixed by
+`aab181d`.**
+
+### #2 bus discovery — RESOLVED (by the tenant-resolution fix)
+
+Reproduced live (tenant `tz-retest`, two registered devices):
+
+- etcd `/device-connect/tz-retest/devices/` holds **both** devices.
+- raw `discovery/listDevices` to `device-connect.tz-retest.discovery` returns
+  **both** devices.
+- high-level `discover('device(*)')` → **2**, `discover('device(<id>)')` → 1,
+  `invoke('device(<id>).function(get_state)')` → success.
+
+The registry handler and key scheme are correct: `register()` and
+`list_devices()` share `/device-connect/{tenant}/devices/{id}` on the same
+etcd, and `_extract_tenant` handles the Zenoh slash form. The empty roster was
+the **client** querying `device-connect.`**`default`**`.discovery`: agent-tools
+defaulted `zone="default"`, so `RegistryClient(tenant=self.zone)` asked the
+wrong tenant. `aab181d` resolves the zone from the credential's `tenant`
+(explicit → cred tenant → `TENANT` env → `"default"`), so discovery now hits
+the right tenant.
+
+Why it *looked* tenant-independent before: `invoke()` addresses the device's
+`.cmd` subject directly and the portal `devices list` reads the **provisioned**
+store — so both worked while the registry roster (keyed by tenant) came back
+empty. The divergence was portal-roster-source vs registry-tenant, not a
+registry bug.
+
+### Deployment item — RESOLVED
+
+`ZENOH_PUBLIC_HOST=137.184.86.16` is set on the live portal (persisted in the
+gitignored `infra/.env`); a freshly provisioned device's cred advertises
+`zenoh+tls://137.184.86.16:7447` and connects from the credential alone.
+
+### Doc — AGENTS.md §2 fixed
+
+§2 now uses the current selector API (`discover()` / `discover_labels()` /
+`invoke()`); the deprecated `describe_fleet` / `list_devices` /
+`get_device_functions` / `invoke_device` meta-tools are flagged as deprecated.

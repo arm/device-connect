@@ -162,18 +162,28 @@ against `${DEVICE_CONNECT_PORTAL_URL}/api/agent/v1/*` (see Appendix A).
 
 ## 2. Discover
 
-Use the four hierarchical meta-tools from `device-connect-agent-tools`. Always
-**start with `describe_fleet()`** to keep your context small — it's a summary,
-not a dump. Drill down only when the task needs it.
+Discovery is **selector-driven**, via `discover()` / `discover_labels()` from
+`device-connect-agent-tools`. Start broad, then narrow — the selector filters
+server-side so your context stays small.
 
-| Tool | When |
+| Call | When |
 |---|---|
-| `describe_fleet()` | First call. Returns device-type counts and locations. |
-| `list_devices(device_type=…, location=…)` | Narrow down by a filter once you know the shape of the fleet. |
-| `get_device_functions(device_id)` | Read the schema of a device's RPCs before invoking. |
-| `invoke_device(device_id, function, params, llm_reasoning)` | Call a function. The reasoning string is mandatory and goes into the audit log. |
+| `discover_labels()` | First call. Returns the label vocabulary (device types, locations, categories) across the fleet — a summary, not a dump. |
+| `discover("device(*)")` | List devices. Replace `*` with filters, e.g. `discover("device(type:camera,location:warehouse1)")`. |
+| `discover("device(<id>).function(*)")` | Read a device's RPC schemas before invoking. |
+| `invoke("device(<id>).function(<name>)", params={…}, llm_reasoning="…")` | Call one function. `llm_reasoning` is mandatory and goes into the audit log. |
 
-Equivalent CLI:
+Selector DSL inside `(...)`: `key:value`, `key:[v1,v2]` (OR within a key),
+`key:pattern*` (glob), `k1:v1,k2:v2` (AND across keys), a bare string to match
+id/name, or `*` for all. Matching is **case-sensitive** — lowercase by
+convention.
+
+> The older `describe_fleet()` / `list_devices()` / `get_device_functions()` /
+> `invoke_device()` meta-tools still work but are **deprecated** (they emit
+> `DeprecationWarning`) — prefer the selector calls above.
+
+Equivalent CLI (the portal HTTP roster is always authoritative for "what
+devices exist"):
 
 ```bash
 dc-portalctl fleet describe
