@@ -66,6 +66,10 @@ class ZenohBackend(MessagingBackendService):
 
         # 4. Generate Zenoh router config with ACL
         zenoh_acl.generate_config(host, port)
+        # Record the baseline config hash: the router starts with exactly this
+        # config, so the first device provision (which does not change it)
+        # correctly skips the reload instead of forcing a spurious restart.
+        zenoh_admin.mark_reloaded()
 
         # 5. Persist backend choice
         _write_backend_choice("zenoh", host, port)
@@ -85,11 +89,12 @@ class ZenohBackend(MessagingBackendService):
     ) -> list[str]:
         ca_cert = config.SECURITY_INFRA_DIR / "ca.pem"
         device_names = []
-        device_cns = []
 
         for i in range(1, num_devices + 1):
             device_name = f"{tenant}-device-{i:03d}"
-            cert_path, key_path = await zenoh_pki.generate_client_cert(device_name)
+            # CN = tenant (device id goes in the cert OU); see add_tenant_rule.
+            cert_path, key_path = await zenoh_pki.generate_client_cert(
+                device_name, common_name=tenant)
             self._write_credential(
                 name=device_name,
                 tenant=tenant,
@@ -100,10 +105,10 @@ class ZenohBackend(MessagingBackendService):
                 ca_cert=ca_cert,
             )
             device_names.append(device_name)
-            device_cns.append(device_name)
 
-        # Update ACL config
-        zenoh_acl.add_tenant_rule(tenant, device_cns)
+        # One static ACL rule per tenant (CN=tenant). This is the only ACL
+        # write in the device lifecycle and the only step that needs a reload.
+        zenoh_acl.add_tenant_rule(tenant)
 
         return device_names
 
@@ -111,7 +116,9 @@ class ZenohBackend(MessagingBackendService):
         self, tenant: str, device_name: str, host: str, port: str,
     ) -> Path:
         ca_cert = config.SECURITY_INFRA_DIR / "ca.pem"
-        cert_path, key_path = await zenoh_pki.generate_client_cert(device_name)
+        # CN = tenant (shared by all the tenant's devices); device id -> OU.
+        cert_path, key_path = await zenoh_pki.generate_client_cert(
+            device_name, common_name=tenant)
 
         cred_path = self._write_credential(
             name=device_name,
@@ -123,22 +130,43 @@ class ZenohBackend(MessagingBackendService):
             ca_cert=ca_cert,
         )
 
-        # Update ACL config
-        zenoh_acl.add_devices_to_tenant(tenant, [device_name])
+        # Ensure the tenant's static ACL rule exists (a no-op once the tenant
+        # was created). Adding a device does NOT change the ACL, so
+        # reload_broker() below will detect no change and skip the restart.
+        zenoh_acl.add_tenant_rule(tenant)
 
         return cred_path
 
     async def remove_device(self, tenant: str, device_name: str) -> None:
-        """Revoke a device: drop its CN from the ACL and delete its key material.
+        """Soft-revoke a device: delete its credential key material.
 
-        The revoke flow calls this and then ``reload_broker()``; the router
-        restart is what makes the ACL removal take effect (Zenoh ACL is not
-        hot-reloadable). After reload the revoked certificate is no longer
-        authorized for the tenant namespace. The credential JSON file is
-        removed by the caller (the revoke view).
+        Under the per-tenant-CN model every device shares ``CN=tenant``, so a
+        single device cannot be denied at the ACL level -- the ACL is left
+        untouched (and reload_broker() will skip the restart). This removes
+        the device from the portal/registry and deletes its cert/key so the
+        credential cannot be re-downloaded, but a copy already deployed
+        remains cryptographically valid until the certificate expires.
+
+        For an immediate certificate-level cutoff, hard-revoke the whole
+        tenant (zenoh_acl.remove_tenant_rule) or use short-lived certs.
+        See docs/zenoh-per-tenant-cn.md.
         """
-        zenoh_acl.remove_devices_from_tenant(tenant, [device_name])
         zenoh_pki.delete_client_cert(device_name)
+
+    @staticmethod
+    def per_device_revocation_note() -> str:
+        """Caller-facing caveat: per-device revocation is soft on Zenoh.
+
+        Surfaced by the revoke endpoints so operators are not misled into
+        thinking a revoked device is cryptographically locked out.
+        """
+        return (
+            "Soft revocation: the device's credential was deleted, but under "
+            "the per-tenant-CN model its certificate (shared CN=tenant) is "
+            "NOT denied at the broker and stays valid until it expires. For an "
+            "immediate cutoff, hard-revoke the whole tenant or use short-lived "
+            "certificates."
+        )
 
     async def reload_broker(self) -> dict:
         return await zenoh_admin.reload_zenoh()

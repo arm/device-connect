@@ -715,9 +715,14 @@ async def device_revoke(request: web.Request) -> web.Response:
 
     _audit(request, "revoke", trace_id=trace, device_id=full_name)
     result = {"device_id": full_name, "revoked": True}
-    warning = backend_error or reload_warning
-    if warning:
-        result["backend_warning"] = warning
+    warnings = [w for w in (backend_error, reload_warning) if w]
+    # Backends with soft per-device revocation (Zenoh per-tenant-CN) tell the
+    # caller the certificate is not actually denied at the broker.
+    note = getattr(backend, "per_device_revocation_note", None)
+    if callable(note):
+        warnings.append(note())
+    if warnings:
+        result["backend_warning"] = " ".join(warnings)
     return _ok(result, trace_id=trace)
 
 

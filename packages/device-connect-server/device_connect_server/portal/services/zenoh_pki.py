@@ -196,7 +196,12 @@ async def generate_client_cert(
 ) -> tuple[Path, Path]:
     """Generate a client certificate signed by the CA.
 
-    The CN is used by Zenoh ACL for identity matching.
+    The CN is used by Zenoh ACL for identity matching. When ``common_name``
+    differs from ``name`` (the per-tenant-CN model, where the CN is the
+    tenant), the file ``name`` -- the device id -- is recorded in the
+    subject's OU so the certificate remains individually traceable for
+    audit even though the ACL matches on the shared tenant CN.
+
     Returns (cert_path, key_path).
     """
     d = _pki_dir()
@@ -208,6 +213,10 @@ async def generate_client_cert(
 
     cn = common_name or name
     _validate_cn(cn, "certificate CN")
+    subject = f"/CN={cn}"
+    if common_name and common_name != name:
+        _validate_cn(name, "certificate OU")
+        subject += f"/OU={name}"
 
     # Generate client key
     await _run_openssl("genrsa", "-out", str(client_key), "2048")
@@ -218,7 +227,7 @@ async def generate_client_cert(
         "req", "-new",
         "-key", str(client_key),
         "-out", str(csr_path),
-        "-subj", f"/CN={cn}",
+        "-subj", subject,
     )
 
     # Sign with CA

@@ -40,3 +40,33 @@ async def test_dns_host_gets_dns_san(tmp_path, monkeypatch):
     cert, _ = await zenoh_pki.generate_server_cert("broker.example.com", name="dnscert")
     san = _san(cert)
     assert "DNS:broker.example.com" in san
+
+
+def _subject(cert_path) -> str:
+    out = subprocess.run(
+        ["openssl", "x509", "-in", str(cert_path), "-noout", "-subject"],
+        capture_output=True, text=True,
+    )
+    return out.stdout.replace(" ", "")  # normalize "CN = x" vs "CN=x"
+
+
+async def test_device_cert_carries_tenant_cn_and_device_ou(tmp_path, monkeypatch):
+    # Per-tenant-CN: device cert CN is the tenant; device id goes in OU.
+    monkeypatch.setattr(
+        "device_connect_server.portal.config.SECURITY_INFRA_DIR", tmp_path)
+    await zenoh_pki.generate_ca()
+    cert, _ = await zenoh_pki.generate_client_cert("acme-cam-001", common_name="acme")
+    subj = _subject(cert)
+    assert "CN=acme" in subj
+    assert "OU=acme-cam-001" in subj
+
+
+async def test_privileged_cert_keeps_name_as_cn_without_ou(tmp_path, monkeypatch):
+    # Privileged certs (registry/facilitator) pass no common_name -> CN=name, no OU.
+    monkeypatch.setattr(
+        "device_connect_server.portal.config.SECURITY_INFRA_DIR", tmp_path)
+    await zenoh_pki.generate_ca()
+    cert, _ = await zenoh_pki.generate_client_cert("registry")
+    subj = _subject(cert)
+    assert "CN=registry" in subj
+    assert "OU=" not in subj

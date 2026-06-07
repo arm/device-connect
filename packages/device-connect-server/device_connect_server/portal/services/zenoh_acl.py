@@ -128,29 +128,30 @@ def generate_config(host: str, port: str = "7447") -> dict:
     return cfg
 
 
-def add_tenant_rule(tenant: str, device_cns: list[str]) -> dict:
-    """Add ACL rules for a new tenant.
+def add_tenant_rule(tenant: str) -> dict:
+    """Ensure the ACL grants a tenant access to its own namespace.
 
-    Creates:
-      - A rule allowing access to device-connect/{tenant}/**
-      - A subject group with the device CNs
-      - A policy linking them
+    Per-tenant-CN model: every device in a tenant presents a client
+    certificate whose Common Name (CN) **is the tenant** (the per-device
+    identity lives in the cert OU and the application-layer ``device_id``,
+    not the CN). So a single static subject per tenant -- matching
+    ``cert_common_names: [tenant]`` -- authorizes every current and future
+    device of that tenant on ``device-connect/{tenant}/**``.
 
-    Returns the updated config.
+    The consequence -- and the whole point -- is that adding or removing a
+    device never changes the ACL, so device provisioning/revocation needs
+    no router restart. Only tenant creation/deletion touches the ACL.
+
+    Idempotent: if the tenant rule already exists the config is returned
+    unchanged (no write), so it is safe to call on every provision.
     """
     cfg = load_config()
     acl = cfg.get("access_control", {})
+    rule_id = subject_id = f"tenant-{tenant}"
 
-    rule_id = f"tenant-{tenant}"
-    subject_id = f"tenant-{tenant}"
+    if any(r.get("id") == rule_id for r in acl.get("rules", [])):
+        return cfg  # already present -- no change, no reload needed
 
-    # Check if tenant rule already exists
-    existing_rules = {r["id"] for r in acl.get("rules", [])}
-    if rule_id in existing_rules:
-        # Just add the new CNs to the existing subject group
-        return add_devices_to_tenant(tenant, device_cns)
-
-    # Add rule
     acl.setdefault("rules", []).append({
         "id": rule_id,
         "messages": _ALL_MESSAGES,
@@ -158,14 +159,10 @@ def add_tenant_rule(tenant: str, device_cns: list[str]) -> dict:
         "key_exprs": [f"device-connect/{tenant}/**"],
         "permission": "allow",
     })
-
-    # Add subject group
     acl.setdefault("subjects", []).append({
         "id": subject_id,
-        "cert_common_names": list(device_cns),
+        "cert_common_names": [tenant],
     })
-
-    # Add policy
     acl.setdefault("policies", []).append({
         "rules": [rule_id],
         "subjects": [subject_id],
@@ -173,68 +170,67 @@ def add_tenant_rule(tenant: str, device_cns: list[str]) -> dict:
 
     cfg["access_control"] = acl
     save_config(cfg)
-    logger.info("Added tenant ACL rule: %s (%d devices)", tenant, len(device_cns))
+    logger.info("Added tenant ACL rule: %s (CN=%s)", tenant, tenant)
     return cfg
 
 
-def add_devices_to_tenant(tenant: str, device_cns: list[str]) -> dict:
-    """Add device CNs to an existing tenant's ACL subject group.
+# Back-compat alias for callers that "add a device": under per-tenant-CN a
+# device carries no individual ACL entry, so this just ensures the tenant
+# rule exists (a no-op once the tenant has been created).
+def add_devices_to_tenant(tenant: str, device_cns: list[str] | None = None) -> dict:
+    """Deprecated under per-tenant-CN: ensure the tenant rule exists.
 
-    Returns the updated config.
+    All of a tenant's devices share ``CN=tenant``, so device CNs are no
+    longer listed individually in the ACL. ``device_cns`` is ignored.
+    """
+    return add_tenant_rule(tenant)
+
+
+def remove_devices_from_tenant(tenant: str, device_cns: list[str] | None = None) -> dict:
+    """No-op under per-tenant-CN: a single device cannot be removed from the
+    ACL because all of a tenant's devices share ``CN=tenant``.
+
+    Per-device revocation is therefore *soft* -- delete the credential/cert
+    so it cannot be re-issued, but the certificate stays cryptographically
+    valid until it expires. Use :func:`remove_tenant_rule` to hard-revoke an
+    entire tenant, and short-lived device certificates to bound the
+    soft-revocation window. See ``docs/zenoh-per-tenant-cn.md``.
+    """
+    logger.info(
+        "remove_devices_from_tenant is a no-op under per-tenant-CN "
+        "(soft revocation); tenant=%s", tenant)
+    return load_config()
+
+
+def remove_tenant_rule(tenant: str) -> dict:
+    """Hard-revoke an entire tenant: drop its ACL subject/rule/policy.
+
+    After the router reloads, no certificate with ``CN=tenant`` is
+    authorized for ``device-connect/{tenant}/**`` -- the only
+    certificate-level cutoff available under the shared-CN model. Idempotent.
     """
     cfg = load_config()
     acl = cfg.get("access_control", {})
-
-    subject_id = f"tenant-{tenant}"
-    for subject in acl.get("subjects", []):
-        if subject["id"] == subject_id:
-            existing = set(subject.get("cert_common_names", []))
-            existing.update(device_cns)
-            subject["cert_common_names"] = sorted(existing)
-            break
-    else:
-        # Subject group doesn't exist — create the full tenant rule
-        return add_tenant_rule(tenant, device_cns)
-
-    cfg["access_control"] = acl
-    save_config(cfg)
-    logger.info("Added %d device(s) to tenant %s ACL", len(device_cns), tenant)
-    return cfg
-
-
-def remove_devices_from_tenant(tenant: str, device_cns: list[str]) -> dict:
-    """Remove device CNs from a tenant's ACL subject group.
-
-    Strips the CNs from the ``tenant-{tenant}`` subject. When that empties
-    the subject, the now-dangling subject, its rule, and any policy that
-    references either are pruned too, so a revoked device's certificate is
-    no longer authorized once the router reloads. Idempotent: unknown
-    tenants/CNs are a no-op.
-    """
-    cfg = load_config()
-    acl = cfg.get("access_control", {})
-
     rule_id = subject_id = f"tenant-{tenant}"
 
-    subject = next((s for s in acl.get("subjects", []) if s.get("id") == subject_id), None)
-    if subject is None:
-        return cfg  # nothing to remove
+    subjects = [s for s in acl.get("subjects", []) if s.get("id") != subject_id]
+    rules = [r for r in acl.get("rules", []) if r.get("id") != rule_id]
+    policies = [
+        p for p in acl.get("policies", [])
+        if subject_id not in p.get("subjects", []) and rule_id not in p.get("rules", [])
+    ]
+    unchanged = (
+        len(subjects) == len(acl.get("subjects", []))
+        and len(rules) == len(acl.get("rules", []))
+        and len(policies) == len(acl.get("policies", []))
+    )
+    if unchanged:
+        return cfg  # nothing matched -- no change, no reload needed
 
-    remaining = [cn for cn in subject.get("cert_common_names", []) if cn not in set(device_cns)]
-    subject["cert_common_names"] = remaining
-
-    if not remaining:
-        # Drop the empty subject, its rule, and any policy binding either.
-        acl["subjects"] = [s for s in acl.get("subjects", []) if s.get("id") != subject_id]
-        acl["rules"] = [r for r in acl.get("rules", []) if r.get("id") != rule_id]
-        acl["policies"] = [
-            p for p in acl.get("policies", [])
-            if subject_id not in p.get("subjects", []) and rule_id not in p.get("rules", [])
-        ]
-
+    acl["subjects"], acl["rules"], acl["policies"] = subjects, rules, policies
     cfg["access_control"] = acl
     save_config(cfg)
-    logger.info("Removed %d device(s) from tenant %s ACL", len(device_cns), tenant)
+    logger.info("Removed tenant ACL rule (hard revocation): %s", tenant)
     return cfg
 
 
