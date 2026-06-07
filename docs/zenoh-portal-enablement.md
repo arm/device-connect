@@ -296,3 +296,47 @@ gitignored `infra/.env`); a freshly provisioned device's cred advertises
 §2 now uses the current selector API (`discover()` / `discover_labels()` /
 `invoke()`); the deprecated `describe_fleet` / `list_devices` /
 `get_device_functions` / `invoke_device` meta-tools are flagged as deprecated.
+
+---
+
+## Round-5 retest (2026-06-07) — all green; round-4 #2 was a test-harness error
+
+Full pass against the live box after the latest redeploy.
+
+### Correction to round 4
+My round-4 conclusion that "bus discovery returns an empty roster" was **wrong**
+— it was a bug in my *test script*, not the server. The selector API returns
+its rows under `results` / `matched`; my harness read `devices` / `total` (the
+keys the *deprecated* `list_devices()` uses) and so saw 0. Reading the correct
+envelope, `discover()` works:
+- `discover("device(*)")` -> `matched=2` (both devices)
+- `discover("device(<id>)")` -> `matched=1`
+- `discover("device(*).function(*)")` -> `matched=4`
+- `discover_labels()` -> `total_devices=2`
+So #2 is genuinely closed; the team's diagnosis (client-side tenant default,
+fixed in aab181d) was correct.
+
+### Verified end-to-end
+- **Zero-override launch** (AGENTS §5): a freshly provisioned device started
+  with ONLY `MESSAGING_CREDENTIALS_FILE` (no `ZENOH_CONNECT`, no
+  `MESSAGING_BACKEND`) auto-detected the backend, connected to the **public**
+  host `zenoh+tls://137.184.86.16:7447`, and registered. `ZENOH_PUBLIC_HOST`
+  works.
+- Register, D2D RPC + events + alert, portal invoke, agent-tools self-config +
+  tenant-from-credential, and the selector discovery API all pass.
+
+### Two small nuances (not blockers)
+1. **Re-download keeps the old advertised host; re-provision picks up the new
+   one.** Devices provisioned *before* `ZENOH_PUBLIC_HOST` was set still return
+   the internal `zenoh+tls://zenoh:7447` on `devices credentials <id>`
+   (re-download returns the stored URL). A freshly provisioned device gets
+   `137.184.86.16`. To migrate existing devices to the public host, re-provision
+   (or override with `ZENOH_CONNECT`). Worth a one-line note in AGENTS §3/§5.
+2. **`device(type:...)` selector matches nothing for these drivers.**
+   `discover_labels()` shows only a `location` device-label key; device *type*
+   is not exposed as a selector label, so `device(type:controller)` ->
+   `matched=0` while `device(location:lab/rack-1)` -> `matched=1` and
+   `device(*)` / `device(<id>)` work. AGENTS §2's `device(type:camera)` example
+   only matches if the driver declares a `type`/`category` label (or the
+   framework auto-maps `device_type` into the selector space). Doc/selector
+   follow-up, not a deploy issue.
