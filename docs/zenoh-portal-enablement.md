@@ -213,3 +213,43 @@ through to `ZENOH_HOST=zenoh`.
   a device in that tenant. (+ unit tests.)
 - **Code fix #2 (bus discovery roster): still open** — registry-side, not a
   deploy/config issue. Not yet addressed here.
+
+---
+
+## Round-4 retest (2026-06-07) — tenant fix verified; discovery roster still empty
+
+Retested after `aab181d` (agent-tools tenant/zone from credential).
+
+### Verified fixed
+- **agent-tools tenant resolution** now works: with no `TENANT` env and no
+  `zone=` arg, `connect()` derives the tenant from the credential
+  (`resolved zone: test-zenoh`) and `invoke()` returns a real result. The
+  round-3 item #1 is closed.
+
+### Still open — #2 bus discovery returns an empty roster (registry-side)
+`discover()` over the broker returns **0** for the correct tenant, while at the
+**same moment** the portal HTTP `devices list` shows the devices and `invoke()`
+to them succeeds. Now narrowed — ruled OUT:
+- auth/connect (invoke works), tenant (resolves correctly), ACL visibility
+  (default `visible_to=["*"]` matches any requester), and **labels** (added a
+  matching `category` label to a device; `discover('device(category:...)')`,
+  `device(*)`, and `device(<exact-id>)` all still returned 0).
+
+So the registry's bus **`discovery/listDevices`** handler returns an empty list
+for a tenant whose devices ARE present in the registry that the portal HTTP
+roster reads (etcd-backed). This points at a divergence between the
+registry-service that answers `device-connect.<tenant>.discovery` over the bus
+and the store/path the portal `devices list` reads — e.g. a different/empty
+etcd view, a tenant key-prefix mismatch in `registry.list_devices(tenant)`, or
+the discovery responder not being the component registration wrote to.
+
+Suggested next step (server-side, needs etcd access): on the box, compare
+`etcdctl get --prefix /device-connect/<tenant>/devices/` against what the
+registry-service's `discovery/listDevices` returns for the same tenant, and
+confirm the discovery responder and the registration writer share one etcd +
+the same `/device-connect/{tenant}/devices/{id}` key scheme.
+
+### Deployment item still pending (from round 3)
+`ZENOH_PUBLIC_HOST` is still unset — freshly downloaded creds advertise
+`zenoh+tls://zenoh:7447` (internal). Set `ZENOH_PUBLIC_HOST=<public-ip>` and
+re-issue creds for zero-override external connect.
