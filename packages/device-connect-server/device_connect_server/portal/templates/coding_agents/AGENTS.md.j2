@@ -178,6 +178,17 @@ Selector DSL inside `(...)`: `key:value`, `key:[v1,v2]` (OR within a key),
 id/name, or `*` for all. Matching is **case-sensitive** — lowercase by
 convention.
 
+> **Which keys can you filter on?** Label keys come from each driver's declared
+> `DeviceCapabilities.labels` (plus `location`, auto-mirrored from device
+> status). A device's `device_type` is **only** filterable if the driver also
+> publishes it as a label — it is not auto-exposed, so `device(type:camera)`
+> matches nothing unless the camera driver declared a `type` label. `device(*)`,
+> a bare-id match like `device({{ example_device_id }})`, and any key listed by
+> `discover_labels()` always work — **call `discover_labels()` first** to see the
+> real vocabulary for this fleet instead of guessing keys. (`discover()` returns
+> matches under `results` / `matched`; the deprecated `list_devices()` uses
+> `devices` / `total` — don't mix the two envelopes.)
+
 > The older `describe_fleet()` / `list_devices()` / `get_device_functions()` /
 > `invoke_device()` meta-tools still work but are **deprecated** (they emit
 > `DeprecationWarning`) — prefer the selector calls above.
@@ -232,6 +243,15 @@ To re-download:
 dc-portalctl devices credentials {{ tenant }}-cam-001 \
     --output-file ./{{ tenant }}-cam-001.creds.json
 ```
+{% if is_zenoh %}
+> ℹ️ **Re-download returns the *stored* credential — including the broker URL it
+> was issued with.** The advertised host is baked in at provision time
+> (`ZENOH_PUBLIC_HOST` → bootstrap host → `ZENOH_HOST`). If the deployment's
+> public host changed after a device was provisioned, `devices credentials`
+> still hands back the old URL, so the device may connect to an unreachable
+> host. **Re-provision** the device to bake in the current host (or override at
+> launch with `ZENOH_CONNECT=tls/<host>:{{ broker_port }}`, see §5).
+{% endif %}
 
 > ⚠️ **Lifecycle limitations (as of 0.2.3).** Two of the three lifecycle
 > verbs are not implemented in any bundled backend yet — `revoke` is the
@@ -465,6 +485,14 @@ python my_device.py
 > to reach the broker at a different address than the one in the credential, or
 > `MESSAGING_TLS_CA_FILE` / `MESSAGING_TLS_CERT_FILE` / `MESSAGING_TLS_KEY_FILE`
 > to use `.pem` files on disk instead of the inlined material.)
+>
+> ⚠️ **The advertised broker URL is baked in at provision time.** A device
+> provisioned before the deployment's public broker host was configured carries
+> the **old** URL, and `dc-portalctl devices credentials <id>` re-downloads that
+> **stored** URL — it does not refresh it. If a device connects fine on-box but
+> not from outside (or vice versa), **re-provision** it to bake in the current
+> host (or pass the `ZENOH_CONNECT` override above). Freshly provisioned devices
+> always get the current host.
 {%- else -%}
 {% if not is_mqtt -%}
 The edge runtime authenticates to NATS with the JWT in `{{ creds_env }}`,
