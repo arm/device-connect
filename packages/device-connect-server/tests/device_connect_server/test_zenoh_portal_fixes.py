@@ -119,3 +119,50 @@ async def test_run_verification_detects_toplevel_acl(monkeypatch, tmp_path):
     acl_result = next(r for r in results if r["name"] == "Zenoh ACL Plugin")
     assert acl_result["status"] == "pass"
     assert "default_permission=deny" in acl_result["detail"]
+
+
+def _patch_bootstrap_pki(monkeypatch, tmp_path):
+    """Mock everything bootstrap() touches except the CA decision."""
+    from pathlib import Path
+    from device_connect_server.portal.services import zenoh_backend, zenoh_pki, zenoh_acl, zenoh_admin
+    from device_connect_server.portal import config as portal_config
+    from device_connect_server.portal.services import backend as backend_mod
+
+    monkeypatch.setattr(portal_config, "SECURITY_INFRA_DIR", tmp_path)
+    monkeypatch.setattr(portal_config, "CREDS_DIR", tmp_path / "creds")
+    monkeypatch.setattr(zenoh_pki, "generate_ca",
+                        AsyncMock(return_value=(tmp_path / "ca.pem", tmp_path / "ca-key.pem")))
+    monkeypatch.setattr(zenoh_pki, "generate_server_cert",
+                        AsyncMock(return_value=(tmp_path / "zenoh-cert.pem", tmp_path / "zenoh-key.pem")))
+    monkeypatch.setattr(zenoh_pki, "generate_client_cert",
+                        AsyncMock(return_value=(tmp_path / "c.pem", tmp_path / "k.pem")))
+    monkeypatch.setattr(zenoh_pki, "get_ca_fingerprint", AsyncMock(return_value="fp"))
+    monkeypatch.setattr(zenoh_acl, "generate_config", MagicMock())
+    monkeypatch.setattr(zenoh_admin, "mark_reloaded", MagicMock())
+    monkeypatch.setattr(backend_mod, "_write_backend_choice", MagicMock())
+    b = zenoh_backend.ZenohBackend()
+    monkeypatch.setattr(b, "_write_credential", MagicMock())
+    return b, zenoh_pki
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_keeps_existing_ca_but_refreshes_server_cert(monkeypatch, tmp_path):
+    """Re-running setup must NOT rotate the CA (would invalidate all device creds)."""
+    b, zenoh_pki = _patch_bootstrap_pki(monkeypatch, tmp_path)
+    monkeypatch.setattr(zenoh_pki, "ca_exists", lambda: True)
+
+    await b.bootstrap("203.0.113.5", "7447")
+
+    zenoh_pki.generate_ca.assert_not_awaited()           # CA preserved
+    zenoh_pki.generate_server_cert.assert_awaited_once()  # server cert refreshed
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_generates_ca_when_absent(monkeypatch, tmp_path):
+    b, zenoh_pki = _patch_bootstrap_pki(monkeypatch, tmp_path)
+    monkeypatch.setattr(zenoh_pki, "ca_exists", lambda: False)
+
+    await b.bootstrap("203.0.113.5", "7447")
+
+    zenoh_pki.generate_ca.assert_awaited_once()           # fresh deploy still gets a CA
+    zenoh_pki.generate_server_cert.assert_awaited_once()

@@ -44,10 +44,21 @@ class ZenohBackend(MessagingBackendService):
         pki_dir.mkdir(parents=True, exist_ok=True)
         config.CREDS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # 1. Generate CA
-        ca_cert, ca_key = await zenoh_pki.generate_ca()
+        # 1. Generate CA -- but ONLY if one does not already exist. Re-running
+        #    setup must never rotate the CA: every issued device credential is
+        #    signed by it, so a new CA would silently invalidate the whole
+        #    fleet. Keeping it makes bootstrap idempotent, which is what lets an
+        #    operator safely re-run setup to refresh the server cert (step 2).
+        if zenoh_pki.ca_exists():
+            ca_cert = pki_dir / "ca.pem"
+            ca_key = pki_dir / "ca-key.pem"
+            logger.info("CA already present; keeping it (refreshing server cert only)")
+        else:
+            ca_cert, ca_key = await zenoh_pki.generate_ca()
 
-        # 2. Generate router server cert
+        # 2. (Re)generate the router server cert. Always refreshed so cert fixes
+        #    -- e.g. emitting an IP SAN for an IP-literal host -- take effect on
+        #    a plain setup re-run, signed by the existing (unchanged) CA.
         await zenoh_pki.generate_server_cert(host)
 
         # 3. Generate privileged client certs
