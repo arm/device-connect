@@ -237,8 +237,11 @@ class ZenohBackend(MessagingBackendService):
                 })
 
         # Test 3: Zenoh config with ACL
+        # Zenoh 1.x exposes access control as a top-level config field, not a
+        # loadable plugin (see zenoh_acl.generate_config); reading it under
+        # "plugins" always reported the ACL as disabled.
         cfg = zenoh_acl.load_config()
-        acl = cfg.get("plugins", {}).get("access_control", {})
+        acl = cfg.get("access_control", {})
         if acl.get("enabled"):
             results.append({
                 "name": "Zenoh ACL Plugin",

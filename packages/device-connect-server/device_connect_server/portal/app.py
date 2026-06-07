@@ -225,3 +225,8 @@ async def _on_cleanup(app: web.Application):
         await close_invoke_client()
     except Exception as e:
         logger.warning("Error closing cached NATS invoke client: %s", e)
+    try:
+        from .services.zenoh_rpc import close_invoke_client as close_zenoh_invoke_client
+        await close_zenoh_invoke_client()
+    except Exception as e:
+        logger.warning("Error closing cached Zenoh invoke client: %s", e)
