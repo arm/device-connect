@@ -23,9 +23,19 @@ NATS_PORT = os.environ.get("NATS_PORT", "4222")
 NATS_CONTAINER = os.environ.get("NATS_CONTAINER", "dc-nats")
 
 # Zenoh
+# ZENOH_HOST is the IN-NETWORK address the portal/registry use to reach the
+# router (e.g. the compose service name "zenoh"). It is NOT necessarily
+# reachable by external devices.
 ZENOH_HOST = os.environ.get("ZENOH_HOST", "localhost")
 ZENOH_PORT = os.environ.get("ZENOH_PORT", "7447")
 ZENOH_CONTAINER = os.environ.get("ZENOH_CONTAINER", "dc-zenoh")
+# ZENOH_PUBLIC_HOST is the DEVICE-FACING ("advertised") broker host baked into
+# device credentials and matched by the router cert SAN. It MUST be reachable
+# by external devices/agents (a public IP or DNS name). When unset, the portal
+# falls back to the host recorded at bootstrap, then to ZENOH_HOST. Keep it
+# distinct from ZENOH_HOST so the portal's own in-network connection and the
+# device-facing URL don't have to be the same address.
+ZENOH_PUBLIC_HOST = os.environ.get("ZENOH_PUBLIC_HOST", "")
 
 # MQTT (Mosquitto)
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")

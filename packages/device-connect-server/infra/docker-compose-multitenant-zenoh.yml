@@ -164,8 +164,15 @@ services:
       - "8080:8080"
     environment:
       MESSAGING_BACKEND: zenoh
+      # In-network address the portal uses to reach the router.
       ZENOH_HOST: ${ZENOH_HOST:-zenoh}
       ZENOH_PORT: "7447"
+      # Device-facing (public) host baked into device credentials + matched by
+      # the router cert SAN. Set to the public IP / DNS name external devices
+      # and agents reach the broker on, so a downloaded *.creds.json works
+      # off-box without an explicit ZENOH_CONNECT override. Unset -> falls back
+      # to the bootstrap host, then ZENOH_HOST (in-network only).
+      ZENOH_PUBLIC_HOST: ${ZENOH_PUBLIC_HOST:-}
       ZENOH_CONTAINER: dc-zenoh
       ETCD_HOST: etcd
       ETCD_PORT: "2379"

@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import config
 from . import zenoh_acl, zenoh_admin, zenoh_pki, zenoh_rpc
-from .backend import MessagingBackendService
+from .backend import MessagingBackendService, _read_backend_choice
 
 logger = logging.getLogger(__name__)
 
@@ -311,17 +311,37 @@ class ZenohBackend(MessagingBackendService):
 
         return results
 
+    @staticmethod
+    def _advertised_host() -> str:
+        """The device-facing broker host baked into credentials + cert SAN.
+
+        Distinct from ``ZENOH_HOST`` (the in-network address the portal uses
+        to reach the router): external devices/agents must receive a publicly
+        reachable host, or the URL in their downloaded credential won't
+        resolve. Resolution order:
+
+          1. ``ZENOH_PUBLIC_HOST`` (explicit deployment override)
+          2. the host recorded at bootstrap (what the admin entered at setup)
+          3. ``ZENOH_HOST`` (last-resort fallback)
+        """
+        if config.ZENOH_PUBLIC_HOST:
+            return config.ZENOH_PUBLIC_HOST
+        choice = _read_backend_choice()
+        if choice and choice.get("host"):
+            return choice["host"]
+        return config.ZENOH_HOST
+
     def broker_display_info(self) -> dict:
         return {
             "backend": "Zenoh",
-            "host": config.ZENOH_HOST,
+            "host": self._advertised_host(),
             "port": config.ZENOH_PORT,
             "auth_method": "mTLS + ACL",
             "container": config.ZENOH_CONTAINER,
         }
 
     def default_host(self) -> str:
-        return config.ZENOH_HOST
+        return self._advertised_host()
 
     def default_port(self) -> str:
         return config.ZENOH_PORT

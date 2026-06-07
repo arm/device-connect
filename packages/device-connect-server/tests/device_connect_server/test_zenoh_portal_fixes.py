@@ -123,7 +123,6 @@ async def test_run_verification_detects_toplevel_acl(monkeypatch, tmp_path):
 
 def _patch_bootstrap_pki(monkeypatch, tmp_path):
     """Mock everything bootstrap() touches except the CA decision."""
-    from pathlib import Path
     from device_connect_server.portal.services import zenoh_backend, zenoh_pki, zenoh_acl, zenoh_admin
     from device_connect_server.portal import config as portal_config
     from device_connect_server.portal.services import backend as backend_mod
@@ -166,3 +165,23 @@ async def test_bootstrap_generates_ca_when_absent(monkeypatch, tmp_path):
 
     zenoh_pki.generate_ca.assert_awaited_once()           # fresh deploy still gets a CA
     zenoh_pki.generate_server_cert.assert_awaited_once()
+
+
+@pytest.mark.parametrize("public,choice_host,zenoh_host,expected", [
+    ("203.0.113.5", "boot-host", "zenoh", "203.0.113.5"),  # explicit override wins
+    ("",            "boot-host", "zenoh", "boot-host"),      # bootstrap host next
+    ("",            None,        "zenoh", "zenoh"),          # in-network fallback
+])
+def test_advertised_host_precedence(monkeypatch, public, choice_host, zenoh_host, expected):
+    """Device-facing host: ZENOH_PUBLIC_HOST > bootstrap host > ZENOH_HOST."""
+    from device_connect_server.portal.services import zenoh_backend
+    from device_connect_server.portal import config as portal_config
+
+    monkeypatch.setattr(portal_config, "ZENOH_PUBLIC_HOST", public)
+    monkeypatch.setattr(portal_config, "ZENOH_HOST", zenoh_host)
+    choice = {"host": choice_host} if choice_host else None
+    monkeypatch.setattr(zenoh_backend, "_read_backend_choice", lambda: choice)
+
+    assert zenoh_backend.ZenohBackend._advertised_host() == expected
+    # broker_display_info() (which feeds device credentials) uses it.
+    assert zenoh_backend.ZenohBackend().broker_display_info()["host"] == expected
