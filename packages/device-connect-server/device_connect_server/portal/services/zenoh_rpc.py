@@ -53,13 +53,24 @@ async def connect():
     from device_connect_edge.messaging import create_client
 
     adapter = create_client("zenoh")
-    creds = _load_creds()
-    zenoh_cfg = creds.get("zenoh", {})
 
-    servers = zenoh_cfg.get("urls", [f"zenoh+tls://{config.ZENOH_HOST}:{config.ZENOH_PORT}"])
-    tls = zenoh_cfg.get("tls", {})
+    # Server-to-server RPC must use the portal's OWN, internally-routable router
+    # endpoint and container-resolvable TLS material -- NOT the device-facing
+    # url/paths baked into the registry credential at bootstrap. The portal runs
+    # inside the broker network: it cannot hairpin to the public host in the
+    # credential's url, and the credential's TLS file paths point at the host's
+    # security_infra dir, not the portal's mount. Use ZENOH_HOST/PORT (the
+    # internal endpoint the registry service also uses) + the privileged
+    # registry keypair from SECURITY_INFRA_DIR.
+    servers = [f"zenoh+tls://{config.ZENOH_HOST}:{config.ZENOH_PORT}"]
+    infra = config.SECURITY_INFRA_DIR
+    tls = {
+        "ca_file": str(infra / "ca.pem"),
+        "cert_file": str(infra / "registry-cert.pem"),
+        "key_file": str(infra / "registry-key.pem"),
+    }
 
-    await adapter.connect(servers=servers, tls_config=tls if tls else None)
+    await adapter.connect(servers=servers, tls_config=tls)
     return adapter
 
 
