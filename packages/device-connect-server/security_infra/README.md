@@ -176,7 +176,7 @@ Give each group their zip file. The `tenant-config.env` inside sets the required
 
 ```bash
 source tenant-config.env
-export NATS_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
+export MESSAGING_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
 ```
 
 ## Managing Tenants
@@ -271,7 +271,22 @@ The device registry stores entries under `/device-connect/{tenant}/devices/{devi
 
 ### What about Zenoh?
 
-Zenoh does not have an ACL or permission system. If you use Zenoh as the messaging backend, tenant isolation is application-level only (subject naming conventions). For broker-enforced isolation, use NATS with JWT auth.
+Zenoh **does** provide broker-enforced isolation via its mTLS access-control
+(ACL) plugin. The multi-tenant Zenoh deployment uses a **per-tenant-CN**
+model: every device gets its own key pair but a client certificate whose
+Common Name is the **tenant** (device id goes in the cert OU), and the
+router ACL has one static rule per tenant
+(`cert_common_names: [tenant]` -> `device-connect/{tenant}/**`).
+
+Because Zenoh's ACL cannot be hot-reloaded, this design keeps **device
+provisioning and revocation reload-free** (they don't change the ACL); only
+tenant creation/deletion restarts the router. The trade-off is that
+per-device revocation is **soft** (a shared CN can't be denied
+individually) -- use short-lived certs or hard tenant revocation for a
+cert-level cutoff.
+
+See **[docs/zenoh-per-tenant-cn.md](../../../docs/zenoh-per-tenant-cn.md)**
+for the full model, the reload gate, the revocation trade-off, and migration.
 
 ## Connecting Devices
 
@@ -280,7 +295,7 @@ Once a tenant has credentials, each device connects by setting three environment
 ```bash
 export TENANT=alpha
 export NATS_URL=nats://dc.example.com:4222
-export NATS_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
+export MESSAGING_CREDENTIALS_FILE=./credentials/alpha-device-001.creds.json
 export MESSAGING_BACKEND=nats
 ```
 

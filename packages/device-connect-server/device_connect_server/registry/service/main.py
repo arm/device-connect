@@ -42,7 +42,9 @@ logger = logging.getLogger("device_registry_service")
 TENANT = os.getenv("TENANT", "default")
 TENANTS_RAW = os.getenv("TENANTS", "")
 MESSAGING_BACKEND = os.getenv("MESSAGING_BACKEND")  # Auto-detect if not specified
-NATS_CREDENTIALS_FILE = os.getenv("NATS_CREDENTIALS_FILE")
+# MESSAGING_CREDENTIALS_FILE is the backend-neutral name; NATS_CREDENTIALS_FILE
+# is kept as a deprecated fallback (mirrors the edge).
+MESSAGING_CREDENTIALS_FILE = os.getenv("MESSAGING_CREDENTIALS_FILE") or os.getenv("NATS_CREDENTIALS_FILE")
 NATS_URLS = os.getenv("NATS_URLS", "")
 NATS_URL = os.getenv("NATS_URL", "")
 
@@ -89,6 +91,18 @@ def _resolve_tenants() -> List[str]:
     if TENANTS_RAW.strip():
         return [t.strip() for t in TENANTS_RAW.split(",") if t.strip()]
     return [TENANT]
+
+
+def _extract_tenant(subject: str) -> str:
+    """Extract the tenant from a registry subject/key.
+
+    Handles both the NATS dotted form (``device-connect.{tenant}.registry``)
+    and the Zenoh slash-delimited key expression
+    (``device-connect/{tenant}/registry``). Without the slash case, every
+    Zenoh device was mis-attributed to the ``default`` tenant.
+    """
+    parts = subject.replace("/", ".").split(".")
+    return parts[1] if len(parts) >= 3 else "default"
 
 
 def _parse_creds_file(creds_path: Path) -> dict[str, Any]:
@@ -213,8 +227,8 @@ def _build_messaging_config() -> tuple[str, MessagingClient]:
     logger.info(f"Using {config.backend.upper()} messaging backend")
 
     # Handle credentials file for tenant override (NATS-specific)
-    if NATS_CREDENTIALS_FILE and config.backend == "nats":
-        creds_path = Path(NATS_CREDENTIALS_FILE)
+    if MESSAGING_CREDENTIALS_FILE and config.backend == "nats":
+        creds_path = Path(MESSAGING_CREDENTIALS_FILE)
         if creds_path.exists():
             creds = _parse_creds_file(creds_path)
             tenant = tenant or creds.get("tenant")
@@ -254,7 +268,7 @@ def _build_messaging_config() -> tuple[str, MessagingClient]:
     if not config.servers:
         raise RuntimeError(
             "No messaging servers configured. Set MESSAGING_URLS, NATS_URL, "
-            "or provide NATS_CREDENTIALS_FILE"
+            "or provide MESSAGING_CREDENTIALS_FILE"
         )
 
     return tenant, messaging, config
@@ -690,11 +704,6 @@ async def main() -> None:
     # Subscribe using wildcard subjects so new tenants work without restart.
     # The registry credentials are privileged (device-connect.>), so this is safe.
     # The tenant is extracted from the subject at runtime.
-
-    def _extract_tenant(subject: str) -> str:
-        """Extract tenant from subject like 'device-connect.{tenant}.registry'."""
-        parts = subject.split(".")
-        return parts[1] if len(parts) >= 3 else "default"
 
     # Cache per-tenant handlers to avoid re-creating closures on every message
     _register_handlers: dict[str, Any] = {}

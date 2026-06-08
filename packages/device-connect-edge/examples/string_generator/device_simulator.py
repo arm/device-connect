@@ -199,7 +199,7 @@ def _find_credentials_file(device_id: str) -> Optional[str]:
         2. ~/.device-connect/credentials/{device_id}.creds.json
         3. ~/.device-connect/credentials/{device_id}.creds
     """
-    env_creds = os.getenv("NATS_CREDENTIALS_FILE")
+    env_creds = os.getenv("MESSAGING_CREDENTIALS_FILE") or os.getenv("NATS_CREDENTIALS_FILE")
     if env_creds and os.path.exists(env_creds):
         return env_creds
 

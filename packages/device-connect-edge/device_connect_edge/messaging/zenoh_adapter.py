@@ -134,6 +134,13 @@ class ZenohAdapter(MessagingClient):
         self._d2d_mode = False
         self._d2d_retry_count = 3
         self._d2d_retry_delay = 0.3  # seconds between retries
+        # Saved config + watchdog state so the session can be transparently
+        # re-opened and all subscriptions/queryables re-declared if the router
+        # restarts (e.g. on a tenant-ACL change). See _connection_watchdog.
+        self._config_dict: Optional[Dict[str, Any]] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._watchdog_interval = 3.0  # seconds between session-health checks
+        self._reconnecting = False
 
     # ── Connection ──────────────────────────────────────────────
 
@@ -157,10 +164,12 @@ class ZenohAdapter(MessagingClient):
                 - ["zenoh+tls://host:7447"]  — TLS connection
                 - ["tls/host:7447"]  — native Zenoh TLS format
             credentials: Not used for Zenoh (auth is via TLS certs)
-            tls_config: TLS configuration
-                - ca_file: Path to CA certificate
-                - cert_file: Path to client certificate (mTLS)
-                - key_file: Path to client key (mTLS)
+            tls_config: TLS configuration. Each of CA / cert / key may be given
+                either as a file path or as inline PEM text:
+                - ca_file / ca_pem: CA certificate
+                - cert_file / cert_pem: client certificate (mTLS)
+                - key_file / key_pem: client key (mTLS)
+                Inline PEM is passed to Zenoh via its base64 config fields.
             reconnect_cb: Callback when reconnected
             disconnect_cb: Callback when disconnected
             **kwargs: Additional options:
@@ -194,20 +203,49 @@ class ZenohAdapter(MessagingClient):
             if not endpoints:
                 peer_mode = True
 
+            # Connect as a Zenoh *client* when targeting a router, and only as
+            # a *peer* for brokerless D2D. This is security-critical for
+            # router deployments: a peer participates in gossip/scouting and
+            # can form DIRECT peer-to-peer links with other nodes, which
+            # bypass the router entirely -- and the router is where the mTLS
+            # access-control (tenant isolation) is enforced. Leaving mode
+            # unset defaults to "peer", so two devices (or a device and the
+            # registry) would peer up directly and never have their traffic
+            # ACL-checked. A client only ever talks to its configured
+            # router(s), so all traffic is brokered and policy-enforced.
+            config_dict["mode"] = "peer" if peer_mode else "client"
+
             if endpoints:
-                config_dict["connect"] = {"endpoints": endpoints}
+                # Keep retrying the configured router(s) forever instead of
+                # giving up on first failure. This lets a client survive a
+                # router restart (e.g. when a tenant ACL rule is added): the
+                # Zenoh runtime reconnects and re-declares the session's
+                # primitives natively. The watchdog below is a backstop for
+                # the case where the session is fully closed rather than
+                # transiently disconnected.
+                config_dict["connect"] = {
+                    "endpoints": endpoints,
+                    "exit_on_failure": False,
+                    "retry": {
+                        "period_init_ms": 1000,
+                        "period_max_ms": 5000,
+                        "period_increase_factor": 2.0,
+                    },
+                }
 
             if listen_endpoints:
                 config_dict["listen"] = {"endpoints": listen_endpoints}
 
-            # Scouting config — enable multicast + gossip in peer mode
+            # Scouting/gossip only make sense for peer (D2D) mode; a client
+            # discovers nothing and must not autoconnect to peers (that would
+            # re-introduce the ACL-bypassing direct links described above).
             config_dict["scouting"] = {
                 "multicast": {
                     "enabled": peer_mode,
                     "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
                 },
                 "gossip": {
-                    "enabled": True,
+                    "enabled": peer_mode,
                     "multihop": os.getenv("ZENOH_GOSSIP_MULTIHOP", "").lower() in ("true", "1", "yes"),
                     "autoconnect": {"router": ["peer", "router"], "peer": ["router", "peer"]},
                 },
@@ -215,37 +253,132 @@ class ZenohAdapter(MessagingClient):
 
             # TLS configuration
             if tls_config:
+                # Zenoh 1.x renamed the connect-side TLS fields:
+                # client_certificate/client_private_key -> connect_certificate/
+                # connect_private_key, and mutual TLS is gated on enable_mtls.
+                #
+                # Each of CA / cert / key may be provided either as a file path
+                # (*_file) or as inline PEM text (*_pem). Inline PEM is fed to
+                # Zenoh via its native base64 config fields
+                # (root_ca_certificate_base64 / connect_certificate_base64 /
+                # connect_private_key_base64), so a self-contained creds.json
+                # connects without writing any cert material to local disk.
+                import base64
+
+                def _b64(pem: str) -> str:
+                    return base64.b64encode(
+                        pem.encode() if isinstance(pem, str) else pem
+                    ).decode()
+
                 tls_dict: Dict[str, Any] = {}
+                # CA
                 if tls_config.get("ca_file"):
                     tls_dict["root_ca_certificate"] = tls_config["ca_file"]
+                elif tls_config.get("ca_pem"):
+                    tls_dict["root_ca_certificate_base64"] = _b64(tls_config["ca_pem"])
+                # Client certificate (mTLS)
                 if tls_config.get("cert_file"):
-                    tls_dict["client_certificate"] = tls_config["cert_file"]
+                    tls_dict["connect_certificate"] = tls_config["cert_file"]
+                elif tls_config.get("cert_pem"):
+                    tls_dict["connect_certificate_base64"] = _b64(tls_config["cert_pem"])
+                # Client private key (mTLS)
                 if tls_config.get("key_file"):
-                    tls_dict["client_private_key"] = tls_config["key_file"]
+                    tls_dict["connect_private_key"] = tls_config["key_file"]
+                elif tls_config.get("key_pem"):
+                    tls_dict["connect_private_key_base64"] = _b64(tls_config["key_pem"])
+
+                has_cert = "connect_certificate" in tls_dict or "connect_certificate_base64" in tls_dict
+                has_key = "connect_private_key" in tls_dict or "connect_private_key_base64" in tls_dict
+                if has_cert and has_key:
+                    tls_dict["enable_mtls"] = True
                 if tls_dict:
                     config_dict.setdefault("transport", {}).setdefault("link", {})["tls"] = tls_dict
                     self._logger.info("TLS enabled for secure connection")
 
-            # Build config
-            config = zenoh.Config.from_json5(json.dumps(config_dict))
-
-            # Open session in executor (blocking call)
-            loop = asyncio.get_running_loop()
-            self._session = await loop.run_in_executor(
-                self._executor, zenoh.open, config
-            )
-            self._connected = True
-            self._closed = False
+            # Save the built config so the watchdog can transparently
+            # re-open the session with identical settings after a hard close.
+            self._config_dict = config_dict
             self._d2d_mode = peer_mode
+
+            # Open the session
+            await self._open_session()
 
             mode = "peer" if peer_mode else "router"
             self._logger.debug(
                 f"Connected to Zenoh ({mode} mode): {servers}"
             )
 
+            # Start the session-health watchdog (idempotent).
+            self._start_watchdog()
+
         except Exception as e:
             self._logger.error(f"Failed to connect to Zenoh: {e}")
             raise MessagingConnectionError(f"Failed to connect to Zenoh: {e}") from e
+
+    async def _open_session(self) -> None:
+        """Open (or re-open) the Zenoh session from the saved config."""
+        if self._config_dict is None:
+            raise MessagingConnectionError("connect() must be called before opening a session")
+        config = zenoh.Config.from_json5(json.dumps(self._config_dict))
+        loop = asyncio.get_running_loop()
+        self._session = await loop.run_in_executor(
+            self._executor, zenoh.open, config
+        )
+        self._connected = True
+        self._closed = False
+
+    def _start_watchdog(self) -> None:
+        """Start the background session-health watchdog if not already running."""
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            return
+        self._watchdog_task = asyncio.create_task(self._connection_watchdog())
+
+    async def _connection_watchdog(self) -> None:
+        """Re-open the session and re-declare all subscriptions on a hard close.
+
+        Zenoh's client runtime already reconnects to the router and re-declares
+        primitives on a *transient* disconnect (see the connect.retry config).
+        This watchdog covers the case where the session object itself reports
+        closed: it re-opens a fresh session and replays every subscriber and
+        queryable. Re-declaration only happens once the old session is
+        confirmed closed, so there is no risk of duplicate live declarations.
+        """
+        while not self._closed:
+            try:
+                await asyncio.sleep(self._watchdog_interval)
+            except asyncio.CancelledError:
+                return
+            if self._closed or self._reconnecting:
+                continue
+            sess = self._session
+            if sess is None:
+                continue
+            try:
+                closed = sess.is_closed()
+            except Exception:
+                closed = True
+            if not closed:
+                continue
+            # Session is gone but we never asked to close -- reconnect.
+            self._reconnecting = True
+            self._connected = False
+            self._logger.warning(
+                "Zenoh session closed unexpectedly; reconnecting and re-declaring %d subscription(s)",
+                len(self._subscriptions),
+            )
+            try:
+                await self._open_session()
+                await self._redeclare_all()
+                self._logger.info("Zenoh session re-established and subscriptions re-declared")
+                if self._reconnect_cb is not None:
+                    try:
+                        await self._reconnect_cb()
+                    except Exception:
+                        self._logger.debug("reconnect_cb raised", exc_info=True)
+            except Exception as e:
+                self._logger.error("Zenoh reconnect failed (will retry): %s", e)
+            finally:
+                self._reconnecting = False
 
     def configure_d2d_retry(self, retries: int = 3, delay: float = 0.3) -> None:
         """Configure retry behavior for D2D mode request/reply.
@@ -397,91 +530,10 @@ class ZenohAdapter(MessagingClient):
         Returns:
             Subscription handle
         """
-        if not self.is_connected:
-            raise NotConnectedError("Not connected to Zenoh")
-
-        if queue:
-            self._logger.warning(
-                f"Zenoh does not natively support queue groups (requested: {queue}). "
-                "All subscribers will receive all messages."
-            )
-
-        key = self.convert_subject_syntax(subject)
-
-        try:
-            loop = asyncio.get_running_loop()
-            sample_queue: asyncio.Queue = asyncio.Queue()
-
-            # Zenoh subscriber callback (runs in Zenoh's thread — must not block)
-            def on_sample(sample):
-                try:
-                    loop.call_soon_threadsafe(sample_queue.put_nowait, ("sample", sample))
-                except RuntimeError:
-                    pass  # Event loop closed during shutdown
-
-            # Zenoh queryable callback (runs in Zenoh's thread)
-            def on_query(query):
-                try:
-                    loop.call_soon_threadsafe(sample_queue.put_nowait, ("query", query))
-                except RuntimeError:
-                    pass  # Event loop closed during shutdown
-
-            # Background asyncio task to drain queue into user callback
-            async def drain_loop():
-                try:
-                    while True:
-                        msg_type, obj = await sample_queue.get()
-                        try:
-                            if msg_type == "sample":
-                                await callback(bytes(obj.payload), None)
-                            elif msg_type == "query":
-                                query_id = uuid.uuid4().hex
-                                with self._pending_queries_lock:
-                                    self._pending_queries[query_id] = (obj, time.monotonic())
-                                    self._evict_stale_queries()
-                                reply_subject = f"{_QUERY_REPLY_PREFIX}{query_id}"
-                                payload = bytes(obj.payload) if obj.payload else b""
-                                await callback(payload, reply_subject)
-                        except Exception as e:
-                            self._logger.error(f"Subscriber callback error on {subject}: {e}")
-                except asyncio.CancelledError:
-                    pass
-
-            # Declare subscriber (always) and queryable (unless subscribe_only)
-            subscriber = await loop.run_in_executor(
-                self._executor,
-                lambda: self._session.declare_subscriber(key, on_sample),
-            )
-            queryable = None
-            if not subscribe_only:
-                queryable = await loop.run_in_executor(
-                    self._executor,
-                    lambda: self._session.declare_queryable(key, on_query, complete=True),
-                )
-
-            drain_task = asyncio.create_task(drain_loop())
-
-            wrapper = ZenohSubscriptionWrapper(
-                subscriber=subscriber,
-                queryable=queryable,
-                drain_task=drain_task,
-                adapter=self,
-                key_expr=key,
-            )
-
-            self._subscriptions[key] = {
-                "subscriber": subscriber,
-                "queryable": queryable,
-                "drain_task": drain_task,
-                "wrapper": wrapper,
-            }
-
-            self._logger.debug(f"Subscribed to {subject} (key: {key}, subscribe_only={subscribe_only})")
-            return wrapper
-
-        except Exception as e:
-            self._logger.error(f"Failed to subscribe to {subject}: {e}")
-            raise SubscribeError(f"Failed to subscribe: {e}") from e
+        return await self._install_subscription(
+            subject, callback, queue=queue,
+            subscribe_only=subscribe_only, with_subject=False,
+        )
 
     async def subscribe_with_subject(
         self,
@@ -502,6 +554,32 @@ class ZenohAdapter(MessagingClient):
         Returns:
             Subscription handle
         """
+        return await self._install_subscription(
+            subject, callback, queue=queue,
+            subscribe_only=subscribe_only, with_subject=True,
+        )
+
+    async def _install_subscription(
+        self,
+        subject: str,
+        callback: Callable[..., Awaitable[None]],
+        *,
+        queue: Optional[str],
+        subscribe_only: bool,
+        with_subject: bool,
+        existing_wrapper: Optional["ZenohSubscriptionWrapper"] = None,
+    ) -> Subscription:
+        """Declare a subscriber (+ optional queryable) and wire its drain loop.
+
+        Shared by subscribe()/subscribe_with_subject() and reused by
+        _redeclare_all() after a reconnect. The full declaration spec is stored
+        in self._subscriptions so it can be replayed onto a fresh session.
+
+        When *with_subject* is True the user callback is invoked as
+        ``callback(data, matched_key, reply)``; otherwise ``callback(data, reply)``.
+        When *existing_wrapper* is provided (reconnect path) its handles are
+        updated in place so callers' Subscription references stay valid.
+        """
         if not self.is_connected:
             raise NotConnectedError("Not connected to Zenoh")
 
@@ -512,11 +590,13 @@ class ZenohAdapter(MessagingClient):
             )
 
         key = self.convert_subject_syntax(subject)
+        store_key = f"{key}:with_subject" if with_subject else key
 
         try:
             loop = asyncio.get_running_loop()
             sample_queue: asyncio.Queue = asyncio.Queue()
 
+            # Zenoh callbacks run in Zenoh's own thread — must not block.
             def on_sample(sample):
                 try:
                     loop.call_soon_threadsafe(sample_queue.put_nowait, ("sample", sample))
@@ -535,22 +615,27 @@ class ZenohAdapter(MessagingClient):
                         msg_type, obj = await sample_queue.get()
                         try:
                             if msg_type == "sample":
-                                matched_key = str(obj.key_expr)
-                                await callback(bytes(obj.payload), matched_key, None)
+                                if with_subject:
+                                    await callback(bytes(obj.payload), str(obj.key_expr), None)
+                                else:
+                                    await callback(bytes(obj.payload), None)
                             elif msg_type == "query":
                                 query_id = uuid.uuid4().hex
                                 with self._pending_queries_lock:
                                     self._pending_queries[query_id] = (obj, time.monotonic())
                                     self._evict_stale_queries()
                                 reply_subject = f"{_QUERY_REPLY_PREFIX}{query_id}"
-                                matched_key = str(obj.key_expr)
                                 payload = bytes(obj.payload) if obj.payload else b""
-                                await callback(payload, matched_key, reply_subject)
+                                if with_subject:
+                                    await callback(payload, str(obj.key_expr), reply_subject)
+                                else:
+                                    await callback(payload, reply_subject)
                         except Exception as e:
                             self._logger.error(f"Subscriber callback error on {subject}: {e}")
                 except asyncio.CancelledError:
                     pass
 
+            # Declare subscriber (always) and queryable (unless subscribe_only)
             subscriber = await loop.run_in_executor(
                 self._executor,
                 lambda: self._session.declare_subscriber(key, on_sample),
@@ -564,28 +649,71 @@ class ZenohAdapter(MessagingClient):
 
             drain_task = asyncio.create_task(drain_loop())
 
-            wrapper = ZenohSubscriptionWrapper(
-                subscriber=subscriber,
-                queryable=queryable,
-                drain_task=drain_task,
-                adapter=self,
-                key_expr=key,
-            )
+            if existing_wrapper is not None:
+                existing_wrapper._subscriber = subscriber
+                existing_wrapper._queryable = queryable
+                existing_wrapper._drain_task = drain_task
+                existing_wrapper._key_expr = key
+                wrapper = existing_wrapper
+            else:
+                wrapper = ZenohSubscriptionWrapper(
+                    subscriber=subscriber,
+                    queryable=queryable,
+                    drain_task=drain_task,
+                    adapter=self,
+                    key_expr=key,
+                )
 
-            sub_key = f"{key}:with_subject"
-            self._subscriptions[sub_key] = {
+            self._subscriptions[store_key] = {
                 "subscriber": subscriber,
                 "queryable": queryable,
                 "drain_task": drain_task,
                 "wrapper": wrapper,
+                # Redeclare spec — everything needed to replay onto a new session.
+                "callback": callback,
+                "subscribe_only": subscribe_only,
+                "with_subject": with_subject,
+                "queue": queue,
+                "key": key,
             }
 
-            self._logger.debug(f"Subscribed to {subject} with subject callback (key: {key}, subscribe_only={subscribe_only})")
+            self._logger.debug(
+                f"Subscribed to {subject} (key: {key}, subscribe_only={subscribe_only}, "
+                f"with_subject={with_subject})"
+            )
             return wrapper
 
         except Exception as e:
             self._logger.error(f"Failed to subscribe to {subject}: {e}")
             raise SubscribeError(f"Failed to subscribe: {e}") from e
+
+    async def _redeclare_all(self) -> None:
+        """Replay every stored subscription onto the (freshly re-opened) session.
+
+        Called by the watchdog after a reconnect. The old session's subscriber,
+        queryable and drain task died with it, so we cancel the stale drain
+        tasks and re-install each subscription from its saved spec, reusing the
+        original wrapper so caller-held Subscription handles remain valid.
+        """
+        specs = list(self._subscriptions.values())
+        self._subscriptions.clear()
+        for spec in specs:
+            old_drain = spec.get("drain_task")
+            if old_drain and not old_drain.done():
+                old_drain.cancel()
+            try:
+                await self._install_subscription(
+                    spec["key"],
+                    spec["callback"],
+                    queue=spec.get("queue"),
+                    subscribe_only=spec.get("subscribe_only", False),
+                    with_subject=spec.get("with_subject", False),
+                    existing_wrapper=spec.get("wrapper"),
+                )
+            except Exception as e:
+                self._logger.error(
+                    "Failed to re-declare subscription on key %s: %s", spec.get("key"), e
+                )
 
     # ── Request/Reply ───────────────────────────────────────────
 
@@ -724,6 +852,17 @@ class ZenohAdapter(MessagingClient):
 
     async def close(self) -> None:
         """Close connection to Zenoh and cleanup all resources."""
+        # Signal intentional shutdown first so the watchdog does not try to
+        # reconnect the session we are about to tear down, then stop it.
+        self._closed = True
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except asyncio.CancelledError:
+                pass
+        self._watchdog_task = None
+
         loop = asyncio.get_running_loop()
         has_queryables = False
 

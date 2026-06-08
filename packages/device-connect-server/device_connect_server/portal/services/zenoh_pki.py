@@ -11,6 +11,7 @@ Generates:
 """
 
 import asyncio
+import ipaddress
 import logging
 import os
 import tempfile
@@ -123,9 +124,16 @@ async def generate_server_cert(
     await _run_openssl("genrsa", "-out", str(server_key), "2048")
     os.chmod(server_key, 0o600)
 
-    # Create SAN config
+    # Create SAN config. A bare IP host must go in an IP SAN, not a DNS SAN,
+    # or TLS name verification fails for devices that connect by IP
+    # (e.g. tls/203.0.113.5:7447 against a cert carrying only DNS:203.0.113.5).
+    try:
+        ipaddress.ip_address(hostname)
+        host_san = f"IP:{hostname}"
+    except ValueError:
+        host_san = f"DNS:{hostname}"
     san_entries = [
-        f"DNS:{hostname}",
+        host_san,
         "DNS:localhost",
         "DNS:zenoh",
         "IP:127.0.0.1",
@@ -188,7 +196,12 @@ async def generate_client_cert(
 ) -> tuple[Path, Path]:
     """Generate a client certificate signed by the CA.
 
-    The CN is used by Zenoh ACL for identity matching.
+    The CN is used by Zenoh ACL for identity matching. When ``common_name``
+    differs from ``name`` (the per-tenant-CN model, where the CN is the
+    tenant), the file ``name`` -- the device id -- is recorded in the
+    subject's OU so the certificate remains individually traceable for
+    audit even though the ACL matches on the shared tenant CN.
+
     Returns (cert_path, key_path).
     """
     d = _pki_dir()
@@ -200,6 +213,10 @@ async def generate_client_cert(
 
     cn = common_name or name
     _validate_cn(cn, "certificate CN")
+    subject = f"/CN={cn}"
+    if common_name and common_name != name:
+        _validate_cn(name, "certificate OU")
+        subject += f"/OU={name}"
 
     # Generate client key
     await _run_openssl("genrsa", "-out", str(client_key), "2048")
@@ -210,7 +227,7 @@ async def generate_client_cert(
         "req", "-new",
         "-key", str(client_key),
         "-out", str(csr_path),
-        "-subj", f"/CN={cn}",
+        "-subj", subject,
     )
 
     # Sign with CA
@@ -229,6 +246,25 @@ async def generate_client_cert(
 
     logger.info("Generated client cert: %s (CN=%s)", client_cert, cn)
     return client_cert, client_key
+
+
+def delete_client_cert(name: str) -> None:
+    """Remove a client certificate's key/cert (and any stray CSR).
+
+    Idempotent: missing files are ignored. Used by device revocation so a
+    revoked device's key material no longer lingers on disk alongside the
+    ACL entry removal.
+    """
+    d = _pki_dir()
+    for fname in (f"{name}-cert.pem", f"{name}-key.pem", f"{name}.csr"):
+        p = d / fname
+        try:
+            p.unlink()
+            logger.info("Deleted client cert file: %s", p)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.warning("Could not delete %s", p)
 
 
 async def get_ca_fingerprint() -> str:

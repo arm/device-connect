@@ -81,7 +81,7 @@ def _find_device_connect_root() -> Optional[Path]:
 
 
 def _auto_discover_credentials() -> Optional[Dict[str, Any]]:
-    """Search well-known paths for NATS credentials."""
+    """Search well-known paths for a messaging credential (any backend)."""
     root = _find_device_connect_root()
     if root is None:
         return None
@@ -110,6 +110,61 @@ def _auto_discover_tls() -> Optional[Dict[str, Any]]:
     return None
 
 
+def _resolve_credentials_file_env() -> Optional[str]:
+    """Path to the messaging credentials file from the environment.
+
+    ``MESSAGING_CREDENTIALS_FILE`` is the backend-neutral name; the older
+    ``NATS_CREDENTIALS_FILE`` is honored as a deprecated alias (mirrors the
+    edge device runtime). The credential isn't backend-specific -- the same
+    ``*.creds.json`` carries a per-backend sub-object (zenoh/nats/mqtt).
+    """
+    new = os.getenv("MESSAGING_CREDENTIALS_FILE")
+    if new:
+        return new
+    old = os.getenv("NATS_CREDENTIALS_FILE")
+    if old:
+        logger.warning(
+            "NATS_CREDENTIALS_FILE is deprecated; set MESSAGING_CREDENTIALS_FILE "
+            "instead (the old name still works for now)."
+        )
+    return old
+
+
+def _read_creds_file(path: str) -> Dict[str, Any]:
+    """Load a ``*.creds.json`` file as a dict (empty dict on any error)."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _creds_backend_section(creds: Dict[str, Any], backend: Optional[str]) -> Dict[str, Any]:
+    """The credential's per-backend sub-object (zenoh/nats/mqtt)."""
+    section = creds.get(backend or "") or creds.get("zenoh") or creds.get("nats") or {}
+    return section if isinstance(section, dict) else {}
+
+
+def _tls_config_from_creds(creds: Dict[str, Any], backend: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Extract a tls_config from a credential's per-backend ``tls`` block.
+
+    Backend-neutral: honors both file paths (ca_file/cert_file/key_file) and
+    inline PEM (ca_pem/cert_pem/key_pem), exactly like the edge device runtime,
+    so Zenoh mTLS works straight from a downloaded credential -- no explicit
+    tls_config needed.
+    """
+    tls = _creds_backend_section(creds, backend).get("tls")
+    if not isinstance(tls, dict):
+        return None
+    out = {
+        k: tls[k]
+        for k in ("ca_file", "cert_file", "key_file", "ca_pem", "cert_pem", "key_pem")
+        if tls.get(k)
+    }
+    return out or None
+
+
 # ── Device payload helper ──────────────────────────────────────────
 
 
@@ -134,6 +189,14 @@ def flatten_device(raw: Dict[str, Any]) -> Dict[str, Any]:
     merged_labels = caps_labels
     if legacy_location and (not caps_labels or "location" not in caps_labels):
         merged_labels = {**(caps_labels or {}), "location": legacy_location}
+
+    # Mirror device_type into labels["type"] so the most natural discovery
+    # filter -- discover("device(type:camera)") -- works for every device,
+    # not only those whose driver declared a "type" label. A driver-declared
+    # "type" label (if any) takes precedence.
+    device_type = raw.get("device_type") or identity.get("device_type")
+    if device_type and (not merged_labels or "type" not in merged_labels):
+        merged_labels = {**(merged_labels or {}), "type": device_type}
 
     # NOTE: The raw ``capabilities`` dict is intentionally NOT included in
     # the flattened output.  ``functions`` and ``events`` are extracted to
@@ -201,12 +264,11 @@ class DeviceConnection:
     def __init__(
         self,
         nats_url: Optional[str] = None,
-        zone: str = "default",
+        zone: Optional[str] = None,
         credentials: Optional[Dict[str, Any]] = None,
         tls_config: Optional[Dict[str, Any]] = None,
         request_timeout: float = 30.0,
     ):
-        self.zone = zone
         self._request_timeout = request_timeout
 
         # Resolve config: explicit params -> env vars (via MessagingConfig) -> auto-discovery
@@ -221,31 +283,57 @@ class DeviceConnection:
         self._credentials = config.credentials
         self._tls_config = config.tls_config
 
-        # If MessagingConfig didn't find credentials/TLS from env, try auto-discovery
+        env_has_urls = bool(
+            nats_url or os.getenv("ZENOH_CONNECT") or os.getenv("MESSAGING_URLS")
+            or os.getenv("NATS_URL") or os.getenv("NATS_URLS")
+        )
+
+        # Read the messaging credentials file once (MESSAGING_CREDENTIALS_FILE,
+        # or the deprecated NATS_CREDENTIALS_FILE). The same *.creds.json a
+        # device uses carries the tenant, per-backend mTLS material, and the
+        # broker URL -- so an external agent self-configures from it the same
+        # way a device does. Explicit params and env URLs/TLS still take
+        # precedence.
+        file_data: Dict[str, Any] = {}
+        creds_file = _resolve_credentials_file_env()
+        if creds_file and Path(creds_file).exists():
+            file_data = _read_creds_file(creds_file)
+
+        # Zone/tenant: explicit arg -> the credential's tenant -> TENANT env ->
+        # "default". A bare "default" parameter default would have masked the
+        # credential's tenant, silently sending external agents to
+        # device-connect.default.* instead of their actual tenant.
+        self.zone = zone or file_data.get("tenant") or os.environ.get("TENANT") or "default"
+
+        creds_has_url = False
+        if file_data and (credentials is None or tls_config is None):
+            if self._tls_config is None:
+                self._tls_config = _tls_config_from_creds(file_data, self._backend)
+            if not env_has_urls:
+                creds_urls = _creds_backend_section(file_data, self._backend).get("urls")
+                if creds_urls:
+                    self._servers = list(creds_urls)
+                    creds_has_url = True
+
+        # Last resort: well-known-path auto-discovery.
         if self._credentials is None:
             self._credentials = _auto_discover_credentials()
         if self._tls_config is None:
             self._tls_config = _auto_discover_tls()
 
-        # If no explicit server URL was given but TLS was discovered,
+        # If no explicit/credential server URL was given but TLS was discovered,
         # default to tls:// instead of nats://
-        if not nats_url and not os.getenv("NATS_URL") and not os.getenv("NATS_URLS") and not os.getenv("MESSAGING_URLS") and not os.getenv("ZENOH_CONNECT"):
-            if self._tls_config:
-                self._servers = ["tls://localhost:4222"]
+        if not env_has_urls and not creds_has_url and self._tls_config:
+            self._servers = ["tls://localhost:4222"]
 
         self._client: Optional[MessagingClient] = None
         self._provider: Optional[DiscoveryProvider] = None
         self._inbox: Dict[str, List[Dict[str, Any]]] = {}
         self._sync_subs: Dict[str, Any] = {}
 
-        # D2D mode: discover devices via presence instead of registry
-        no_explicit_urls = (
-            not nats_url
-            and not os.getenv("ZENOH_CONNECT")
-            and not os.getenv("MESSAGING_URLS")
-            and not os.getenv("NATS_URL")
-            and not os.getenv("NATS_URLS")
-        )
+        # D2D mode: discover devices via presence instead of a registry/router.
+        # A router URL from env OR the credential means we are NOT in D2D.
+        no_explicit_urls = not env_has_urls and not creds_has_url
         self._d2d_mode = (
             os.getenv("DEVICE_CONNECT_DISCOVERY_MODE", "").lower() in ("d2d", "p2p")
             or (self._backend == "zenoh" and no_explicit_urls)
@@ -253,8 +341,8 @@ class DeviceConnection:
         self._d2d_collector = None  # lazy-initialized PresenceCollector
 
         # In D2D mode with Zenoh and no explicit URLs, use empty servers (multicast scouting).
-        # When DEVICE_CONNECT_DISCOVERY_MODE=d2d is forced alongside a router URL (ZENOH_CONNECT),
-        # keep the router URL so we can still communicate with devices connected to it.
+        # When DEVICE_CONNECT_DISCOVERY_MODE=d2d is forced alongside a router URL,
+        # keep the URL so we can still communicate with devices connected to it.
         if self._d2d_mode and self._backend == "zenoh" and no_explicit_urls:
             self._servers = []
 
@@ -642,7 +730,7 @@ class DeviceConnection:
 
 def connect(
     nats_url: Optional[str] = None,
-    zone: str = "default",
+    zone: Optional[str] = None,
     credentials: Optional[Dict[str, Any]] = None,
     tls_config: Optional[Dict[str, Any]] = None,
     request_timeout: float = 30.0,
@@ -662,11 +750,13 @@ def connect(
       - MESSAGING_URLS    — broker URLs (comma-separated)
       - ZENOH_CONNECT     — Zenoh endpoints (auto-selects zenoh backend)
       - NATS_URL          — NATS broker URL (legacy)
-      - TENANT            — Device Connect zone/namespace (default: "default")
+      - TENANT            — Device Connect zone/namespace
 
     Args:
         nats_url: Broker URL (works for any backend despite the name).
-        zone: Device Connect tenant/zone namespace.
+        zone: Device Connect tenant/zone namespace. When omitted, resolved from
+            the credential's ``tenant`` field, then the TENANT env var, then
+            "default".
         credentials: Auth credentials dict.
         tls_config: TLS configuration dict.
         request_timeout: Default timeout for device RPC calls.
@@ -675,7 +765,8 @@ def connect(
     with _lock:
         if _connection is not None:
             return
-        zone = zone or os.environ.get("TENANT", "default")
+        # zone resolution (explicit -> credential tenant -> TENANT env ->
+        # "default") happens in DeviceConnection, which can see the creds file.
         conn = DeviceConnection(
             nats_url=nats_url,
             zone=zone,

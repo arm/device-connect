@@ -82,7 +82,7 @@ services:
 
   # Zenoh router (no auth, no multicast scouting — use router mode for tests)
   zenoh:
-    image: eclipse/zenoh:latest
+    image: eclipse/zenoh:1.7.2
     container_name: itest-zenoh
     command: ["--no-multicast-scouting", "--rest-http-port", "8000"]
     ports:

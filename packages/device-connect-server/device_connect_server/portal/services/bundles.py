@@ -30,11 +30,24 @@ def create_bundle(tenant: str, public_host: str = "") -> bytes:
     creds_list = credentials.list_credentials(tenant=tenant)
 
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add credential files
+        # Add credential files, inlining referenced TLS PEM material so each
+        # *.creds.json is self-contained and works without the sibling
+        # certs/ files. The certs/ directory is still shipped below for
+        # operators who prefer file-path TLS (MESSAGING_TLS_*_FILE).
         for cred in creds_list:
             cred_path = Path(cred["path"])
-            if cred_path.exists():
+            if not cred_path.exists():
+                continue
+            try:
+                data = json.loads(cred_path.read_text())
+            except (json.JSONDecodeError, OSError):
                 zf.write(cred_path, f"{tenant}/credentials/{cred['filename']}")
+                continue
+            inlined = credentials.inline_tls_material(data)
+            zf.writestr(
+                f"{tenant}/credentials/{cred['filename']}",
+                json.dumps(inlined, indent=2),
+            )
 
         # For Zenoh: include TLS cert files referenced in credentials
         if backend_name == "zenoh":
@@ -100,14 +113,14 @@ def _generate_env(tenant: str, backend: str, host: str, port: str) -> str:
             f"export MQTT_URL=mqtt://{host}:{port}",
             "",
             "# Set this to the credentials file for your device:",
-            f"# export MQTT_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
+            f"# export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
         ]
     else:
         lines += [
             f"export NATS_URL=nats://{host}:{port}",
             "",
             "# Set this to the credentials file for your device:",
-            f"# export NATS_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
+            f"# export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json",
         ]
 
     return "\n".join(lines) + "\n"
@@ -143,7 +156,7 @@ def _generate_readme(tenant: str, backend: str) -> str:
             f"   ```\n\n"
             f"2. Set your device credential:\n"
             f"   ```bash\n"
-            f"   export MQTT_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
+            f"   export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
             f"   ```\n\n"
             f"3. Run your device:\n"
             f"   ```bash\n"
@@ -160,7 +173,7 @@ def _generate_readme(tenant: str, backend: str) -> str:
             f"   ```\n\n"
             f"2. Set your device credential:\n"
             f"   ```bash\n"
-            f"   export NATS_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
+            f"   export MESSAGING_CREDENTIALS_FILE=./credentials/{tenant}-device-001.creds.json\n"
             f"   ```\n\n"
             f"3. Run your device:\n"
             f"   ```bash\n"

@@ -545,7 +545,8 @@ async def devices_provision(request: web.Request) -> web.Response:
     _audit(request, "provision", trace_id=trace, device_id=full_name)
     return _ok(
         {"device": device_record,
-         "credentials": {"filename": filename, "content": cred_data}},
+         "credentials": {"filename": filename,
+                         "content": credentials_svc.inline_tls_material(cred_data)}},
         status=201,
         trace_id=trace,
     )
@@ -591,7 +592,8 @@ async def device_credentials_get(request: web.Request) -> web.Response:
                     message="Credential belongs to another tenant", trace_id=trace)
 
     _audit(request, "credentials_get", trace_id=trace, device_id=full_name)
-    return _ok({"filename": filename, "content": cred}, trace_id=trace)
+    return _ok({"filename": filename,
+                "content": credentials_svc.inline_tls_material(cred)}, trace_id=trace)
 
 
 async def device_credentials_rotate(request: web.Request) -> web.Response:
@@ -627,7 +629,8 @@ async def device_credentials_rotate(request: web.Request) -> web.Response:
     filename = f"{full_name}.creds.json"
     cred_data = credentials_svc.get_credential_data(filename) or {}
     _audit(request, "credentials_rotate", trace_id=trace, device_id=full_name)
-    return _ok({"filename": filename, "content": cred_data}, trace_id=trace)
+    return _ok({"filename": filename,
+                "content": credentials_svc.inline_tls_material(cred_data)}, trace_id=trace)
 
 
 async def device_revoke(request: web.Request) -> web.Response:
@@ -712,9 +715,14 @@ async def device_revoke(request: web.Request) -> web.Response:
 
     _audit(request, "revoke", trace_id=trace, device_id=full_name)
     result = {"device_id": full_name, "revoked": True}
-    warning = backend_error or reload_warning
-    if warning:
-        result["backend_warning"] = warning
+    warnings = [w for w in (backend_error, reload_warning) if w]
+    # Backends with soft per-device revocation (Zenoh per-tenant-CN) tell the
+    # caller the certificate is not actually denied at the broker.
+    note = getattr(backend, "per_device_revocation_note", None)
+    if callable(note):
+        warnings.append(note())
+    if warnings:
+        result["backend_warning"] = " ".join(warnings)
     return _ok(result, trace_id=trace)
 
 

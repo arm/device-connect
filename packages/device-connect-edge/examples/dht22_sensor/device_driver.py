@@ -18,7 +18,7 @@ Wiring:
     DHT22 GND  → Pi GND
 
 Usage:
-    NATS_CREDENTIALS_FILE=~/.device-connect/credentials/sensor-001.creds.json python device_driver.py
+    MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/sensor-001.creds.json python device_driver.py
 """
 
 from __future__ import annotations
@@ -104,10 +104,10 @@ class DHT22Driver(DeviceDriver):
 
 async def run(device_id: str, interval: float):
     nats_url = os.getenv("NATS_URL", "nats://localhost:4222")
-    credentials_file = os.getenv("NATS_CREDENTIALS_FILE")
+    credentials_file = os.getenv("MESSAGING_CREDENTIALS_FILE")
 
     if not credentials_file:
-        log.error("NATS_CREDENTIALS_FILE is required for real hardware devices")
+        log.error("MESSAGING_CREDENTIALS_FILE is required for real hardware devices")
         return
 
     driver = DHT22Driver(interval=interval)

@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import config
 from . import zenoh_acl, zenoh_admin, zenoh_pki, zenoh_rpc
-from .backend import MessagingBackendService
+from .backend import MessagingBackendService, _read_backend_choice
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,21 @@ class ZenohBackend(MessagingBackendService):
         pki_dir.mkdir(parents=True, exist_ok=True)
         config.CREDS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # 1. Generate CA
-        ca_cert, ca_key = await zenoh_pki.generate_ca()
+        # 1. Generate CA -- but ONLY if one does not already exist. Re-running
+        #    setup must never rotate the CA: every issued device credential is
+        #    signed by it, so a new CA would silently invalidate the whole
+        #    fleet. Keeping it makes bootstrap idempotent, which is what lets an
+        #    operator safely re-run setup to refresh the server cert (step 2).
+        if zenoh_pki.ca_exists():
+            ca_cert = pki_dir / "ca.pem"
+            ca_key = pki_dir / "ca-key.pem"
+            logger.info("CA already present; keeping it (refreshing server cert only)")
+        else:
+            ca_cert, ca_key = await zenoh_pki.generate_ca()
 
-        # 2. Generate router server cert
+        # 2. (Re)generate the router server cert. Always refreshed so cert fixes
+        #    -- e.g. emitting an IP SAN for an IP-literal host -- take effect on
+        #    a plain setup re-run, signed by the existing (unchanged) CA.
         await zenoh_pki.generate_server_cert(host)
 
         # 3. Generate privileged client certs
@@ -66,6 +77,10 @@ class ZenohBackend(MessagingBackendService):
 
         # 4. Generate Zenoh router config with ACL
         zenoh_acl.generate_config(host, port)
+        # Record the baseline config hash: the router starts with exactly this
+        # config, so the first device provision (which does not change it)
+        # correctly skips the reload instead of forcing a spurious restart.
+        zenoh_admin.mark_reloaded()
 
         # 5. Persist backend choice
         _write_backend_choice("zenoh", host, port)
@@ -85,11 +100,12 @@ class ZenohBackend(MessagingBackendService):
     ) -> list[str]:
         ca_cert = config.SECURITY_INFRA_DIR / "ca.pem"
         device_names = []
-        device_cns = []
 
         for i in range(1, num_devices + 1):
             device_name = f"{tenant}-device-{i:03d}"
-            cert_path, key_path = await zenoh_pki.generate_client_cert(device_name)
+            # CN = tenant (device id goes in the cert OU); see add_tenant_rule.
+            cert_path, key_path = await zenoh_pki.generate_client_cert(
+                device_name, common_name=tenant)
             self._write_credential(
                 name=device_name,
                 tenant=tenant,
@@ -100,10 +116,10 @@ class ZenohBackend(MessagingBackendService):
                 ca_cert=ca_cert,
             )
             device_names.append(device_name)
-            device_cns.append(device_name)
 
-        # Update ACL config
-        zenoh_acl.add_tenant_rule(tenant, device_cns)
+        # One static ACL rule per tenant (CN=tenant). This is the only ACL
+        # write in the device lifecycle and the only step that needs a reload.
+        zenoh_acl.add_tenant_rule(tenant)
 
         return device_names
 
@@ -111,7 +127,9 @@ class ZenohBackend(MessagingBackendService):
         self, tenant: str, device_name: str, host: str, port: str,
     ) -> Path:
         ca_cert = config.SECURITY_INFRA_DIR / "ca.pem"
-        cert_path, key_path = await zenoh_pki.generate_client_cert(device_name)
+        # CN = tenant (shared by all the tenant's devices); device id -> OU.
+        cert_path, key_path = await zenoh_pki.generate_client_cert(
+            device_name, common_name=tenant)
 
         cred_path = self._write_credential(
             name=device_name,
@@ -123,10 +141,43 @@ class ZenohBackend(MessagingBackendService):
             ca_cert=ca_cert,
         )
 
-        # Update ACL config
-        zenoh_acl.add_devices_to_tenant(tenant, [device_name])
+        # Ensure the tenant's static ACL rule exists (a no-op once the tenant
+        # was created). Adding a device does NOT change the ACL, so
+        # reload_broker() below will detect no change and skip the restart.
+        zenoh_acl.add_tenant_rule(tenant)
 
         return cred_path
+
+    async def remove_device(self, tenant: str, device_name: str) -> None:
+        """Soft-revoke a device: delete its credential key material.
+
+        Under the per-tenant-CN model every device shares ``CN=tenant``, so a
+        single device cannot be denied at the ACL level -- the ACL is left
+        untouched (and reload_broker() will skip the restart). This removes
+        the device from the portal/registry and deletes its cert/key so the
+        credential cannot be re-downloaded, but a copy already deployed
+        remains cryptographically valid until the certificate expires.
+
+        For an immediate certificate-level cutoff, hard-revoke the whole
+        tenant (zenoh_acl.remove_tenant_rule) or use short-lived certs.
+        See docs/zenoh-per-tenant-cn.md.
+        """
+        zenoh_pki.delete_client_cert(device_name)
+
+    @staticmethod
+    def per_device_revocation_note() -> str:
+        """Caller-facing caveat: per-device revocation is soft on Zenoh.
+
+        Surfaced by the revoke endpoints so operators are not misled into
+        thinking a revoked device is cryptographically locked out.
+        """
+        return (
+            "Soft revocation: the device's credential was deleted, but under "
+            "the per-tenant-CN model its certificate (shared CN=tenant) is "
+            "NOT denied at the broker and stays valid until it expires. For an "
+            "immediate cutoff, hard-revoke the whole tenant or use short-lived "
+            "certificates."
+        )
 
     async def reload_broker(self) -> dict:
         return await zenoh_admin.reload_zenoh()
@@ -197,8 +248,11 @@ class ZenohBackend(MessagingBackendService):
                 })
 
         # Test 3: Zenoh config with ACL
+        # Zenoh 1.x exposes access control as a top-level config field, not a
+        # loadable plugin (see zenoh_acl.generate_config); reading it under
+        # "plugins" always reported the ACL as disabled.
         cfg = zenoh_acl.load_config()
-        acl = cfg.get("plugins", {}).get("access_control", {})
+        acl = cfg.get("access_control", {})
         if acl.get("enabled"):
             results.append({
                 "name": "Zenoh ACL Plugin",
@@ -257,17 +311,37 @@ class ZenohBackend(MessagingBackendService):
 
         return results
 
+    @staticmethod
+    def _advertised_host() -> str:
+        """The device-facing broker host baked into credentials + cert SAN.
+
+        Distinct from ``ZENOH_HOST`` (the in-network address the portal uses
+        to reach the router): external devices/agents must receive a publicly
+        reachable host, or the URL in their downloaded credential won't
+        resolve. Resolution order:
+
+          1. ``ZENOH_PUBLIC_HOST`` (explicit deployment override)
+          2. the host recorded at bootstrap (what the admin entered at setup)
+          3. ``ZENOH_HOST`` (last-resort fallback)
+        """
+        if config.ZENOH_PUBLIC_HOST:
+            return config.ZENOH_PUBLIC_HOST
+        choice = _read_backend_choice()
+        if choice and choice.get("host"):
+            return choice["host"]
+        return config.ZENOH_HOST
+
     def broker_display_info(self) -> dict:
         return {
             "backend": "Zenoh",
-            "host": config.ZENOH_HOST,
+            "host": self._advertised_host(),
             "port": config.ZENOH_PORT,
             "auth_method": "mTLS + ACL",
             "container": config.ZENOH_CONTAINER,
         }
 
     def default_host(self) -> str:
-        return config.ZENOH_HOST
+        return self._advertised_host()
 
     def default_port(self) -> str:
         return config.ZENOH_PORT

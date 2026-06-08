@@ -173,7 +173,9 @@ async def admin_setup_page(request: web.Request):
         "nav": "admin",
         "bootstrapped": backend.is_bootstrapped(),
         "nats_host": config.NATS_HOST,
-        "zenoh_host": config.ZENOH_HOST,
+        # Pre-fill the device-facing (public) host, not the in-network one, so
+        # the bootstrap cert SAN + device creds advertise a reachable address.
+        "zenoh_host": config.ZENOH_PUBLIC_HOST or config.ZENOH_HOST,
         "mqtt_host": config.MQTT_HOST,
     })
 

@@ -138,7 +138,7 @@ DEVICE_CONNECT_ALLOW_INSECURE=true ZENOH_CONNECT=tcp/localhost:7447 \
 # DEVICE_CONNECT_ALLOW_INSECURE=true python examples/number_generator/device_simulator.py
 
 # Authenticated — NATS (JWT auth)
-# NATS_CREDENTIALS_FILE=~/.device-connect/credentials/rng-001.creds.json \
+# MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/rng-001.creds.json \
 #   NATS_URL=nats://localhost:4222 python examples/number_generator/device_simulator.py
 ```
 
@@ -162,7 +162,7 @@ statectl --raw list /device-connect/default/devices/
 # devctl list
 
 # Authenticated — NATS (JWT auth)
-# NATS_CREDENTIALS_FILE=~/.device-connect/credentials/devctl.creds.json \
+# MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/devctl.creds.json \
 #   NATS_URL=nats://localhost:4222 devctl list
 ```
 
@@ -205,7 +205,7 @@ ZENOH_CONNECT=tcp/localhost:7447 \
 
 # Authenticated — NATS (JWT auth)
 # ANTHROPIC_API_KEY="sk-ant-..." \
-#   NATS_CREDENTIALS_FILE=~/.device-connect/credentials/my-agent.creds.json \
+#   MESSAGING_CREDENTIALS_FILE=~/.device-connect/credentials/my-agent.creds.json \
 #   NATS_URL=nats://localhost:4222 python my_agent.py
 ```
 

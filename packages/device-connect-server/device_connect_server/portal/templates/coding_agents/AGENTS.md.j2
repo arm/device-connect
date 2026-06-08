@@ -2,13 +2,30 @@
 name: device-connect
 description: Playbook for working with the Device Connect fleet on tenant `{{ tenant }}`. Load this when the user asks an agent to provision, launch, discover, invoke, or observe physical or simulated devices on this network.
 ---
+{% set bk = backend | default('nats') %}
+{% set is_zenoh = bk == 'zenoh' %}
+{% set is_mqtt = bk == 'mqtt' %}
+{% set creds_env = creds_env | default('MESSAGING_CREDENTIALS_FILE') %}
+{% set broker_port = broker_port | default('7447' if is_zenoh else ('1883' if is_mqtt else '4222')) %}
+{% set broker_label = 'Zenoh router' if is_zenoh else ('MQTT broker' if is_mqtt else 'NATS server') %}
+{% set ns_sep = '/' if is_zenoh else '.' %}
+{% set ns_wild = '**' if is_zenoh else '>' %}
 
 # Device Connect — agent playbook
 
 You're working with a [Device Connect](https://github.com/arm/device-connect) fleet
 on tenant **`{{ tenant }}`**, served by the portal at **{{ portal_url }}**.
-Devices speak NATS and live under the namespace `device-connect.{{ tenant }}.>`,
+{% if is_zenoh -%}
+Devices speak **Zenoh** (mTLS) and live under the key-expression namespace
+`device-connect/{{ tenant }}/**`, isolated from other tenants by the Zenoh
+router's ACL (enforced on each device's TLS client-certificate CN).
+{%- elif is_mqtt -%}
+Devices speak **MQTT** and live under the topic namespace
+`device-connect/{{ tenant }}/#`, isolated from other tenants by broker ACLs.
+{%- else -%}
+Devices speak **NATS** and live under the subject namespace `device-connect.{{ tenant }}.>`,
 isolated from other tenants by JWT.
+{%- endif %}
 
 This document is your playbook. Read top-to-bottom once, then jump to the
 section that matches what the user is asking for.
@@ -17,8 +34,9 @@ section that matches what the user is asking for.
 
 - **Tenant:** `{{ tenant }}`
 - **Portal:** `{{ portal_url }}`
-- **NATS host:** `{{ public_host }}` (port `4222` unless overridden)
-- **Namespace:** `device-connect.{{ tenant }}.>`
+- **Backend:** `{{ bk }}`
+- **{{ broker_label }}:** `{{ public_host }}` (port `{{ broker_port }}` unless overridden)
+- **Namespace:** `device-connect{{ ns_sep }}{{ tenant }}{{ ns_sep }}{{ ns_wild }}`
 - **Example device id:** `{{ example_device_id }}` (tenant-prefixed; see "Provision")
 
 ### Two kinds of credentials
@@ -27,12 +45,23 @@ Device Connect uses two credential types — don't conflate them:
 
 | Credential | Identifies | Lives at | Used by |
 |---|---|---|---|
-| `*.creds.json` (NATS JWT) | **One device** | `./{{ tenant }}-<device>.creds.json` (wherever you saved it) | The device process, via `NATS_CREDENTIALS_FILE` |
+{% if is_zenoh -%}
+| `*.creds.json` (Zenoh mTLS) | **One device** | `./{{ tenant }}-<device>.creds.json` (wherever you saved it) | The device process, via `{{ creds_env }}` |
+{%- else -%}
+| `*.creds.json` ({{ 'MQTT' if is_mqtt else 'NATS JWT' }}) | **One device** | `./{{ tenant }}-<device>.creds.json` (wherever you saved it) | The device process, via `{{ creds_env }}` |
+{%- endif %}
 | Portal token (`dcp_...`) | **You** (operator / agent) | `~/.config/dc-portalctl/token` or `DEVICE_CONNECT_PORTAL_TOKEN` | The CLI, agent-tools, HTTP API |
 
 The portal token authenticates you to mint device credentials and invoke RPCs.
-The device credentials authenticate the device's NATS connection. End-to-end
-bring-up needs both.
+{% if is_zenoh -%}
+The device credentials are an **mTLS client cert/key** (plus the CA) that
+authenticate the device's Zenoh connection — the downloaded `*.creds.json` is
+self-contained (the cert material is inlined), so it works on any host without
+shipping extra `.pem` files. End-to-end bring-up needs both.
+{%- else -%}
+The device credentials authenticate the device's {{ broker_label }} connection.
+End-to-end bring-up needs both.
+{%- endif %}
 
 ---
 
@@ -133,18 +162,39 @@ against `${DEVICE_CONNECT_PORTAL_URL}/api/agent/v1/*` (see Appendix A).
 
 ## 2. Discover
 
-Use the four hierarchical meta-tools from `device-connect-agent-tools`. Always
-**start with `describe_fleet()`** to keep your context small — it's a summary,
-not a dump. Drill down only when the task needs it.
+Discovery is **selector-driven**, via `discover()` / `discover_labels()` from
+`device-connect-agent-tools`. Start broad, then narrow — the selector filters
+server-side so your context stays small.
 
-| Tool | When |
+| Call | When |
 |---|---|
-| `describe_fleet()` | First call. Returns device-type counts and locations. |
-| `list_devices(device_type=…, location=…)` | Narrow down by a filter once you know the shape of the fleet. |
-| `get_device_functions(device_id)` | Read the schema of a device's RPCs before invoking. |
-| `invoke_device(device_id, function, params, llm_reasoning)` | Call a function. The reasoning string is mandatory and goes into the audit log. |
+| `discover_labels()` | First call. Returns the label vocabulary (device types, locations, categories) across the fleet — a summary, not a dump. |
+| `discover("device(*)")` | List devices. Replace `*` with filters, e.g. `discover("device(type:camera,location:warehouse1)")`. |
+| `discover("device(<id>).function(*)")` | Read a device's RPC schemas before invoking. |
+| `invoke("device(<id>).function(<name>)", params={…}, llm_reasoning="…")` | Call one function. `llm_reasoning` is mandatory and goes into the audit log. |
 
-Equivalent CLI:
+Selector DSL inside `(...)`: `key:value`, `key:[v1,v2]` (OR within a key),
+`key:pattern*` (glob), `k1:v1,k2:v2` (AND across keys), a bare string to match
+id/name, or `*` for all. Matching is **case-sensitive** — lowercase by
+convention.
+
+> **Which keys can you filter on?** Label keys come from each driver's declared
+> `DeviceCapabilities.labels`, plus two auto-mirrored keys: `location` (from
+> device status) and `type` (from the device's `device_type`). So
+> `device(type:camera)` and `device(location:warehouse1)` work for every device,
+> and a driver that declares its own `type`/`location` label overrides the
+> mirror. Any other key must be declared by the driver — **call
+> `discover_labels()` first** to see the real vocabulary for this fleet instead
+> of guessing keys. (`discover()` returns matches under `results` / `matched`;
+> the deprecated `list_devices()` uses `devices` / `total` — don't mix the two
+> envelopes.)
+
+> The older `describe_fleet()` / `list_devices()` / `get_device_functions()` /
+> `invoke_device()` meta-tools still work but are **deprecated** (they emit
+> `DeprecationWarning`) — prefer the selector calls above.
+
+Equivalent CLI (the portal HTTP roster is always authoritative for "what
+devices exist"):
 
 ```bash
 dc-portalctl fleet describe
@@ -160,7 +210,7 @@ HTTP equivalents live in [Appendix A](#appendix-a-http-api-reference).
 
 ## 3. Provision a device
 
-Provisioning creates a NATS credential bound to this tenant and registers the
+Provisioning creates a {{ 'Zenoh mTLS' if is_zenoh else ('MQTT' if is_mqtt else 'NATS') }} credential bound to this tenant and registers the
 device id with the portal. By default, `dc-portalctl devices provision cam-001`
 mints credentials for `{{ tenant }}-cam-001` and adds that id to the registry.
 
@@ -184,7 +234,7 @@ dc-portalctl devices provision cam-001 \
     --creds-output-file ./{{ tenant }}-cam-001.creds.json
 ```
 
-The `.creds.json` is the device's NATS JWT — see ["Two kinds of
+The `.creds.json` is the device's {{ 'mTLS cert/key bundle' if is_zenoh else ('MQTT credential' if is_mqtt else 'NATS JWT') }} — see ["Two kinds of
 credentials"](#two-kinds-of-credentials) above for how it differs from your
 portal token. Keep it secret; anyone with the file can connect as the device.
 To re-download:
@@ -193,6 +243,15 @@ To re-download:
 dc-portalctl devices credentials {{ tenant }}-cam-001 \
     --output-file ./{{ tenant }}-cam-001.creds.json
 ```
+{% if is_zenoh %}
+> ℹ️ **Re-download returns the *stored* credential — including the broker URL it
+> was issued with.** The advertised host is baked in at provision time
+> (`ZENOH_PUBLIC_HOST` → bootstrap host → `ZENOH_HOST`). If the deployment's
+> public host changed after a device was provisioned, `devices credentials`
+> still hands back the old URL, so the device may connect to an unreachable
+> host. **Re-provision** the device to bake in the current host (or override at
+> launch with `ZENOH_CONNECT=tls/<host>:{{ broker_port }}`, see §5).
+{% endif %}
 
 > ⚠️ **Lifecycle limitations (as of 0.2.3).** Two of the three lifecycle
 > verbs are not implemented in any bundled backend yet — `revoke` is the
@@ -257,8 +316,18 @@ curl -X POST -H "Authorization: Bearer $DEVICE_CONNECT_PORTAL_TOKEN" \
 in place) when the backend supports `remove_device` but the broker rejected
 the call — retry once the backend is healthy. On a soft-success backend
 (no `remove_device`) it returns 200 with a `backend_warning` field.
+{% if is_zenoh %}
+> ⚠️ **On Zenoh, per-device revocation is _soft_.** Every device of a tenant
+> shares one certificate CN (the tenant), so the broker cannot deny a single
+> device. `revoke` deletes the credential and its cert — it can't be
+> re-downloaded and drops off the portal/registry — but a copy **already
+> deployed stays cryptographically valid until the certificate expires** (the
+> response says so in `backend_warning`). For an immediate cutoff, hard-revoke
+> the whole tenant or use short-lived certificates. See the model doc shipped
+> with the server (`docs/zenoh-per-tenant-cn.md`).
+{% endif %}
 
-Either decommission flow disconnects the device on its next NATS reconnect.
+Either decommission flow disconnects the device on its next {{ broker_label }} reconnect.
 
 ---
 
@@ -332,7 +401,7 @@ if __name__ == "__main__":
     asyncio.run(run())
 ```
 
-`device_id` and `tenant` are auto-detected from `NATS_CREDENTIALS_FILE`;
+`device_id` and `tenant` are auto-detected from `{{ creds_env }}`;
 don't hard-code them.
 
 > ⚠️ **Always call `super().__init__()` if you override `__init__`.** The base
@@ -347,7 +416,7 @@ don't hard-code them.
 
 Use `self.invoke_remote(...)` inside any driver method to RPC another device
 in the same tenant. Don't reach for `device-connect-agent-tools` — that's the
-external-agent path. The edge SDK speaks D2D over NATS directly.
+external-agent path. The edge SDK speaks D2D over the `{{ bk }}` backend directly.
 
 ```python
 @rpc()
@@ -399,7 +468,34 @@ tick rate.
 
 ## 5. Launch a device locally
 
-The edge runtime authenticates to NATS with the JWT in `NATS_CREDENTIALS_FILE`,
+The device process just needs its `.creds.json` and network reach to the
+{{ broker_label }}. Point `{{ creds_env }}` at the file — the runtime reads the
+{{ 'inlined mTLS cert/key/CA' if is_zenoh else ('credential' if is_mqtt else 'JWT') }}
+from it and selects the `{{ bk }}` backend automatically.
+
+{% if is_zenoh -%}
+```bash
+export {{ creds_env }}=./{{ tenant }}-cam-001.creds.json
+python my_device.py
+```
+
+> The downloaded `*.creds.json` is **self-contained**: it carries the broker
+> URL **and** the TLS cert/key/CA inline, and the backend is auto-detected — so
+> nothing else is needed. (Overrides: `ZENOH_CONNECT=tls/<host>:{{ broker_port }}`
+> to reach the broker at a different address than the one in the credential, or
+> `MESSAGING_TLS_CA_FILE` / `MESSAGING_TLS_CERT_FILE` / `MESSAGING_TLS_KEY_FILE`
+> to use `.pem` files on disk instead of the inlined material.)
+>
+> ⚠️ **The advertised broker URL is baked in at provision time.** A device
+> provisioned before the deployment's public broker host was configured carries
+> the **old** URL, and `dc-portalctl devices credentials <id>` re-downloads that
+> **stored** URL — it does not refresh it. If a device connects fine on-box but
+> not from outside (or vice versa), **re-provision** it to bake in the current
+> host (or pass the `ZENOH_CONNECT` override above). Freshly provisioned devices
+> always get the current host.
+{%- else -%}
+{% if not is_mqtt -%}
+The edge runtime authenticates to NATS with the JWT in `{{ creds_env }}`,
 which requires `nkeys` (and its `pynacl` transitive). On older Linux distros
 (Debian 11, Ubuntu 20.04, anything with glibc < 2.34) the prebuilt `pynacl`
 wheel won't load — rebuild from source the first time:
@@ -412,12 +508,18 @@ python3 -m pip install --no-binary :all: --force-reinstall pynacl
 Otherwise the device boots, connects to NATS, then loops forever logging
 `nkeys library required for JWT auth` — easy to miss.
 
+{% endif -%}
 ```bash
-export NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json
-export NATS_URL=nats://{{ public_host }}:4222
+export {{ creds_env }}=./{{ tenant }}-cam-001.creds.json
+{% if is_mqtt -%}
+export MQTT_URL=mqtt://{{ public_host }}:{{ broker_port }}
+{%- else -%}
+export NATS_URL=nats://{{ public_host }}:{{ broker_port }}
+{%- endif %}
 export DEVICE_CONNECT_ALLOW_INSECURE=true   # only for dev; drop in prod
 python my_device.py
 ```
+{%- endif %}
 
 Verify it came online:
 
@@ -428,18 +530,26 @@ dc-portalctl devices list | grep {{ tenant }}-cam-001
 
 If it doesn't appear within ~5 seconds, the most common causes are:
 
-1. **`nkeys` / `pynacl` missing or broken** — see the rebuild snippet above. The error string in the device log is the giveaway.
-2. **NATS host unreachable** — confirm `nats://{{ public_host }}:4222` resolves and is open from the device's network.
-3. **Wrong creds file** — `NATS_CREDENTIALS_FILE` must point at this device's own `.creds.json`, not another tenant's or another device's.
+{% if is_zenoh -%}
+1. **{{ broker_label }} unreachable** — confirm `tls/{{ public_host }}:{{ broker_port }}` is open from the device's network.
+2. **mTLS rejected** — the device's client cert must be signed by the deployment CA and its CN allowed by the tenant ACL. A fresh credential from this portal already satisfies both; a hand-edited or cross-tenant cert won't.
+3. **Wrong creds file** — `{{ creds_env }}` must point at this device's own `.creds.json`, not another tenant's or another device's.
 4. **Driver process crashed at startup** — check stderr.
 5. **Custom `__init__` skipped `super().__init__()`** — device crashes at startup with `AttributeError` on `_routines_collected` or `_internal_handlers_collected`. See Section 4.
+{%- else -%}
+1. **`nkeys` / `pynacl` missing or broken** — see the rebuild snippet above. The error string in the device log is the giveaway.
+2. **{{ broker_label }} unreachable** — confirm the broker URL resolves and is open from the device's network.
+3. **Wrong creds file** — `{{ creds_env }}` must point at this device's own `.creds.json`, not another tenant's or another device's.
+4. **Driver process crashed at startup** — check stderr.
+5. **Custom `__init__` skipped `super().__init__()`** — device crashes at startup with `AttributeError` on `_routines_collected` or `_internal_handlers_collected`. See Section 4.
+{%- endif %}
 
 ---
 
 ## 6. Launch a device on a remote host (SSH)
 
 The device process is just a Python script that needs the creds file plus
-network access to NATS. Quick start with tmux (survives the SSH disconnect):
+network access to the {{ broker_label }}. Quick start with tmux (survives the SSH disconnect):
 
 ```bash
 # 1. Provision (locally) and copy the creds file + script to the edge host.
@@ -459,8 +569,12 @@ ssh user@edge-host "python3 -m venv ~/.dc-edge && \
 # 3. Run it in a detached tmux session, using the venv's interpreter.
 ssh user@edge-host "tmux new -d -s dc-cam-001 \
     'cd ~/dc && \
-     NATS_CREDENTIALS_FILE=./{{ tenant }}-cam-001.creds.json \
-     NATS_URL=nats://{{ public_host }}:4222 \
+     {{ creds_env }}=./{{ tenant }}-cam-001.creds.json \
+{% if is_mqtt -%}
+     MQTT_URL=mqtt://{{ public_host }}:{{ broker_port }} \
+{%- elif not is_zenoh -%}
+     NATS_URL=nats://{{ public_host }}:{{ broker_port }} \
+{%- endif %}
      ~/.dc-edge/bin/python my_device.py 2>&1 | tee dc-cam-001.log'"
 
 # 4. Verify from the portal side.
@@ -504,7 +618,8 @@ Two failure classes — they surface differently:
 **Device-level failures (target offline, unresponsive, or returns its own
 error)** → HTTP **200** with a success envelope; the embedded `response`
 field carries a JSON-RPC error dict
-`{"error": {"code": int, "message": str}}`. Codes from the NATS backend:
+`{"error": {"code": int, "message": str}}`. Codes (the {{ broker_label }} backend
+surfaces the same `-1` / `-2` / `-3` shapes):
 
 - `-1` "Device {id} is not responding" — no responders on the published
   subject. The invoke path resolves the id against the registry before
@@ -645,7 +760,10 @@ Exit codes: `0` ok, `2` no events / arg error, `4` 401, `5` 403, `6` 404,
 | Connect attempts hang / time out | URL scheme or port doesn't match the deployment (portals can be HTTP:8080 or HTTPS:443) | Start from `{{ portal_url }}` in "Tenant facts", but match the scheme the portal actually terminates TLS on — if it is fronted by a proxy that redirects `http`→`https`, use the `https://` URL (see the 405-on-login row above) |
 | `HTTP 401 invalid_token` on a previously-working setup | Cached token expired or was revoked | Re-run `dc-portalctl auth login` |
 | `HTTP 403` on a previously-working call | Token lacks the required scope | Mint a new token at `/coding-agents` with the right scopes |
-| Device retries `nkeys library required for JWT auth` forever | `nkeys` import is failing — almost always because its `pynacl` transitive can't load (prebuilt wheel incompatible with the host libc) | Reinstall `device-connect-edge` (`nkeys` is already a required dep — `pip install --upgrade --force-reinstall device-connect-edge`); on glibc < 2.34 rebuild `pynacl` from source per Section 5. `pip install nkeys` only helps if deps were originally installed with `--no-deps` |
+{% if not is_zenoh %}| Device retries `nkeys library required for JWT auth` forever | `nkeys` import is failing — almost always because its `pynacl` transitive can't load (prebuilt wheel incompatible with the host libc) | Reinstall `device-connect-edge` (`nkeys` is already a required dep — `pip install --upgrade --force-reinstall device-connect-edge`); on glibc < 2.34 rebuild `pynacl` from source per Section 5. `pip install nkeys` only helps if deps were originally installed with `--no-deps` |
+{% endif -%}
+{% if is_zenoh %}| Device fails to connect with a TLS / certificate error | Client cert not signed by the deployment CA, CN not allowed by the tenant ACL, or a stale/cross-tenant creds file | Re-download the device's `.creds.json` from this portal (it bundles a valid cert + CA inline); confirm `{{ creds_env }}` points at it |
+{% endif -%}
 | Device process crashes at startup with `AttributeError: '...' object has no attribute '_routines_collected'` (or `_internal_handlers_collected`) | Custom `__init__` skipped `super().__init__()` | Call `super().__init__()` first (Section 4) |
 | `invoke_remote` raises `PublishError` / `RequestTimeoutError` | Target offline, wrong tenant-prefixed id, or unresponsive. Backend-dependent: NATS → `PublishError` for "no responders", `RequestTimeoutError` for actual timeouts; Zenoh → typically `RequestTimeoutError` after retries | `dc-portalctl devices list` to confirm id; check target's logs |
 | `dc-portalctl devices invoke` succeeds (HTTP 200) but `response.error.code = -1` with `elapsed_ms ≈ 0`, and `devices list` shows the target online with a fresh `Last Seen` | Registered device but its RPC handler isn't subscribed — driver process is up enough to register / heartbeat but not servicing functions. (The portal now routes by the registry-canonical id, so this is no longer the ID-rewrite case.) | Read the driver process logs; restart the driver |
@@ -718,8 +836,12 @@ No module named 'device_connect_edge'`. Pinning to the venv avoids that.
 # ~/.config/systemd/user/dc-cam-001.service
 [Service]
 WorkingDirectory=%h/dc
-Environment=NATS_CREDENTIALS_FILE=%h/dc/{{ tenant }}-cam-001.creds.json
-Environment=NATS_URL=nats://{{ public_host }}:4222
+Environment={{ creds_env }}=%h/dc/{{ tenant }}-cam-001.creds.json
+{% if is_mqtt -%}
+Environment=MQTT_URL=mqtt://{{ public_host }}:{{ broker_port }}
+{%- elif not is_zenoh -%}
+Environment=NATS_URL=nats://{{ public_host }}:{{ broker_port }}
+{%- endif %}
 ExecStart=%h/.dc-edge/bin/python %h/dc/my_device.py
 Restart=on-failure
 RestartSec=5

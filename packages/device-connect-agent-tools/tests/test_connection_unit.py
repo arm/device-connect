@@ -227,6 +227,21 @@ class TestFlattenDevice:
         assert result["functions"] == []
         assert result["events"] == []
 
+    def test_device_type_mirrored_into_labels_as_type(self):
+        # device_type must be selectable via discover("device(type:...)")
+        # even when the driver declared no labels.
+        raw = {"device_id": "c1", "identity": {"device_type": "controller"},
+               "status": {"location": "lab/rack-1"}, "capabilities": {}}
+        result = conn_mod.flatten_device(raw)
+        assert result["labels"]["type"] == "controller"
+        assert result["labels"]["location"] == "lab/rack-1"
+
+    def test_driver_declared_type_label_wins(self):
+        raw = {"device_id": "c1", "identity": {"device_type": "controller"},
+               "capabilities": {"labels": {"type": "custom"}}}
+        result = conn_mod.flatten_device(raw)
+        assert result["labels"]["type"] == "custom"
+
 
 # ── parse_event_payload: non-dict params (regression for fuzz finding) ─
 
@@ -266,3 +281,117 @@ class TestParseEventPayloadNonDictParams:
         result = conn_mod.parse_event_payload(data)
         assert result["device_id"] == "cam-001"
         assert result["params"] == {"device_id": "cam-001", "x": 1}
+
+
+# ── Credential-file-driven config (MESSAGING_CREDENTIALS_FILE) ─────
+
+
+class TestCredentialsFileConfig:
+    """Agent configures creds + per-backend TLS from a single creds file,
+    the same way a device does -- so Zenoh mTLS needs no explicit tls_config."""
+
+    def test_tls_from_creds_inline_pem(self):
+        creds = {"zenoh": {"tls": {"ca_pem": "CA", "cert_pem": "C", "key_pem": "K"}}}
+        assert conn_mod._tls_config_from_creds(creds, "zenoh") == {
+            "ca_pem": "CA", "cert_pem": "C", "key_pem": "K"}
+
+    def test_tls_from_creds_file_paths(self):
+        creds = {"zenoh": {"tls": {"ca_file": "/a", "cert_file": "/c", "key_file": "/k"}}}
+        assert conn_mod._tls_config_from_creds(creds, "zenoh") == {
+            "ca_file": "/a", "cert_file": "/c", "key_file": "/k"}
+
+    def test_tls_from_creds_none_for_nats_jwt(self):
+        assert conn_mod._tls_config_from_creds({"nats": {"jwt": "j"}}, "nats") is None
+
+    def test_resolve_creds_env_prefers_messaging(self, monkeypatch):
+        monkeypatch.setenv("MESSAGING_CREDENTIALS_FILE", "/new")
+        monkeypatch.setenv("NATS_CREDENTIALS_FILE", "/old")
+        assert conn_mod._resolve_credentials_file_env() == "/new"
+
+    def test_resolve_creds_env_falls_back_to_nats(self, monkeypatch):
+        monkeypatch.delenv("MESSAGING_CREDENTIALS_FILE", raising=False)
+        monkeypatch.setenv("NATS_CREDENTIALS_FILE", "/old")
+        assert conn_mod._resolve_credentials_file_env() == "/old"
+
+    @staticmethod
+    def _clear_env(monkeypatch):
+        for v in ("ZENOH_CONNECT", "MESSAGING_URLS", "NATS_URL", "NATS_URLS",
+                  "MESSAGING_TLS_CA_FILE", "MESSAGING_TLS_CERT_FILE",
+                  "MESSAGING_TLS_KEY_FILE", "NATS_CREDENTIALS_FILE"):
+            monkeypatch.delenv(v, raising=False)
+
+    def test_connection_loads_zenoh_mtls_and_url_from_creds_file(self, tmp_path, monkeypatch):
+        creds = tmp_path / "dev.creds.json"
+        creds.write_text(json.dumps({
+            "device_id": "d1", "tenant": "acme",
+            "zenoh": {"urls": ["zenoh+tls://broker:7447"],
+                      "tls": {"ca_pem": "CA", "cert_pem": "C", "key_pem": "K"}},
+        }))
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("MESSAGING_CREDENTIALS_FILE", str(creds))
+        monkeypatch.setenv("MESSAGING_BACKEND", "zenoh")
+
+        c = conn_mod.DeviceConnection()  # no explicit tls_config
+        try:
+            assert c._backend == "zenoh"
+            assert c._tls_config == {"ca_pem": "CA", "cert_pem": "C", "key_pem": "K"}
+            assert c._servers == ["zenoh+tls://broker:7447"]   # broker URL from creds
+            assert c._d2d_mode is False                        # router URL -> not D2D
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def test_explicit_tls_config_still_wins_over_creds_file(self, tmp_path, monkeypatch):
+        creds = tmp_path / "dev.creds.json"
+        creds.write_text(json.dumps({"zenoh": {"tls": {"ca_pem": "FROMFILE"}}}))
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("MESSAGING_CREDENTIALS_FILE", str(creds))
+        monkeypatch.setenv("MESSAGING_BACKEND", "zenoh")
+
+        c = conn_mod.DeviceConnection(tls_config={"ca_pem": "EXPLICIT"})
+        try:
+            assert c._tls_config == {"ca_pem": "EXPLICIT"}
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def _mk(self, monkeypatch, tmp_path, tenant=None, zone=None):
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("MESSAGING_BACKEND", "zenoh")
+        if tenant is not None:
+            creds = tmp_path / "dev.creds.json"
+            body = {"zenoh": {"tls": {"ca_pem": "CA"}}}
+            if tenant:
+                body["tenant"] = tenant
+            creds.write_text(json.dumps(body))
+            monkeypatch.setenv("MESSAGING_CREDENTIALS_FILE", str(creds))
+        return conn_mod.DeviceConnection(zone=zone)
+
+    def test_zone_resolves_from_credential_tenant(self, tmp_path, monkeypatch):
+        c = self._mk(monkeypatch, tmp_path, tenant="acme")
+        try:
+            assert c.zone == "acme"   # not the old hard "default"
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def test_explicit_zone_wins_over_credential_tenant(self, tmp_path, monkeypatch):
+        c = self._mk(monkeypatch, tmp_path, tenant="acme", zone="beta")
+        try:
+            assert c.zone == "beta"
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+
+    def test_zone_falls_back_to_tenant_env_then_default(self, tmp_path, monkeypatch):
+        # creds file present but no tenant field -> TENANT env
+        self._clear_env(monkeypatch)
+        monkeypatch.setenv("MESSAGING_BACKEND", "zenoh")
+        monkeypatch.setenv("TENANT", "from-env")
+        c = conn_mod.DeviceConnection()
+        try:
+            assert c.zone == "from-env"
+        finally:
+            c._loop.call_soon_threadsafe(c._loop.stop)
+        monkeypatch.delenv("TENANT", raising=False)
+        c2 = conn_mod.DeviceConnection()
+        try:
+            assert c2.zone == "default"   # nothing anywhere
+        finally:
+            c2._loop.call_soon_threadsafe(c2._loop.stop)
