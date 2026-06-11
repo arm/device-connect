@@ -20,3 +20,8 @@ htmlcov/
 atheris-report.md
 fuzz-hypothesis-results.xml
 **/fuzz/findings/
+
+# Coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
