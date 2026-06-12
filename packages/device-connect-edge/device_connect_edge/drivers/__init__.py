@@ -39,6 +39,7 @@ from device_connect_edge.drivers.decorators import (
     periodic,
     build_function_schema,
     build_event_schema,
+    get_rpc_source_device,
 )
 from device_connect_edge.drivers.transport import DriverTransport
 from device_connect_edge.drivers.capability_loader import (
@@ -56,6 +57,7 @@ __all__ = [
     "before_emit",
     "periodic",
     "on",
+    "get_rpc_source_device",
     "build_function_schema",
     "build_event_schema",
     # Capability loading

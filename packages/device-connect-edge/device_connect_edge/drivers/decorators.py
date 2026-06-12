@@ -72,6 +72,24 @@ logger = logging.getLogger("device_connect.drivers")
 # - "internal": Called from another method on the same device
 _call_origin: contextvars.ContextVar[str] = contextvars.ContextVar('call_origin', default='external')
 
+# Authenticated source device of the in-flight RPC, exposed so driver
+# handlers can perform per-call authorization without changing their
+# signatures. Set by the @rpc wrapper for the duration of the handler
+# call; None when the call did not carry a source identity (e.g. local
+# routine calls).
+_rpc_source_device: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    'rpc_source_device', default=None
+)
+
+
+def get_rpc_source_device() -> Optional[str]:
+    """Return the authenticated source device id of the current RPC, if any.
+
+    Returns None when invoked outside an external RPC (e.g. local routine or
+    internal call) or when the transport did not supply a source identity.
+    """
+    return _rpc_source_device.get()
+
 
 class routine_context:
     """Context manager to mark calls as coming from a routine.
@@ -402,6 +420,10 @@ def rpc(
             # Extract source_device from kwargs (injected by DeviceRuntime)
             source_device = kwargs.pop("source_device", None)
 
+            # Expose the authenticated caller to the handler via a contextvar so
+            # drivers can perform per-call authorization checks.
+            _src_token = _rpc_source_device.set(source_device)
+
             # Build args summary (source_device already removed)
             args_summary = _summarize_args(args, kwargs)
 
@@ -499,6 +521,7 @@ def rpc(
                     span.set_status(StatusCode.ERROR, str(e))
                     raise
                 finally:
+                    _rpc_source_device.reset(_src_token)
                     duration_ms = (time.monotonic() - t0) * 1000
                     metric_attrs = {"rpc.method": func_name, "device_connect.device.id": device_id, "status": status}
                     metrics.rpc_duration.record(duration_ms, metric_attrs)
