@@ -117,6 +117,11 @@ pip install -e "packages/device-connect-agent-tools[strands]"
 ### Running tests
 
 ```bash
+# Run all tests
+pytest -v
+```
+
+```bash
 # SDK unit tests (no Docker)
 pytest packages/device-connect-edge/tests -v
 
