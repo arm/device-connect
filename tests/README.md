@@ -68,6 +68,7 @@ For a pip-only environment:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
+# Install all packages in editable mode
 pip install -e packages/device-connect-edge
 pip install -e "packages/device-connect-server[all]"
 pip install -e "packages/device-connect-agent-tools[strands]"
