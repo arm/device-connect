@@ -32,7 +32,7 @@ tests/
 │   └── orchestrator.py     # Orchestrator fixtures (mock + real LLM)
 ├── conftest.py             # Root conftest with session-scoped fixtures
 ├── docker-compose-itest.yml # NATS + etcd + registry services
-├── requirements.txt        # Test dependencies
+├── pyproject.toml          # Test dependencies
 └── pytest.ini              # Pytest configuration
 ```
 
@@ -58,29 +58,37 @@ cd device-connect
 
 ## Setup
 
-```bash
-cd tests
-python -m venv .venv && source .venv/bin/activate
+Install all packages and test dependencies from the repo root:
 
-# Install all packages in editable mode
-pip install -e ../packages/device-connect-edge
-pip install -e "../packages/device-connect-server[all]"
-pip install -e "../packages/device-connect-agent-tools[strands]"
-pip install -r requirements.txt
+```bash
+uv sync && source .venv/bin/activate
 ```
+
+For a pip-only environment:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e packages/device-connect-edge
+pip install -e "packages/device-connect-server[all]"
+pip install -e "packages/device-connect-agent-tools[strands]"
+pip install -e tests
+```
+
+The commands below assume the virtual environment is active. From an
+unactivated shell, prefix the `pytest ...` command with `uv run`.
 
 ## Running Tests
 
 ### Start infrastructure
 
 ```bash
-docker compose -f docker-compose-itest.yml up -d
+docker compose -f tests/docker-compose-itest.yml up -d
 ```
 
 ### Tier 1: Core integration tests (no LLM)
 
 ```bash
-pytest tests/ -v -m "not llm" --timeout=120
+pytest tests/tests -v -m "not llm" --timeout=120
 ```
 
 ### Tier 2: LLM tests (requires API key)
@@ -90,25 +98,25 @@ export OPENAI_API_KEY="sk-..."
 # or
 export ANTHROPIC_API_KEY="sk-ant-..."
 
-pytest tests/ -v -m "llm" --timeout=120
+pytest tests/tests -v -m "llm" --timeout=120
 ```
 
 ### Messaging conformance tests
 
 ```bash
-pytest tests/test_messaging_conformance.py -v -m conformance --timeout=60
+pytest tests/tests/test_messaging_conformance.py -v -m conformance --timeout=60
 ```
 
 ### Run everything
 
 ```bash
-pytest tests/ -v --timeout=120
+pytest tests/tests -v --timeout=120
 ```
 
 ### Tear down
 
 ```bash
-docker compose -f docker-compose-itest.yml down -v --remove-orphans
+docker compose -f tests/docker-compose-itest.yml down -v --remove-orphans
 ```
 
 ## Test Markers
