@@ -101,6 +101,14 @@ For quick start with a router, device registry, and distributed state — see [`
 ### Editable install (all packages)
 
 ```bash
+uv sync && source .venv/bin/activate
+```
+
+For a pip-only environment:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+# Install all packages in editable mode
 pip install -e packages/device-connect-edge
 pip install -e "packages/device-connect-server[all]"
 pip install -e "packages/device-connect-agent-tools[strands]"
@@ -109,18 +117,23 @@ pip install -e "packages/device-connect-agent-tools[strands]"
 ### Running tests
 
 ```bash
+# Run all tests
+pytest -v
+```
+
+```bash
 # SDK unit tests (no Docker)
-cd packages/device-connect-edge && python3 -m pytest tests/ -v
+pytest packages/device-connect-edge -v
 
 # Server unit tests (no Docker)
-cd packages/device-connect-server && python3 -m pytest tests/ -v
+pytest packages/device-connect-server -v
 
 # Agent-tools unit tests (no Docker)
-cd packages/device-connect-agent-tools && python3 -m pytest tests/test_connection_unit.py tests/test_tools_unit.py -v
+pytest packages/device-connect-agent-tools/tests/test_connection_unit.py packages/device-connect-agent-tools/tests/test_tools_unit.py -v
 
 # Integration tests (requires Docker)
-cd tests && docker compose -f docker-compose-itest.yml up -d
-DEVICE_CONNECT_ALLOW_INSECURE=true python3 -m pytest tests/ -v -m "not llm"
+docker compose -f tests/docker-compose-itest.yml up -d
+DEVICE_CONNECT_ALLOW_INSECURE=true pytest tests/tests -v -m "not llm"
 ```
 
 See [tests/README.md](tests/README.md) for the full test matrix.
