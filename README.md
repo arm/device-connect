@@ -123,10 +123,10 @@ pytest -v
 
 ```bash
 # SDK unit tests (no Docker)
-pytest packages/device-connect-edge/tests -v
+pytest packages/device-connect-edge -v
 
 # Server unit tests (no Docker)
-pytest packages/device-connect-server/tests -v
+pytest packages/device-connect-server -v
 
 # Agent-tools unit tests (no Docker)
 pytest packages/device-connect-agent-tools/tests/test_connection_unit.py packages/device-connect-agent-tools/tests/test_tools_unit.py -v
