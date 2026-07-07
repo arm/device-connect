@@ -127,7 +127,7 @@ See [tests/README.md](tests/README.md) for the full test matrix.
 
 ## Security
 
-Device Connect supports encryption in transit (TLS/mTLS), JWT/NKey authentication for NATS, device commissioning with PIN validation, and per-device ACLs. This is an area of active development to be further expanded in upcoming releases.
+Device Connect supports encryption in transit (TLS/mTLS), JWT/NKey authentication for NATS, device commissioning with PIN validation, and per-device ACLs. See [SECURITY.md](SECURITY.md) for the threat model, deployment tradeoffs, and vulnerability reporting.
 
 ## License
 
