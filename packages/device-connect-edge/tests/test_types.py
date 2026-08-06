@@ -5,6 +5,7 @@
 """Unit tests for device_connect_edge.types module."""
 
 import pytest
+from pydantic import ValidationError
 
 from device_connect_edge.types import (
     DeviceState,
@@ -57,6 +58,31 @@ class TestDeviceStatus:
         status = DeviceStatus()
         # Should have sensible defaults
         assert status is not None
+
+    def test_extra_fields_allowed(self):
+        # Deployment-specific runtime state survives the typed path, matching
+        # the registry's raw-dict heartbeat merge (and DeviceIdentity policy).
+        status = DeviceStatus(
+            location="aisle-3",
+            halo={"zone": "aisle-3", "count": 3},
+            fleet_group="picking",
+        )
+        assert status.halo == {"zone": "aisle-3", "count": 3}
+        assert status.fleet_group == "picking"
+
+    def test_extra_fields_roundtrip(self):
+        payload = {
+            "location": "aisle-3",
+            "halo": {"zone": "aisle-3", "members": [{"device_id": "fork-3"}]},
+        }
+        dumped = DeviceStatus(**payload).model_dump(mode="json")
+        assert dumped["halo"] == payload["halo"]
+        assert DeviceStatus(**dumped).halo == payload["halo"]
+
+    def test_known_field_validation_still_applies(self):
+        # extra=allow must not weaken validation of declared fields.
+        with pytest.raises(ValidationError):
+            DeviceStatus(busy_score=1.5)
 
 
 class TestFunctionDef:
