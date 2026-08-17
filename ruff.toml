@@ -3,3 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 line-length = 120
+
+[lint]
+# State the rule set explicitly instead of inheriting ruff's built-in default.
+# The default is not a stable contract: ruff 0.16.0 widened it (adding UP, I,
+# BLE, PIE, TRY and more), which turned CI red on an unchanged tree because the
+# lint job installs ruff unpinned. These four are exactly what ruff selected by
+# default through 0.15.x, so this preserves the rule set the tree was written
+# against while making future ruff upgrades a no-op for lint.
+#
+# Adopting the wider set is a reasonable follow-up, but it is a ~700-finding
+# autofix sweep across every package and should land as its own change.
+select = ["E4", "E7", "E9", "F"]

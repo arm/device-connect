@@ -19,6 +19,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.12'
+  RUFF_VERSION: '0.16.1'
 
 jobs:
   # ── Unit tests (parallel, no Docker) ──────────────────────────
@@ -82,7 +83,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Install ruff
-        run: pip install ruff
+        # Pinned: an unpinned linter makes CI a moving target, and a new ruff
+        # release can turn a green tree red without a commit. Bump deliberately.
+        run: pip install ruff==${{ env.RUFF_VERSION }}
       - name: Lint all packages
         run: |
           ruff check packages/device-connect-edge/

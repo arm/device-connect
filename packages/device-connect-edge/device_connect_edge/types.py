@@ -244,6 +244,13 @@ class DeviceStatus(BaseModel):
     Contains information about the device's current operational state,
     which is updated via heartbeats and status changes.
 
+    Arbitrary fields are allowed beyond the standard ones (same policy as
+    DeviceIdentity), enabling deployment-specific runtime state without a
+    core schema change. The registry already merges heartbeat payloads as
+    raw dicts, so extra keys reach ``status`` in the device record either
+    way; allowing them here keeps the typed path (DeviceDriver.status(),
+    registration) from silently dropping what the untyped path carries.
+
     Example:
         DeviceStatus(
             ts=datetime.utcnow(),
@@ -252,9 +259,13 @@ class DeviceStatus(BaseModel):
             busy_score=0.7,
             battery=85,
             online=True,
-            error_state=None
+            error_state=None,
+            # Custom fields allowed:
+            halo={"zone": "aisle-3", "count": 3},
         )
     """
+    model_config = {"extra": "allow"}
+
     ts: datetime = Field(
         default_factory=datetime.utcnow,
         description="Timestamp of last status update"
