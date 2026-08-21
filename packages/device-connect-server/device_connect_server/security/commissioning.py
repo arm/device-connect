@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+# Copyright (c) 2025-2026, Arm Limited and Contributors. All rights reserved.
 #
 # SPDX-License-Identifier: Apache-2.0
 
