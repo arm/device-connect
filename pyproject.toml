@@ -1,0 +1,48 @@
+# Copyright (c) 2024-2026, Arm Limited and Contributors. All rights reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "device-connect-workspace"
+version = "0.0.0"
+description = "Workspace configuration for Device Connect development"
+requires-python = ">=3.11"
+dependencies = [
+    "device-connect-edge[dev,fuzz,predicate,telemetry]",
+    "device-connect-server[all,fuzz]",
+    "device-connect-agent-tools[claude,dev,fuzz,langchain,mcp,predicate,strands]",
+    "device-connect-integration-tests",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+device-connect-edge = { path = "packages/device-connect-edge", editable = true }
+device-connect-server = { path = "packages/device-connect-server", editable = true }
+device-connect-agent-tools = { path = "packages/device-connect-agent-tools", editable = true }
+device-connect-integration-tests = { path = "tests", editable = true }
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = [
+    "packages/device-connect-edge/tests",
+    "packages/device-connect-server/tests",
+    "packages/device-connect-agent-tools/tests",
+    "tests/tests",
+]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+timeout = 120
+log_cli = true
+log_cli_level = "INFO"
+markers = [
+    "conformance: marks messaging backend conformance tests",
+    "d2d: marks device-to-device communication tests",
+    "integration: marks tests requiring Docker infrastructure, brokers, or registry services",
+    "llm: marks tests requiring a real LLM API key such as OPENAI_API_KEY or ANTHROPIC_API_KEY",
+    "slow: marks tests taking more than 30 seconds",
+]
