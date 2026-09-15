@@ -400,6 +400,8 @@ def _make_list_handler(
     ``requester_id`` field in the RPC params.
     """
 
+    from device_connect_edge.predicate import PredicateCompileError
+
     async def rpc_discovery(data: bytes, reply: Optional[str]):
         if not reply:
             logger.debug("[device-registry] discovery request with no reply address; ignoring")
@@ -418,6 +420,8 @@ def _make_list_handler(
             if method == "discovery/listDevices":
                 device_type = params.get("device_type")
                 location = params.get("location")
+                where = params.get("where")
+                predicate_params = {"where": where} if where is not None else {}
                 # Pagination: ``offset`` and ``limit`` are optional.
                 #
                 # If ``limit`` is absent the caller is on the legacy
@@ -533,11 +537,13 @@ def _make_list_handler(
                         location=location,
                         offset=offset_val,
                         limit=effective_limit,
+                        **predicate_params,
                     )
                 else:
                     page = await asyncio.to_thread(
                         registry.list_devices, tenant,
                         device_type=device_type, location=location,
+                        **predicate_params,
                     )
                     # next_offset / total are unused on the legacy reply
                     # path (see the ``if paged`` branch below); the
@@ -570,6 +576,9 @@ def _make_list_handler(
                     # ``next_offset`` so old clients that ignore unknown
                     # keys aren't surprised by new metadata.
                     response_result = {"devices": page}
+                if where is not None:
+                    # Clients must detect older registries that ignore where.
+                    response_result["where_applied"] = True
                 await messaging.publish(
                     reply,
                     build_rpc_response(payload.get("id"), response_result),
@@ -609,6 +618,10 @@ def _make_list_handler(
                 )
             else:
                 return  # Not a discovery method — ignore
+        except PredicateCompileError as e:
+            await messaging.publish(
+                reply, build_rpc_error(payload.get("id"), -32602, str(e)),
+            )
         except Exception as e:
             await messaging.publish(
                 reply,

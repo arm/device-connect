@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Tuple
 import etcd3gw
 from requests.adapters import HTTPAdapter
 
+from device_connect_edge.predicate import PredicateEvalError, compile_where
+
 _logger = logging.getLogger(__name__)
 
 ETCD_HOST = os.getenv("ETCD_HOST", "localhost")
@@ -248,6 +250,8 @@ class DeviceRegistry:
         tenant: str,
         device_type: str | None = None,
         location: str | None = None,
+        *,
+        where: str | None = None,
     ) -> List[dict]:
         """Return registered device payloads for ``tenant``, optionally filtered.
 
@@ -255,7 +259,11 @@ class DeviceRegistry:
             tenant: Tenant namespace.
             device_type: Filter by device type (case-insensitive substring match).
             location: Filter by device location (case-insensitive substring match).
+            where: CEL predicate over stored status, identity and device labels.
         """
+        # Compile once, including for empty fleets, so invalid expressions
+        # always produce an error. Evaluation runs in the handler's worker.
+        predicate = compile_where(where) if where is not None else None
         # Shallow-copy the cached snapshot so the filter rebinds below
         # never mutate the shared cache entry (the dicts are read-only).
         devices: List[dict] = list(self._decoded_fleet(tenant))
@@ -272,6 +280,25 @@ class DeviceRegistry:
                 d for d in devices
                 if loc in (d.get("status", {}).get("location") or "").lower()
             ]
+        if predicate is not None:
+            matched = []
+            for device in devices:
+                identity = {**(device.get("identity") or {}), "device_id": device.get("device_id")}
+                status = device.get("status") or {}
+                labels = dict((device.get("capabilities") or {}).get("labels") or {})
+                # Match the legacy-label defaults used by agent discovery.
+                if status.get("location"):
+                    labels.setdefault("location", status["location"])
+                if identity.get("device_type"):
+                    labels.setdefault("type", identity["device_type"])
+                try:
+                    if predicate.evaluate({"identity": identity, "labels": labels, "status": status}):
+                        matched.append(device)
+                except PredicateEvalError:
+                    # Heterogeneous fleets may omit fields or use different
+                    # types. Like broadcast, those devices do not match.
+                    continue
+            devices = matched
         return devices
 
     def list_devices_page(
@@ -280,6 +307,7 @@ class DeviceRegistry:
         *,
         device_type: str | None = None,
         location: str | None = None,
+        where: str | None = None,
         offset: int = 0,
         limit: int | None = None,
     ) -> Tuple[List[dict], int | None, int]:
@@ -304,7 +332,7 @@ class DeviceRegistry:
             (devices_page, next_offset, total_matched).
             ``next_offset`` is None when the page reaches the end of the
             filtered list. ``total_matched`` is the size after the
-            ``device_type``/``location`` filters and before pagination.
+            ``device_type``/``location``/``where`` filters and before pagination.
             ACL filtering, when enabled at the handler layer, runs after
             this method returns and can further shrink the page.
 
@@ -322,7 +350,7 @@ class DeviceRegistry:
             fleets materially larger than the current ~1400 devices.
         """
         all_devices = self.list_devices(
-            tenant, device_type=device_type, location=location,
+            tenant, device_type=device_type, location=location, where=where,
         )
         total = len(all_devices)
         safe_offset = max(0, int(offset or 0))
@@ -414,9 +442,11 @@ def list_devices(
     tenant: str,
     device_type: str | None = None,
     location: str | None = None,
+    *,
+    where: str | None = None,
 ) -> List[dict]:
     """Return a list of registered devices for ``tenant``, optionally filtered."""
-    return _REGISTRY.list_devices(tenant, device_type=device_type, location=location)
+    return _REGISTRY.list_devices(tenant, device_type=device_type, location=location, where=where)
 
 
 def list_devices_page(
@@ -424,6 +454,7 @@ def list_devices_page(
     *,
     device_type: str | None = None,
     location: str | None = None,
+    where: str | None = None,
     offset: int = 0,
     limit: int | None = None,
 ) -> Tuple[List[dict], int | None, int]:
@@ -432,6 +463,7 @@ def list_devices_page(
         tenant,
         device_type=device_type,
         location=location,
+        where=where,
         offset=offset,
         limit=limit,
     )
