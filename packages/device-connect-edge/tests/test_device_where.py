@@ -39,14 +39,15 @@ async def test_available_where_worker_is_not_delayed_by_other_runtime_work():
 
     try:
         evaluation = asyncio.create_task(runtime._evaluate_where_with_timeout(
-            _FastPredicate(), {}, "corr-free-slot", timeout_s=0.02,
+            _FastPredicate(), {}, "corr-free-slot", timeout_s=1.0,
         ))
         await asyncio.sleep(0)
-        # Simulate another runtime compiling a predicate on this same loop.
-        # The fast worker can finish while the loop is occupied.
-        finished.wait(timeout=0.1)
-        time.sleep(0.03)
+        # The worker must start without another loop turn, even if another
+        # runtime occupies this loop. Stay within the evaluation deadline;
+        # asyncio's handling of already-expired waits differs by Python version.
+        submitted_without_another_loop_turn = finished.wait(timeout=0.1)
         assert await evaluation is True
+        assert submitted_without_another_loop_turn
         runtime._logger.warning.assert_not_called()
     finally:
         runtime._shutdown_where_eval_executor()

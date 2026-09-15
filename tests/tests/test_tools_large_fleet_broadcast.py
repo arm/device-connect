@@ -5,6 +5,7 @@
 """Slow NATS-backed large-fleet tests for broadcast reply fan-out."""
 
 import asyncio
+from functools import partialmethod
 import time
 import uuid
 
@@ -99,7 +100,7 @@ async def test_broadcast_large_fan_out_returns_correlation_and_target_count(
 
 
 async def test_broadcast_where_self_election_narrows_large_candidates(
-    messaging_backend, messaging_url, clear_registry, device_spawner
+    messaging_backend, messaging_url, clear_registry, device_spawner, monkeypatch
 ):
     """A broad broadcast can be narrowed by edge-side where self-election."""
     if messaging_backend != "nats":
@@ -107,6 +108,23 @@ async def test_broadcast_where_self_election_narrows_large_candidates(
     pytest.importorskip("celpy")
 
     fleet_size = scale_fleet_size()
+    from device_connect_edge import DeviceRuntime
+
+    # These devices share one interpreter/event loop, unlike a physical fleet.
+    # Budget for the whole batch so this self-election test does not measure
+    # host scheduling delays against each edge's 50 ms production deadline.
+    # test_device_where.py separately verifies timeouts and worker bounds.
+    monkeypatch.setattr(
+        DeviceRuntime,
+        "_evaluate_where_with_timeout",
+        partialmethod(
+            DeviceRuntime._evaluate_where_with_timeout,
+            timeout_s=min(
+                _reply_timeout(fleet_size),
+                max(1.0, fleet_size * DeviceRuntime._WHERE_EVAL_TIMEOUT_S),
+            ),
+        ),
+    )
     prefix = f"itest-bcwhere-{uuid.uuid4().hex[:8]}"
     selected_location = f"{prefix}-selected"
     other_location = f"{prefix}-other"
