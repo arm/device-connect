@@ -11,6 +11,7 @@ import pytest
 
 from device_connect_server.registry.service import registry
 from device_connect_server.registry.service.main import _make_list_handler
+from device_connect_server.security.acl import ACLManager, DeviceACL
 
 
 def stage(index, **status):
@@ -95,3 +96,22 @@ async def test_five_thousand_functionless_devices_return_one_small_reply(monkeyp
     assert result["where_applied"] is True
     assert [d["device_id"] for d in result["devices"]] == ["stage-0051"]
     assert len(response_bytes) < 1000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("where,offset,expected_ids,cursor,total", [
+    ("status.x_readback >= 0.0", 0, ["stage-0001", "stage-0003"], 2, 3),
+    ("status.x_readback >= 0.0", 2, ["stage-0005"], None, 3),
+    ("identity.device_id == 'stage-0000' && status.x_setpoint == 2.0", 0, [], None, 0),
+])
+async def test_where_counts_and_pages_only_acl_visible_matches(fleet, where, offset, expected_ids, cursor, total):
+    acl = ACLManager()
+    for index in (0, 2, 4):
+        acl.set_acl(DeviceACL(device_id=f"stage-{index:04d}", tenant="default", hidden_from=["observer"]))
+    messaging = AsyncMock()
+    request = {"id": "private-state", "method": "discovery/listDevices",
+               "params": {"where": where, "offset": offset, "limit": 2, "requester_id": "observer"}}
+    await _make_list_handler("default", messaging, acl)(json.dumps(request).encode(), "reply")
+    result = json.loads(messaging.publish.call_args.args[1])["result"]
+    assert [d["device_id"] for d in result["devices"]] == expected_ids
+    assert (result["next_offset"], result["total_matched"]) == (cursor, total)

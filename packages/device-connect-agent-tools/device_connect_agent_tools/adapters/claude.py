@@ -91,8 +91,19 @@ async def discover_labels(args: dict[str, Any]) -> dict[str, Any]:
     "'device(category:camera, location:zone-A/*)', "
     "'device(*).function(direction:write)', 'event(modality:motion)'. "
     "Response includes a label_histogram (per-key vocabulary across the "
-    "matched set) so the agent can narrow next.",
-    {"selector": str, "offset": int, "limit": int},
+    "matched set) so the agent can narrow next. Optional CEL where filters "
+    "registry-stored status, identity and labels; device-only results are "
+    "compact ids, types and locations, including devices with no functions.",
+    {
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string"},
+            "offset": {"type": "integer"},
+            "limit": {"type": "integer"},
+            "where": {"type": "string", "description": "CEL predicate over status, identity and labels"},
+        },
+        "required": ["selector", "offset", "limit"],
+    },
 )
 async def discover(args: dict[str, Any]) -> dict[str, Any]:
     return _text(
@@ -100,6 +111,7 @@ async def discover(args: dict[str, Any]) -> dict[str, Any]:
             selector=args["selector"],
             offset=int(args.get("offset", 0)),
             limit=int(args.get("limit", 200)),
+            where=args.get("where"),
         )
     )
 

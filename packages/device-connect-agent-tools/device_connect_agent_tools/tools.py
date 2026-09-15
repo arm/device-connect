@@ -218,6 +218,8 @@ def discover(
     selector: str,
     offset: int = 0,
     limit: int = DEFAULT_DISCOVER_LIMIT,
+    *,
+    where: str | None = None,
 ) -> dict[str, Any]:
     """Resolve a selector to matched devices, functions, or events.
 
@@ -241,6 +243,11 @@ def discover(
         selector: A selector expression string.
         offset: Pagination offset (rows skipped).
         limit: Max rows per page (capped at DISCOVER_HARD_LIMIT).
+        where: Optional CEL predicate over registry-stored ``status``,
+            ``identity`` and ``labels``. Filters devices before resolving
+            functions/events. Device-only results contain device_id,
+            device_type and location. No callable function is required.
+            Requires a registry with state discovery support.
 
     Returns:
         A response envelope:
@@ -279,7 +286,15 @@ def discover(
 
     try:
         conn = get_connection()
-        devices = conn.list_devices()
+        if where is None:
+            devices = conn.list_devices()
+        else:
+            from device_connect_edge.predicate import PredicateCompileError
+
+            try:
+                devices = conn.list_devices(where=where)
+            except PredicateCompileError as e:
+                return _empty_envelope(scope=sel.scope.value, error=_error("invalid_predicate", str(e)))
     except Exception as e:
         logger.error("discover(%r) failed loading fleet: %s", selector, e)
         return _empty_envelope(
@@ -298,7 +313,13 @@ def discover(
         total = len(matched_devices)
         page_devices, next_offset = _paginate(matched_devices, safe_offset, safe_limit)
         expand = SMALL_FLEET_THRESHOLD > 0 and total <= SMALL_FLEET_THRESHOLD
-        results = [_device_summary_for_discover(d, expand) for d in page_devices]
+        if where is not None:
+            results = [
+                {key: d.get(key) for key in ("device_id", "device_type", "location")}
+                for d in page_devices
+            ]
+        else:
+            results = [_device_summary_for_discover(d, expand) for d in page_devices]
         histogram, multivalued, unique = label_histogram(matched_devices, count_unique=True)
         formatted_histogram = _format_label_histogram(histogram, multivalued, unique)
         return {

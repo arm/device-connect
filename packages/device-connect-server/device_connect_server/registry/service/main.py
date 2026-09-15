@@ -531,14 +531,31 @@ def _make_list_handler(
                             "unintended.",
                             requested_limit_int, _LIST_DEVICES_MAX_LIMIT,
                         )
-                    page, next_offset, total = await asyncio.to_thread(
-                        registry.list_devices_page, tenant,
-                        device_type=device_type,
-                        location=location,
-                        offset=offset_val,
-                        limit=effective_limit,
-                        **predicate_params,
-                    )
+                    if where is not None and acl_manager:
+                        # State predicates can probe arbitrary status fields.
+                        # Count only visible matches so metadata cannot reveal
+                        # the state of a device hidden from this requester.
+                        matches = await asyncio.to_thread(
+                            registry.list_devices, tenant,
+                            device_type=device_type, location=location,
+                            **predicate_params,
+                        )
+                        matches = acl_manager.filter_visible_devices(
+                            params.get("requester_id", ""), matches, tenant=tenant,
+                        )
+                        total = len(matches)
+                        end = offset_val + effective_limit
+                        page = matches[offset_val:end]
+                        next_offset = end if end < total else None
+                    else:
+                        page, next_offset, total = await asyncio.to_thread(
+                            registry.list_devices_page, tenant,
+                            device_type=device_type,
+                            location=location,
+                            offset=offset_val,
+                            limit=effective_limit,
+                            **predicate_params,
+                        )
                 else:
                     page = await asyncio.to_thread(
                         registry.list_devices, tenant,
@@ -549,7 +566,7 @@ def _make_list_handler(
                     # path (see the ``if paged`` branch below); the
                     # legacy shape is just ``{"devices": page}``.
 
-                if acl_manager:
+                if acl_manager and not (paged and where is not None):
                     requester_id = params.get("requester_id", "")
                     # ACL filtering runs after pagination — devices the
                     # caller is not allowed to see are dropped from the

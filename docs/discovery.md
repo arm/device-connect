@@ -107,7 +107,7 @@ function(estop)                                               fleet emergency-st
 
 ### Discovery
 
-#### `discover(selector, offset=0, limit=200)`
+#### `discover(selector, offset=0, limit=200, *, where=None)`
 
 Resolves a selector to matched entities. Returns devices, function tuples,
 or event tuples depending on the selector scope. The response includes a
@@ -118,6 +118,65 @@ a separate call.
 and switches to a name-and-labels summary above
 `DEVICE_CONNECT_FUNCTION_THRESHOLD` (default 20). The threshold is
 configurable via environment variable.
+
+##### State predicates
+
+Pass a CEL `where` expression to query stored device state without invoking
+a function. This also works for reporting-only sensors and instruments:
+
+```python
+discover(
+    "device(model_id:ophyd_async:SimStage)",
+    where="status.x_readback < 51.99 && status.x_setpoint == 2.0",
+)
+# {"scope": "device_only", "matched": 1, "returned": 1, "offset": 0,
+#  "next_offset": None,
+#  "results": [{"device_id": "stage-0051",
+#               "device_type": "ophyd_async:SimStage", "location": "lab-A"}],
+#  "label_histogram": {...}}
+```
+
+The registry uses the same CEL evaluator as `broadcast`. Discovery binds:
+
+| Variable | Source |
+| --- | --- |
+| `status` | Latest stored heartbeat status, including driver-specific fields |
+| `identity` | Registered identity plus `device_id` |
+| `labels` | Device capability labels, with legacy `status.location` and `identity.device_type` defaults for `location` and `type`; declared labels take precedence |
+
+Discovery does not provide broadcast's `bindings` payload. Missing fields
+and evaluation type errors make that device a non-match, as in broadcast.
+Malformed, empty or non-string expressions produce JSON-RPC `-32602`
+(invalid params), exposed by the tool as `error.code = "invalid_predicate"`.
+
+`discovery/listDevices` accepts optional `where` alongside `device_type`,
+`location`, `offset` and `limit`. It evaluates the predicate before paging;
+`total_matched` and `next_offset` refer to state matches. A successful
+predicate query includes `where_applied: true`. For predicate queries,
+visibility ACLs filter the matches before pagination and counting, so
+neither the total nor the cursor exposes hidden devices' state.
+The agent tool resolves its selector over
+visible state matches, then calculates `matched`, the label histogram and
+the requested page. For function/event selectors, `where` filters the
+owning devices before resolving their functions/events.
+
+With `where`, device-only tool results contain only `device_id`,
+`device_type` and `location`; full records remain inside the registry and
+tool process. A fleet of 5,000 devices with one state match therefore
+requires one registry page and returns one compact tool row. The registry
+still scans its tenant's stored snapshot; CPU cost scales with fleet size.
+
+State queries bypass the SDK's local fleet cache. The registry's existing
+snapshot cache still applies (`DC_FLEET_CACHE_TTL`, default 2 seconds), and
+state freshness also depends on device heartbeat frequency. Pages are not
+a transactionally frozen view if devices change state between requests.
+
+The server installs CEL support by default; agent tools need no predicate
+extra for registry discovery. Upgrade the server and agent's edge SDK
+together: clients reject replies without `where_applied: true` rather than
+returning an unfiltered fleet. There is no client fallback for older
+servers, and `where` requires registry mode (D2D is unsupported).
+Calls without `where` retain their existing behavior and response shape.
 
 #### `discover_labels(key=None, offset=0, limit=50)`
 
