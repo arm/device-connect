@@ -26,6 +26,33 @@ class _RaisingPredicate:
 
 
 @pytest.mark.asyncio
+async def test_available_where_worker_is_not_delayed_by_other_runtime_work():
+    """An idle executor must start before other devices occupy the event loop."""
+    runtime = DeviceRuntime(device_id="where-free-slot-test")
+    runtime._logger = Mock()
+    finished = threading.Event()
+
+    class _FastPredicate:
+        def evaluate(self, context):
+            finished.set()
+            return True
+
+    try:
+        evaluation = asyncio.create_task(runtime._evaluate_where_with_timeout(
+            _FastPredicate(), {}, "corr-free-slot", timeout_s=0.02,
+        ))
+        await asyncio.sleep(0)
+        # Simulate another runtime compiling a predicate on this same loop.
+        # The fast worker can finish while the loop is occupied.
+        finished.wait(timeout=0.1)
+        time.sleep(0.03)
+        assert await evaluation is True
+        runtime._logger.warning.assert_not_called()
+    finally:
+        runtime._shutdown_where_eval_executor()
+
+
+@pytest.mark.asyncio
 async def test_where_eval_timeout_fails_closed_and_warns():
     runtime = DeviceRuntime(device_id="where-timeout-test")
     runtime._logger = Mock()
