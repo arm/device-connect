@@ -432,20 +432,31 @@ class DeviceConnection:
         self,
         device_type: Optional[str] = None,
         location: Optional[str] = None,
+        *,
+        where: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List devices via the discovery provider (D2D or registry)."""
-        return self._run(self._async_list_devices(device_type, location))
+        return self._run(self._async_list_devices(device_type, location, where=where))
 
     async def _async_list_devices(
         self,
         device_type: Optional[str] = None,
         location: Optional[str] = None,
+        *,
+        where: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         if self._provider is None:
             raise RuntimeError("Not connected — call connect() first")
-        devices = await self._provider.list_devices(
-            device_type=device_type, location=location,
-        )
+        if where is not None:
+            if not isinstance(self._provider, _SDKRegistryClient):
+                raise RuntimeError("Discovery where predicates require a registry connection; D2D is unsupported")
+            devices = await self._provider.list_devices(
+                device_type=device_type, location=location, where=where,
+            )
+        else:
+            devices = await self._provider.list_devices(
+                device_type=device_type, location=location,
+            )
         return [flatten_device(d) for d in devices]
 
     def invalidate_cache(self) -> None:

@@ -182,6 +182,7 @@ class RegistryClient:
         location: Optional[str] = None,
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
+        where: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List all registered devices.
 
@@ -190,6 +191,7 @@ class RegistryClient:
             location: Filter by location
             capabilities: Filter by required capabilities
             timeout: Request timeout
+            where: CEL predicate over stored state; requires a supporting server.
 
         Returns:
             List of device dictionaries with full registration data
@@ -215,6 +217,7 @@ class RegistryClient:
                 offset=offset,
                 limit=_DEFAULT_LIST_PAGE_SIZE,
                 timeout=timeout,
+                where=where,
             )
             devices.extend(page)
             if next_offset is None:
@@ -242,19 +245,25 @@ class RegistryClient:
         location: Optional[str] = None,
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
+        where: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
         """Fetch one page of devices with pagination metadata.
 
         Returns ``(devices, next_offset, total_matched)``; ``next_offset``
         is ``None`` on the final page.
 
+        ``where`` filters stored state before pagination. A server that
+        ignores the predicate raises an error instead of returning its fleet.
+
         ACL caveat:
-            When the registry has ACLs enabled, filtering runs *after*
+            Without ``where``, when the registry has ACLs enabled, filtering runs *after*
             slicing. ``len(devices)`` for a page may be smaller than
             ``limit`` even when more pages follow, and ``total_matched``
             is the unfiltered total (before the caller's ACL applies).
             Callers should treat ``total_matched`` as an upper bound and
             must not infer "full page" from ``len(devices) == limit``.
+            With ``where``, visibility filtering precedes pagination and
+            ``total_matched`` counts only visible state matches.
         """
         return await self._list_devices_page(
             device_type=device_type,
@@ -263,6 +272,7 @@ class RegistryClient:
             offset=offset,
             limit=limit,
             timeout=timeout,
+            where=where,
         )
 
     async def _list_devices_page(
@@ -274,6 +284,7 @@ class RegistryClient:
         offset: int,
         limit: int,
         timeout: Optional[float],
+        where: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
         subject = f"device-connect.{self._tenant}.discovery"
         params: Dict[str, Any] = {"offset": int(offset), "limit": int(limit)}
@@ -283,10 +294,14 @@ class RegistryClient:
             params["location"] = location
         if capabilities:
             params["capabilities"] = capabilities
+        if where is not None:
+            params["where"] = where
 
         result = await self._request(
             subject, "discovery/listDevices", params, timeout,
         )
+        if where is not None and result.get("where_applied") is not True:
+            raise RuntimeError("Registry does not support discovery where predicates; upgrade the server")
         devices = result.get("devices", [])
         next_offset = result.get("next_offset")
         total = result.get("total_matched", len(devices))

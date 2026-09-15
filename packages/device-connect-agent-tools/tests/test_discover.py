@@ -13,6 +13,54 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from device_connect_agent_tools import tools as tools_mod
+from device_connect_edge.predicate import PredicateCompileError
+
+
+def test_discover_where_returns_compact_rows_and_paginates_matching_devices():
+    conn = MagicMock()
+    conn.list_devices.return_value = [
+        {"device_id": f"stage-{i}", "device_type": "stage", "location": "lab-A",
+         "labels": {"model_id": "ophyd_async:SimStage"},
+         "functions": [{"name": "huge_schema", "parameters": {"description": "x" * 10000}}]}
+        for i in range(3)
+    ] + [{"device_id": "sensor", "labels": {"model_id": "sensor"}}]
+    with patch.object(tools_mod, "get_connection", return_value=conn):
+        result = tools_mod.discover(
+            "device(model_id:ophyd_async:SimStage)", offset=1, limit=1, where="status.x_readback < 51.99",
+        )
+    conn.list_devices.assert_called_once_with(where="status.x_readback < 51.99")
+    assert (result["matched"], result["returned"], result["next_offset"]) == (3, 1, 2)
+    assert result["results"] == [{"device_id": "stage-1", "device_type": "stage", "location": "lab-A"}]
+    assert result["label_histogram"]["model_id"]["values"] == {"ophyd_async:SimStage": 3}
+
+
+def test_discover_invalid_where_is_a_structured_error():
+    conn = MagicMock()
+    conn.list_devices.side_effect = PredicateCompileError("failed to compile where")
+    with patch.object(tools_mod, "get_connection", return_value=conn):
+        result = tools_mod.discover("device(*)", where="status.x > > 1")
+    assert result["error"]["code"] == "invalid_predicate"
+    assert result["matched"] == 0
+    assert result["results"] == []
+
+
+def test_discover_where_does_not_mislabel_connection_value_errors():
+    conn = MagicMock()
+    conn.list_devices.side_effect = ValueError("malformed registry response")
+    with patch.object(tools_mod, "get_connection", return_value=conn):
+        result = tools_mod.discover("device(*)", where="status.online")
+    assert result["error"]["code"] == "connection_error"
+
+
+def test_discover_where_also_filters_function_and_event_scopes():
+    conn = MagicMock()
+    conn.list_devices.return_value = [SAMPLE_DEVICES[0]]
+    with patch.object(tools_mod, "get_connection", return_value=conn):
+        functions = tools_mod.discover("function(*)", where="status.online")
+        events = tools_mod.discover("event(*)", where="status.online")
+    assert functions["matched"] == 1
+    assert events["matched"] == 2
+    assert all(row["device_id"] == "cam-001" for row in functions["results"] + events["results"])
 
 
 # -- Fixture: labeled fleet ---------------------------------------

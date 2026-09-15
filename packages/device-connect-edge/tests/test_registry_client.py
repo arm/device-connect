@@ -14,6 +14,7 @@ import pytest
 
 from device_connect_edge.messaging.exceptions import RequestTimeoutError
 from device_connect_edge.registry_client import RegistryClient
+from device_connect_edge.predicate import PredicateCompileError
 
 
 def _make_client(mock_messaging=None, **kwargs):
@@ -102,6 +103,42 @@ class TestRequestRetries:
 
 class TestListDevicesPagination:
     """Verify list_devices transparently pages through the registry."""
+
+    @pytest.mark.asyncio
+    async def test_where_walk_bypasses_cache_and_preserves_unfiltered_cache(self):
+        client, messaging = _make_client(cache_ttl=30)
+        messaging.request.side_effect = [
+            _success_response({"devices": [{"device_id": "unfiltered"}]}),
+            _success_response({"devices": [{"device_id": "match-a"}], "next_offset": 1,
+                               "total_matched": 2, "where_applied": True}),
+            _success_response({"devices": [{"device_id": "match-b"}], "next_offset": None,
+                               "total_matched": 2, "where_applied": True}),
+        ]
+        assert await client.list_devices() == [{"device_id": "unfiltered"}]
+        assert await client.list_devices(where="status.online") == [
+            {"device_id": "match-a"}, {"device_id": "match-b"},
+        ]
+        assert await client.list_devices() == [{"device_id": "unfiltered"}]
+        requests = [json.loads(c.args[1])["params"] for c in messaging.request.call_args_list]
+        assert "where" not in requests[0]
+        assert [(p["where"], p["offset"]) for p in requests[1:]] == [
+            ("status.online", 0), ("status.online", 1),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_where_page_rejects_older_server_that_ignores_predicate(self):
+        client, messaging = _make_client()
+        messaging.request.return_value = _success_response({"devices": [{"device_id": "unfiltered"}]})
+        with pytest.raises(RuntimeError, match="does not support.*where"):
+            await client.list_devices_page(where="status.online")
+
+    @pytest.mark.asyncio
+    async def test_where_surfaces_registry_validation_as_predicate_error(self):
+        client, messaging = _make_client()
+        messaging.request.return_value = _error_response(-32602, "failed to compile where")
+        with pytest.raises(PredicateCompileError, match="failed to compile where"):
+            await client.list_devices(where="status.x > > 1")
+        assert messaging.request.call_count == 1
 
     @staticmethod
     def _paged_responses(total: int, page_size: int):

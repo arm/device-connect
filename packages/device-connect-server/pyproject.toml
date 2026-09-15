@@ -29,7 +29,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "device-connect-edge>=0.2.0",
+    "device-connect-edge[predicate]>=0.2.5",
     # nats-py, pydantic, nkeys, pyyaml are transitive via device-connect-edge
 ]
 

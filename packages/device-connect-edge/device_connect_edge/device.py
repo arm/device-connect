@@ -1463,7 +1463,14 @@ class DeviceRuntime:
         deadline = loop.time() + timeout_s
 
         try:
-            await asyncio.wait_for(self._where_eval_semaphore.acquire(), timeout_s)
+            if self._where_eval_semaphore.locked():
+                await asyncio.wait_for(self._where_eval_semaphore.acquire(), timeout_s)
+            else:
+                # acquire() completes immediately when capacity is available.
+                # wait_for() would schedule another task and yield even then,
+                # letting unrelated device work consume the whole deadline
+                # before this predicate is submitted to its idle executor.
+                await self._where_eval_semaphore.acquire()
         except asyncio.TimeoutError:
             self._logger.warning(
                 "Broadcast %s: where predicate timed out after %.3fs (skipping)",

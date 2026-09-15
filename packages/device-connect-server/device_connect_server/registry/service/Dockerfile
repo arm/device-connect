@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir --only-binary eclipse-zenoh -r requirements.txt
 
 # Install device-connect-edge from sibling package
 COPY packages/device-connect-edge/ /tmp/device-connect-edge/
-RUN pip install --no-cache-dir /tmp/device-connect-edge/ && rm -rf /tmp/device-connect-edge/
+RUN pip install --no-cache-dir '/tmp/device-connect-edge[predicate]' && rm -rf /tmp/device-connect-edge/
 
 # Copy device-connect-server library
 COPY packages/device-connect-server/device_connect_server/ ./device_connect_server/

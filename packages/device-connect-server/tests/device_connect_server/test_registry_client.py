@@ -89,6 +89,25 @@ class TestRegistryClientConnection:
 
 class TestListDevices:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("paged", [False, True])
+    async def test_where_is_forwarded_and_acknowledged(self, paged):
+        mc = _mock_messaging({"result": {"devices": SAMPLE_DEVICES[:1], "where_applied": True,
+                                       "next_offset": None, "total_matched": 1}})
+        client = RegistryClient(mc)
+        await client.connect()
+        result = await (client.list_devices_page(where="status.online") if paged
+                        else client.list_devices(where="status.online"))
+        assert (result[0] if paged else result) == SAMPLE_DEVICES[:1]
+        assert json.loads(mc.request.call_args.args[1])["params"]["where"] == "status.online"
+
+    @pytest.mark.asyncio
+    async def test_where_rejects_an_unfiltered_legacy_response(self):
+        client = RegistryClient(_mock_messaging({"result": {"devices": SAMPLE_DEVICES}}))
+        await client.connect()
+        with pytest.raises(RuntimeError, match="does not support.*where"):
+            await client.list_devices(where="status.online")
+
+    @pytest.mark.asyncio
     async def test_list_all(self):
         mc = _mock_messaging({"result": {"devices": SAMPLE_DEVICES}})
         client = RegistryClient(mc, tenant="test")

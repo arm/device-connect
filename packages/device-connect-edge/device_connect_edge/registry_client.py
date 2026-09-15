@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from device_connect_edge.messaging.base import MessagingClient
 from device_connect_edge.messaging.exceptions import RequestTimeoutError
+from device_connect_edge.predicate import PredicateCompileError
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,14 @@ logger = logging.getLogger(__name__)
 # bound for typical records (~6 KB) landing at ~600 KB. Operators on
 # unusually rich schemas can drop this via DEVICE_CONNECT_LIST_PAGE_SIZE.
 _DEFAULT_LIST_PAGE_SIZE = int(os.getenv("DEVICE_CONNECT_LIST_PAGE_SIZE", "100"))
+
+
+class RegistryError(RuntimeError):
+    """JSON-RPC error from the registry, preserving its machine-readable code."""
+
+    def __init__(self, code: int, message: str):
+        self.code = code
+        super().__init__(f"Registry error ({code}): {message}")
 
 
 class RegistryClient:
@@ -116,10 +125,7 @@ class RegistryClient:
 
                 if "error" in response:
                     error = response["error"]
-                    raise RuntimeError(
-                        f"Registry error ({error.get('code', -1)}): "
-                        f"{error.get('message', 'Unknown error')}"
-                    )
+                    raise RegistryError(error.get("code", -1), error.get("message", "Unknown error"))
                 return response.get("result")
             except RequestTimeoutError as e:
                 last_err = e
@@ -141,6 +147,7 @@ class RegistryClient:
         location: Optional[str] = None,
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
+        where: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List devices from the registry service.
 
@@ -153,12 +160,14 @@ class RegistryClient:
             location: Filter by location.
             capabilities: Filter by required capabilities.
             timeout: Override default timeout.
+            where: CEL predicate evaluated by the registry over stored state.
+                Bypasses the local fleet cache. Requires a supporting server.
 
         Returns:
             List of device dictionaries with full registration data.
         """
         # Check cache
-        if self._cache_ttl > 0 and self._cache is not None:
+        if where is None and self._cache_ttl > 0 and self._cache is not None:
             age = time.time() - self._cache_time
             if age < self._cache_ttl:
                 logger.debug("Using cached device list (age: %.1fs)", age)
@@ -182,6 +191,7 @@ class RegistryClient:
                 offset=offset,
                 limit=_DEFAULT_LIST_PAGE_SIZE,
                 timeout=timeout,
+                where=where,
             )
             devices.extend(page)
             if next_offset is None:
@@ -208,6 +218,7 @@ class RegistryClient:
             and device_type is None
             and location is None
             and not capabilities
+            and where is None
         ):
             self._cache = devices
             self._cache_time = time.time()
@@ -223,6 +234,7 @@ class RegistryClient:
         location: Optional[str] = None,
         capabilities: Optional[List[str]] = None,
         timeout: Optional[float] = None,
+        where: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
         """Fetch a single page of devices with pagination metadata.
 
@@ -230,12 +242,15 @@ class RegistryClient:
         most callers should stick with :meth:`list_devices`, which loops
         internally and returns the full fleet.
 
+        ``where`` filters stored device state before pagination. Older
+        servers that do not acknowledge the predicate raise an error.
+
         Returns:
             ``(devices, next_offset, total_matched)`` where ``next_offset``
             is ``None`` on the final page.
 
         ACL caveat:
-            When the registry has ACLs enabled, server-side filtering
+            Without ``where``, when the registry has ACLs enabled, filtering
             runs *after* slicing. As a result ``len(devices)`` for a
             given page may be smaller than ``limit`` even when more
             pages follow, and ``total_matched`` is the unfiltered total
@@ -243,6 +258,8 @@ class RegistryClient:
             ``total_matched`` as an upper bound on what the caller will
             ever see, and must not assume ``len(devices) == limit``
             implies a full page.
+            With ``where``, visibility filtering precedes pagination and
+            ``total_matched`` counts only visible state matches.
         """
         return await self._list_devices_page(
             device_type=device_type,
@@ -251,6 +268,7 @@ class RegistryClient:
             offset=offset,
             limit=limit,
             timeout=timeout,
+            where=where,
         )
 
     async def _list_devices_page(
@@ -262,6 +280,7 @@ class RegistryClient:
         offset: int,
         limit: int,
         timeout: Optional[float],
+        where: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[int], int]:
         subject = f"device-connect.{self._tenant}.discovery"
         params: Dict[str, Any] = {"offset": int(offset), "limit": int(limit)}
@@ -271,10 +290,19 @@ class RegistryClient:
             params["location"] = location
         if capabilities:
             params["capabilities"] = capabilities
+        if where is not None:
+            params["where"] = where
 
-        result = await self._request(
-            subject, "discovery/listDevices", params, timeout,
-        )
+        try:
+            result = await self._request(
+                subject, "discovery/listDevices", params, timeout,
+            )
+        except RegistryError as e:
+            if where is not None and e.code == -32602:
+                raise PredicateCompileError(str(e)) from e
+            raise
+        if where is not None and result.get("where_applied") is not True:
+            raise RuntimeError("Registry does not support discovery where predicates; upgrade the server")
         devices = result.get("devices", [])
         next_offset = result.get("next_offset")
         total = result.get("total_matched", len(devices))

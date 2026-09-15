@@ -78,6 +78,18 @@ TOOL_NAMES = (
 
 
 class TestClaudeAdapterExports:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("where_args", [{}, {"where": "status.online"}])
+    async def test_discover_exposes_and_forwards_optional_where(self, where_args):
+        from device_connect_agent_tools.adapters import claude as adapter
+
+        schema = adapter.discover._tool_schema
+        assert schema["properties"]["where"]["type"] == "string"
+        assert "where" not in schema["required"]
+        with patch.object(adapter, "_discover", return_value={"matched": 0}) as discover:
+            await adapter.discover.__wrapped__({"selector": "device(*)", **where_args})
+        discover.assert_called_once_with(selector="device(*)", offset=0, limit=200, where=where_args.get("where"))
+
     def test_module_exports_all_tools(self):
         from device_connect_agent_tools.adapters import claude as adapter
 
