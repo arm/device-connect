@@ -1,0 +1,8 @@
+# C build artifacts
+*.o
+*.a
+# example/test binaries (extensionless, built in-tree)
+/temp_sensor
+/dc_agent
+tests/test_edge
+tests/test_agent
