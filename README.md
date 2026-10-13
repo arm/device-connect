@@ -74,6 +74,27 @@ The device starts in D2D mode automatically — no URLs needed. Any other Device
 
 > **Note:** `DEVICE_CONNECT_ALLOW_INSECURE=true` skips TLS and is intended for local development only.
 
+<details>
+<summary>Not seeing the device? (macOS / multicast)</summary>
+
+D2D mode discovers peers over Zenoh UDP multicast. On some setups — notably
+macOS over loopback — multicast scouting doesn't connect two local processes, so
+`discover(...)` comes back empty and `invoke(...)` reports no responders. Give
+the peers an explicit TCP link instead: have the device listen, and point the
+agent at it.
+
+```bash
+# device — listen on a local endpoint
+DEVICE_CONNECT_ALLOW_INSECURE=true DEVICE_CONNECT_DISCOVERY_MODE=d2d \
+  ZENOH_LISTEN=tcp/localhost:7447 python sensor.py
+
+# agent — connect to that endpoint
+DEVICE_CONNECT_ALLOW_INSECURE=true DEVICE_CONNECT_DISCOVERY_MODE=d2d \
+  ZENOH_CONNECT=tcp/localhost:7447 python your_agent.py
+```
+
+</details>
+
 ### 4. Discover and invoke from an agent
 
 ```bash
