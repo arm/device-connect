@@ -52,6 +52,7 @@ from device_connect_edge.drivers import DeviceDriver, rpc
 
 class SensorDriver(DeviceDriver):
     device_type = "sensor"
+    labels = {"category": "sensor"}
 
     @rpc()
     async def get_reading(self) -> dict:
@@ -83,11 +84,11 @@ uv pip install device-connect-agent-tools
 
 ```bash
 DEVICE_CONNECT_ALLOW_INSECURE=true python -c "
-from device_connect_agent_tools import connect, discover_devices, invoke_device
+from device_connect_agent_tools import connect, discover, invoke
 connect()
-devices = discover_devices(device_type='sensor')
+devices = discover('device(category:sensor)')
 print(devices)
-result = invoke_device('sensor-001', 'get_reading')
+result = invoke('device(sensor-001).function(get_reading)')
 print(result)  # {'temperature': 22.5, 'humidity': 45}
 "
 ```
