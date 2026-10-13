@@ -6,8 +6,8 @@
 # Dev mode: no TLS, no JWT auth. Matches DEVICE_CONNECT_ALLOW_INSECURE=true.
 #
 # Usage:
-#   docker compose -f docker-compose-itest.yml up -d
-#   pytest tests/ -v -m "not llm" --timeout=60
+#   docker compose -f tests/docker-compose-itest.yml up -d
+#   pytest tests/tests -v -m "not llm" --timeout=60
 
 services:
   # NATS broker with JetStream (no auth)
