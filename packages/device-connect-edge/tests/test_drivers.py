@@ -11,7 +11,9 @@ Tests @rpc, @emit, @on decorators, schema generation, and DeviceDriver base clas
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+from typing import Optional, Union, List, Dict
 from device_connect_edge.drivers import DeviceDriver, rpc, emit, build_function_schema, build_event_schema
+from device_connect_edge.drivers.decorators import _python_type_to_json_schema
 from device_connect_edge.drivers.base import on
 from device_connect_edge.types import DeviceIdentity, DeviceStatus
 
@@ -113,6 +115,68 @@ class TestBuildFunctionSchema:
 
         schema = build_function_schema(ping)
         assert schema["type"] == "object"
+
+    def test_pep604_union_optional_types(self):
+        @rpc()
+        async def sample_rpc(
+            self,
+            probes: list | None = None,
+            timeout: int | None = 30,
+            tag: str | None = None,
+            config: dict | None = None,
+            numbers: list[int] | None = None,
+        ) -> dict:
+            """Sample RPC with PEP 604 union types."""
+            return {}
+
+        schema = build_function_schema(sample_rpc)
+        props = schema["properties"]
+        assert props["probes"] == {"type": "array", "default": None}
+        assert props["timeout"] == {"type": "integer", "default": 30}
+        assert props["tag"] == {"type": "string", "default": None}
+        assert props["config"] == {"type": "object", "default": None}
+        assert props["numbers"] == {
+            "type": "array",
+            "items": {"type": "integer"},
+            "default": None,
+        }
+
+    def test_pep604_multi_type_union(self):
+        @rpc()
+        async def set_value(self, val: str | int, opt: str | int | None = None) -> dict:
+            """Sample RPC with multi-type union."""
+            return {}
+
+        schema = build_function_schema(set_value)
+        props = schema["properties"]
+        assert props["val"] == {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+        assert props["opt"] == {
+            "anyOf": [{"type": "string"}, {"type": "integer"}],
+            "default": None,
+        }
+        assert "val" in schema["required"]
+        assert "opt" not in schema["required"]
+
+
+class TestPythonTypeToJsonSchema:
+    def test_pep604_and_typing_union_parity(self):
+        # PEP 604 (X | None) vs typing.Optional[X]
+        assert _python_type_to_json_schema(list | None) == _python_type_to_json_schema(Optional[list])
+        assert _python_type_to_json_schema(int | None) == _python_type_to_json_schema(Optional[int])
+        assert _python_type_to_json_schema(str | None) == _python_type_to_json_schema(Optional[str])
+        assert _python_type_to_json_schema(dict | None) == _python_type_to_json_schema(Optional[dict])
+        assert _python_type_to_json_schema(float | None) == _python_type_to_json_schema(Optional[float])
+        assert _python_type_to_json_schema(bool | None) == _python_type_to_json_schema(Optional[bool])
+
+    def test_pep604_multi_type_parity(self):
+        # PEP 604 (X | Y) vs typing.Union[X, Y]
+        assert _python_type_to_json_schema(str | int) == _python_type_to_json_schema(Union[str, int])
+        assert _python_type_to_json_schema(str | int | None) == _python_type_to_json_schema(Union[str, int, None])
+
+    def test_none_types(self):
+        assert _python_type_to_json_schema(None) == {"type": "null"}
+        assert _python_type_to_json_schema(type(None)) == {"type": "null"}
+
 
 
 class TestBuildEventSchema:
