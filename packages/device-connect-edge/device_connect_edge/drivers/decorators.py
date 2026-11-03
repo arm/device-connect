@@ -56,6 +56,7 @@ import inspect
 import logging
 import re
 import time
+import types
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
 
@@ -190,28 +191,27 @@ def _python_type_to_json_schema(py_type: type) -> Dict[str, Any]:
     """
     origin = get_origin(py_type)
 
-    # Handle Optional[T] (Union[T, None])
-    if origin is type(None):
+    # Handle None / NoneType
+    if py_type is type(None) or py_type is None or origin is type(None):
         return {"type": "null"}
 
     # Handle Optional (Union with None)
     if hasattr(py_type, "__origin__") and py_type.__origin__ is type(None):
         return {"type": "null"}
 
-    # Check for Union types (includes Optional)
-    try:
-        from typing import Union
-        if origin is Union:
-            args = get_args(py_type)
-            non_none_args = [a for a in args if a is not type(None)]
-            if len(non_none_args) == 1:
-                # This is Optional[T]
-                schema = _python_type_to_json_schema(non_none_args[0])
-                return schema
-            # Multiple types - anyOf
-            return {"anyOf": [_python_type_to_json_schema(a) for a in non_none_args]}
-    except ImportError:
-        pass
+    # Check for Union types (includes typing.Union, Optional, and PEP 604 X | Y syntax)
+    is_union = origin is Union or origin is getattr(types, "UnionType", None)
+    if is_union:
+        args = get_args(py_type)
+        non_none_args = [a for a in args if a is not type(None)]
+        if len(non_none_args) == 1:
+            # This is Optional[T] / T | None
+            schema = _python_type_to_json_schema(non_none_args[0])
+            return schema
+        elif not non_none_args:
+            return {"type": "null"}
+        # Multiple types - anyOf
+        return {"anyOf": [_python_type_to_json_schema(a) for a in non_none_args]}
 
     # Handle List[T]
     if origin is list:
